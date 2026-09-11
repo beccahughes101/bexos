@@ -1,0 +1,120 @@
+library bexos.kernel;
+
+/// Core bi-directional point-to-point IPC channel primitive
+protocol ChannelControl {
+    /// Allocate a paired bi-directional channel endpoint
+    CreateChannel() -> (resource struct {
+        status Status,
+        local_endpoint handle:CHANNEL,
+        remote_endpoint handle:CHANNEL
+    });
+
+    /// Read message bytes and transferred capability handles
+    ReadMessage(resource struct {
+        channel handle:CHANNEL,
+        max_bytes uint32,
+        max_handles uint32
+    }) -> (resource struct {
+        status Status,
+        data vector<uint8>,
+        handles vector<handle>
+    });
+
+    /// Write message bytes and transfer capability handles to the remote peer
+    WriteMessage(resource struct {
+        channel handle:CHANNEL,
+        data vector<uint8>,
+        handles vector<handle>
+    }) -> (struct {
+        status Status
+    });
+
+    /// Configure channel scheduling behavior.
+    SetPolicy(resource struct {
+        channel handle:CHANNEL,
+        enable_priority_inheritance bool,
+        enable_timeslice_donation bool
+    }) -> (struct {
+        status Status
+    });
+
+    /// Send a synchronous request. The calling thread remains blocked until a
+    /// matching ReplyCall, timeout, cancellation, or peer closure.
+    Call(resource struct {
+        channel handle:CHANNEL,
+        data vector<uint8>,
+        handles vector<handle>,
+        deadline_nanos int64,
+        max_reply_bytes uint32,
+        max_reply_handles uint32
+    }) -> (resource struct {
+        status Status,
+        data vector<uint8>,
+        handles vector<handle>
+    });
+
+    /// Receive one synchronous request and mint a single-use reply token.
+    ReadCall(resource struct {
+        channel handle:CHANNEL,
+        deadline_nanos int64,
+        max_bytes uint32,
+        max_handles uint32
+    }) -> (resource struct {
+        status Status,
+        data vector<uint8>,
+        handles vector<handle>,
+        reply_token handle:REPLY_TOKEN
+    });
+
+    /// Complete a synchronous request. Closing an unused token cancels it.
+    ReplyCall(resource struct {
+        reply_token handle:REPLY_TOKEN,
+        data vector<uint8>,
+        handles vector<handle>
+    }) -> (struct { status Status });
+};
+
+/// Byte-stream socket primitive used by userspace protocol services for
+/// zero-message data paths.
+protocol SocketControl {
+    1: CreateSocketPair() -> (resource struct {
+        status Status,
+        local_socket handle:SOCKET,
+        remote_socket handle:SOCKET
+    });
+
+    2: Read(resource struct {
+        socket handle:SOCKET,
+        max_bytes uint32
+    }) -> (struct {
+        status Status,
+        data vector<uint8>
+    });
+
+    3: Write(resource struct {
+        socket handle:SOCKET,
+        data vector<uint8>
+    }) -> (struct {
+        status Status,
+        actual uint64
+    });
+
+    4: Shutdown(resource struct {
+        socket handle:SOCKET,
+        read bool,
+        write bool
+    }) -> (struct {
+        status Status
+    });
+
+    5: GetInfo(resource struct {
+        socket handle:SOCKET
+    }) -> (struct {
+        status Status,
+        readable_bytes uint64,
+        local_read_closed bool,
+        local_write_closed bool,
+        peer_read_closed bool,
+        peer_write_closed bool
+    });
+};

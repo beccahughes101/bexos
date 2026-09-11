@@ -1,0 +1,3 @@
+acceleration_milli: 250
+repeat_delay_us: 500000
+repeat_interval_us: 33333

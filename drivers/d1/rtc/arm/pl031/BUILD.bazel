@@ -1,0 +1,55 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "userspace_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "rtc",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_name = "bexos_d1_rtc",
+    edition = "2024",
+)
+
+userspace_binary(
+    name = "pl031",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_d1_pl031",
+    deps = [
+        ":rtc",
+        "//idl:time_fidl_rust",
+        "//lib/migration",
+    ],
+)
+
+rust_test(
+    name = "pl031_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "pl031_tests",
+    edition = "2024",
+    deps = [
+        ":rtc",
+        "//idl:time_fidl_rust",
+        "//lib/migration",
+    ],
+)
+
+app_manifest(name = "package_manifest", src = "package/pl031.prototxt")
+
+userspace_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_d1_pl031_replacement",
+    deps = [
+        ":rtc",
+        "//idl:time_fidl_rust",
+        "//lib/migration",
+    ],
+)
+
+app_archive(
+    name = "replacement_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/pl031": ":replacement_elf"},
+    compression = "zstd",
+)

@@ -1,0 +1,11 @@
+package_name: "bexos.test.wasm.memory"
+name: "WASM memory fixture"
+processes {
+ name: "memory"
+ runner: "wasm"
+ service: false
+ lifecycle { update_strategy: RESTART }
+ runner_options {
+  [type.googleapis.com/bexos.app.WasmRunnerOptions] { path: "/pkg/bin/memory.wasm" limits { max_memory_pages: 2048 } }
+ }
+}

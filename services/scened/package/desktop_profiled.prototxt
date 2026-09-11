@@ -1,0 +1,13 @@
+text: "BexOS\nمرحبا بالعالم\nनमस्ते दुनिया"
+font_size: 24
+rgba: 0xd6e4ffff
+inset_left: 24
+inset_top: 24
+inset_right: 24
+inset_bottom: 24
+theme_css: "desktop { color: #d6e4ff; font: 24px sans-serif; } desktop > label { font-size: 1em; max-width: 480px; } node { display: flex; } .column { flex-direction: column; } .muted { opacity: 0.65; }"
+
+refresh_hz: 120
+profile_gpu: true
+# Lavapipe under nested emulation establishes functionality, not frame latency.
+software_vulkan_timeout_ms: 30000

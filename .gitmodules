@@ -1,0 +1,5 @@
+[submodule "third_party/linux_nvme"]
+	path = third_party/linux_nvme
+	url = https://git.kernel.org/pub/scm/linux/kernel/git/a.hindborg/linux.git
+	branch = rnvme-v6.15
+	shallow = true

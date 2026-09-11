@@ -1,0 +1,40 @@
+library bexos.app.service_directory;
+
+using bexos.kernel;
+
+type ServiceDirectoryStatus = strict enum : int32 {
+    OK = 0,
+    NOT_FOUND = -1,
+    BUSY = -2,
+    LAUNCH_FAILED = -3,
+    TIMEOUT = -4,
+    INVALID_ARGS = -8,
+    ACCESS_DENIED = -10,
+};
+
+struct ServiceDirectoryEntry {
+    service string:128;
+    protocol string:128;
+    provider_package string:128;
+    lifecycle uint32;
+    lazy bool;
+};
+
+protocol ServiceDirectory {
+    // The broker accepts only the currently selected graphical shell instance.
+    3: BindShellSession(resource struct { endpoint handle:CHANNEL; }) -> (struct { status ServiceDirectoryStatus; });
+    1: Discover(struct {
+        protocol string:128;
+    }) -> (struct {
+        status ServiceDirectoryStatus;
+        entries vector<ServiceDirectoryEntry>:64;
+    });
+
+    2: Connect(struct {
+        service string:128;
+        capability string:64;
+        endpoint handle:CHANNEL;
+    }) -> (struct {
+        status ServiceDirectoryStatus;
+    });
+};

@@ -1,0 +1,31 @@
+library bexos.kernel;
+
+/// Explicit process authority and atomic service resource handover. Every
+/// operation is authorized by the kernel, not by package-name strings.
+protocol KernelMigrationControl {
+    1: SetAuthority(resource struct { process handle:PROCESS; authority uint32; }) -> (struct { status Status; });
+    2: Begin(resource struct {
+        source uint64;
+        target handle:PROCESS;
+        generation uint64;
+        preparation_timeout_ms uint32;
+        cutover_timeout_ms uint32;
+    }) -> (struct { status Status; });
+    3: PreserveHandle(struct { source_handle uint64; }) -> (struct { status Status; });
+    4: PreserveMapping(struct {
+        source_handle uint64;
+        offset uint64;
+        vaddr uint64;
+        size uint64;
+        rights uint32;
+    }) -> (struct { status Status; });
+    5: PreservePin(struct { token uint64; }) -> (struct { status Status; });
+    6: BeginBulk() -> (struct { status Status; });
+    7: CompleteBulk() -> (struct { status Status; });
+    8: Quiesce(struct { final_sequence uint64; }) -> (struct { status Status; });
+    9: Ready(struct { final_sequence uint64; }) -> (struct { status Status; });
+    10: Commit() -> (struct { status Status; });
+    13: BeginCutover(struct { final_sequence uint64; }) -> (struct { status Status; });
+    12: DiscardCandidate(resource struct { process handle:PROCESS; }) -> (struct { status Status; });
+    11: Abort() -> (struct { status Status; });
+};

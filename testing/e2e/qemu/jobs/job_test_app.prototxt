@@ -1,0 +1,20 @@
+package_name: "com.example.job_e2e"
+name: "Jobs E2E Test App"
+processes {
+ name: "job_worker"
+ runner: "elf"
+ lifecycle { update_strategy: RESTART }
+ runner_options {
+  [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/job_worker" }
+ }
+}
+jobs {
+ job_id: "sync"
+ target_component: "job_worker"
+ initial_delay_seconds: 30
+ interval_seconds: 0
+ flex_window_seconds: 5
+ network: JOB_NETWORK_NONE
+ persist_across_reboots: true
+ max_execution_seconds: 30
+}

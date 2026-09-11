@@ -1,0 +1,382 @@
+syntax = "proto3";
+
+package bexos.app;
+
+import "google/protobuf/any.proto";
+import "idl/bexos/version/version.proto";
+
+message Manifest {
+  string package_name = 1;
+  string name = 2;
+  repeated Process processes = 3;
+  repeated PermissionDeclaration permissions = 4;
+  repeated ExposedService services_exposed = 5;
+  repeated ConsumedService services_consumed = 6;
+  repeated ResourceGroup resource_groups = 7;
+  DriverInfo driver_info = 8;
+  repeated BindRule bind_rules = 9;
+  ComponentConfigSchema config_schema = 10;
+  PackageKind package_kind = 11;
+  repeated LibraryDependency library_dependencies = 12;
+  bexos.version.SemVer package_version = 13;
+  bexos.version.MultiVersionPolicy multi_version_policy = 14;
+  uint32 min_bexos_abi_version = 15;
+  repeated LibraryExport library_exports = 16;
+  repeated JobDefinition jobs = 17;
+  repeated SharedVault shared_vaults = 18;
+  TrustedAppInfo trusted_app = 19;
+  repeated BinaryCommand commands = 21;
+  // Presence lets build tooling distinguish omission from explicit portable content.
+  optional Architecture architecture = 20;
+}
+
+enum Architecture {
+  MULTI = 0;
+  AARCH64 = 1;
+  X86_64 = 2;
+}
+
+enum JobNetworkConstraint {
+  JOB_NETWORK_ANY = 0;
+  JOB_NETWORK_UNMETERED_ONLY = 1;
+  JOB_NETWORK_NONE = 2;
+}
+
+message JobDefinition {
+  string job_id = 1;
+  string target_component = 2;
+  uint64 initial_delay_seconds = 3;
+  uint64 interval_seconds = 4;
+  uint32 flex_window_seconds = 5;
+  JobNetworkConstraint network = 6;
+  bool requires_charging = 7;
+  bool requires_device_idle = 8;
+  bool requires_battery_not_low = 9;
+  bool persist_across_reboots = 10;
+  uint32 max_execution_seconds = 11;
+}
+
+enum PackageKind {
+  APPLICATION = 0;
+  LIBRARY = 1;
+  TRUSTED_APP = 2;
+}
+
+message TrustedAppInfo {
+  string provider = 1;
+  bytes uuid = 2;
+  uint64 secure_version = 3;
+  string archive_payload_path = 4;
+  repeated string allowed_service_ports = 5;
+  bool protected = 6;
+  bool uninstallable = 7;
+}
+
+message LibraryDependency {
+  string package_name = 1;
+  string version_requirement = 2;
+  string mount_alias = 3;
+  uint32 abi_version = 4;
+}
+
+message LibraryExport {
+  enum Kind {
+    NATIVE = 0;
+    WASM_COMPONENT = 1;
+  }
+  string name = 1;
+  string path = 2;
+  string symbol_prefix = 3;
+  uint32 abi_version = 4;
+  string soname = 5;
+  Kind kind = 6;
+}
+
+message ComponentConfigSchema {
+  repeated ComponentConfigField fields = 1;
+}
+
+message ComponentConfigField {
+  string name = 1;
+  ComponentConfigType type = 2;
+  bool required = 3;
+  ComponentConfigValue default_value = 4;
+  uint32 max_size = 5;
+  PreferenceScope scope = 6;
+  string display_name = 7;
+  string description = 8;
+  oneof constraint {
+    NumericRange uint_range = 9;
+    StringEnum string_enum = 10;
+  }
+}
+
+enum PreferenceScope {
+  SCOPE_SYSTEM_ONLY = 0;
+  SCOPE_USER_EDITABLE = 1;
+  SCOPE_MDM_LOCKABLE = 2;
+}
+message NumericRange { uint64 min = 1; uint64 max = 2; }
+message StringEnum { repeated string values = 1; }
+
+
+enum ComponentConfigType {
+  COMPONENT_CONFIG_TYPE_UNSPECIFIED = 0;
+  CONFIG_BOOL = 1;
+  CONFIG_UINT32 = 2;
+  CONFIG_UINT64 = 3;
+  CONFIG_STRING = 4;
+  CONFIG_BYTES = 5;
+}
+
+message ComponentConfigValue {
+  oneof value {
+    bool bool_value = 1;
+    uint32 uint32_value = 2;
+    uint64 uint64_value = 3;
+    string string_value = 4;
+    bytes bytes_value = 5;
+  }
+}
+
+message Process {
+  string name = 1;
+  string runner = 2;
+  repeated PermissionDeclaration permissions = 3;
+  bool service = 4;
+  repeated string depends_on = 5;
+  Link link = 6;
+  google.protobuf.Any runner_options = 7;
+  optional uint32 wave = 8;
+  ProcessLifecycle lifecycle = 9;
+  optional string resource_group = 10;
+  repeated IntentFilter handles = 11;
+  // Shell entrypoints are launched by the session broker, never boot waves.
+  ShellRole shell_role = 12;
+}
+
+enum ShellRole {
+  SHELL_NONE = 0;
+  SHELL_SYSTEM = 1;
+  SHELL_USER = 2;
+}
+
+message IntentFilter {
+  repeated string schemes = 1;
+  repeated string domains = 2;
+  repeated string mime_types = 3;
+  repeated string provides_interfaces = 4;
+}
+
+enum PermissionRequirement {
+  PERMISSION_REQUIRED = 0;
+  PERMISSION_OPTIONAL = 1;
+}
+
+message PermissionDeclaration {
+  string name = 1;
+  repeated string values = 2;
+  PermissionRequirement requirement = 3;
+  string usage_description = 4;
+}
+
+message ProcessLifecycle {
+  enum UpdateStrategy {
+    RESTART = 0;
+    HEART_TRANSPLANT = 1;
+  }
+  UpdateStrategy update_strategy = 1;
+  optional uint32 migration_timeout_ms = 2;
+  optional uint32 preparation_timeout_ms = 3;
+}
+
+message Link {
+  string icon = 1;
+  string name = 2;
+}
+
+message ResourceGroup {
+  string name = 1;
+  // Legacy fields remain valid and translate to cpu.weight / memory.high.
+  uint32 cpu_shares = 2;
+  uint64 memory_limit_pages = 3;
+  optional string parent = 4;
+  ResourceGroupCpuLimits cpu = 5;
+  ResourceGroupMemoryLimits memory = 6;
+  ResourceGroupGpuLimits gpu = 7;
+}
+
+message ResourceGroupCpuLimits {
+  uint32 weight = 1;
+  uint32 max_utilization_permille = 2;
+  bool allow_realtime = 3;
+}
+
+message ResourceGroupMemoryLimits {
+  uint64 low_watermark_bytes = 1;
+  uint64 high_watermark_bytes = 2;
+}
+
+message ResourceGroupGpuLimits {
+  uint32 max_render_budget_percent = 1;
+  uint64 max_vram_bytes = 2;
+}
+
+enum SharedVaultAccess {
+  SHARED_VAULT_READ_ONLY = 0;
+  SHARED_VAULT_READ_WRITE = 1;
+}
+
+message SharedVault {
+  string name = 1;
+  SharedVaultAccess access = 2;
+  repeated string allowed_peer_package_prefixes = 3;
+}
+
+message DriverInfo {
+  string name = 1;
+  string package_id = 2;
+  string version = 3;
+}
+
+message BindRule {
+  repeated BindCondition condition = 1;
+  uint32 priority = 2;
+}
+
+message BindCondition {
+  BusType bus = 1;
+  repeated DeviceProperty property = 2;
+}
+
+message DeviceProperty {
+  string key = 1;
+  uint32 value = 2;
+}
+
+enum BusType {
+  BUS_TYPE_UNSPECIFIED = 0;
+  BUS_PCI = 1;
+  BUS_USB = 2;
+  BUS_PLATFORM_DT = 3;
+  BUS_I2C = 4;
+  BUS_SPI = 5;
+}
+
+message ELFRunnerOptions {
+  string path = 1;
+}
+
+// All limits are finite. Absent fields use the platform defaults; zero is not
+// an unlimited budget. The runner clamps admission to the platform ceilings.
+message WasmExecutionLimits {
+  optional uint64 max_module_bytes = 1;
+  optional uint64 max_memory_pages = 2;
+  optional uint64 max_table_elements = 3;
+  optional uint64 max_stack_bytes = 4;
+  optional uint64 max_handles = 5;
+  optional uint64 max_children = 6;
+  optional uint64 fuel = 7;
+  optional uint64 fuel_slice = 8;
+}
+
+message WasmRunnerOptions {
+  string path = 1;
+  repeated string arguments = 2;
+  message Environment {
+    string name = 1;
+    string value = 2;
+  }
+  message ComponentImport {
+    string package_name = 1;
+    string export_name = 2;
+    uint32 abi_version = 3;
+    string instance_name = 4;
+  }
+  repeated Environment environment = 3;
+  WasmExecutionLimits limits = 4;
+  repeated ComponentImport component_imports = 5;
+}
+
+message ExposedService {
+  string name = 1;
+  string protocol = 2;
+  Lifecycle lifecycle = 3;
+  Visibility visibility = 4;
+  string bind_permission = 5;
+  repeated Metadata metadata = 6;
+  repeated CapabilityMetadata capabilities = 7;
+  ServiceActivation activation = 8;
+  optional uint32 idle_timeout_ms = 9;
+  optional string provider_process = 10;
+}
+
+enum ServiceActivation {
+  EAGER = 0;
+  LAZY = 1;
+}
+
+message ConsumedService {
+  string name = 1;
+  LinkType link_type = 2;
+  string filter = 3;
+  repeated ConsumedCapability capabilities = 4;
+}
+
+message ConsumedCapability {
+  string capability = 1;
+  repeated MethodDependency methods = 2;
+}
+
+message MethodDependency {
+  uint64 ordinal = 1;
+  LinkType link_type = 2;
+}
+
+message CapabilityMetadata {
+  string capability = 1;
+  string permission = 2;
+  repeated uint64 method_ordinals = 3;
+}
+
+message Metadata {
+  string key = 1;
+  string value = 2;
+}
+
+enum Lifecycle {
+  LIFECYCLE_UNSPECIFIED = 0;
+  SINGLETON = 1;
+  USER_SCOPED_SINGLETON = 2;
+  MULTIPLE_INSTANCE = 3;
+}
+
+enum Visibility {
+  VISIBILITY_UNSPECIFIED = 0;
+  PUBLIC = 1;
+  DOMAIN_SHARED = 2;
+  PRIVATE = 3;
+}
+
+enum LinkType {
+  LINK_TYPE_UNSPECIFIED = 0;
+  REQUIRED = 1;
+  OPTIONAL = 2;
+}
+
+// Detached signature over SHA-256 of the exact immutable child WASM bytes.
+// AppTrustManager verifies the chain and package binding; labels confer no trust.
+message WasmChildSignature {
+  string package_id = 1;
+  repeated bytes certificates = 2;
+  bytes signature = 3;
+  // 1 = Ed25519, 2 = ECDSA P-256/SHA-256. Omission selects Ed25519.
+  uint64 algorithm = 4;
+}
+
+// A CLI entry selects a declared process; executable paths and runner policy
+// remain authoritative in that process's runner options.
+message BinaryCommand {
+  string command_name = 1;
+  string process_name = 2;
+}

@@ -1,0 +1,9 @@
+name: "graphics"
+packages { label: "//services/splashd:splashd_elf" package_id: "bexos.service.splashd" placement: BOOTFS }
+packages { label: "//services/scened:scened_elf" package_id: "bexos.service.scened" placement: BOOTFS }
+
+packages { label: "//apps/dioxus_shared:dioxus_shared" package_id: "com.bexos.lib.dioxus" placement: SYSTEM_IMAGE }
+packages { label: "//apps/dioxus_demo:dioxus_demo" package_id: "bexos.app.dioxus_demo" placement: SYSTEM_IMAGE }
+
+packages { label: "//apps/sysui:sysui" package_id: "bexos.app.sysui" placement: SYSTEM_IMAGE }
+packages { label: "//apps/userui:userui" package_id: "bexos.app.userui" placement: SYSTEM_IMAGE }

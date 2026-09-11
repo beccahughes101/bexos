@@ -1,0 +1,12 @@
+library bexos.storage.memfs;
+
+protocol MemfsManager {
+    70: CreateTmpDirectory(struct {
+        uid uint64;
+        package_id string:128;
+        process_name string:64;
+    }) -> (resource struct {
+        status int32;
+        root_dir handle:CHANNEL;
+    });
+};

@@ -1,0 +1,49 @@
+load("//build/platforms:architecture.bzl", "guest_select")
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+package(default_visibility = ["//visibility:public"])
+rust_library(
+    name = "prefsd",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_name = "bexos_prefsd",
+    edition = "2024",
+    rustc_flags = guest_select([], ["--cfg=bexos_arch_x86_64"]),
+    deps = ["//lib/component_config", "//lib/userspace", "//lib/migration", "//idl:preferences_fidl_rust", "//idl:user_manager_fidl_rust", "//idl:kernel_fidl_rust", "//idl:fs_fidl_rust"],
+)
+
+std_service_binary(
+    name = "prefsd_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_prefsd_elf",
+    deps = [":prefsd"],
+)
+
+app_manifest(name = "package_manifest", src = "package/prefsd.prototxt")
+app_archive(
+    name = "prefsd_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/prefsd": ":prefsd_elf"},
+)
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_prefsd_replacement",
+    deps = [":prefsd"],
+)
+
+app_archive(
+    name = "replacement_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/prefsd": ":replacement_elf"},
+    compression = "zstd",
+)
+
+rust_test(
+    name = "prefsd_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    edition = "2024",
+    deps = [":prefsd", "//lib/component_config", "//lib/userspace"],
+)
+

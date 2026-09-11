@@ -1,0 +1,25 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "usb_host",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "bexos_usb_host",
+    edition = "2024",
+    deps = [
+        "//idl:usb_host_fidl_rust",
+        "//lib/migration",
+    ],
+)
+
+rust_test(
+    name = "tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "usb_host_tests",
+    edition = "2024",
+    deps = [
+        ":usb_host",
+        "//idl:usb_host_fidl_rust",
+    ],
+)

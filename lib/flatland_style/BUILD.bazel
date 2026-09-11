@@ -1,0 +1,6 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+package(default_visibility=["//visibility:public"])
+rust_library(name="flatland_style", srcs=glob(["src/**/*.rs"]), crate_name="bexos_flatland_style", edition="2024", deps=["//lib/flatland", "//lib/flatland_text", "@graphics_crates//:stylo", "@graphics_crates//:stylo_static_prefs", "@graphics_crates//:selectors", "@graphics_crates//:stylo_dom", "@graphics_crates//:euclid", "@graphics_crates//:app_units"])
+rust_test(name="tests", srcs=["tests/style.rs"],edition="2024",deps=[":flatland_style"])
+
+rust_test(name="cascade_tests", srcs=["tests/cascade.rs"], edition="2024", deps=[":flatland_style", "//lib/flatland", "//lib/flatland_text"], compile_data=["@noto_sans//file"], rustc_env={"NOTO_SANS":"$(execpath @noto_sans//file)"})

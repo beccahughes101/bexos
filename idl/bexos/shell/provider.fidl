@@ -1,0 +1,13 @@
+library bexos.shell;
+using bexos.kernel;
+using bexos.tty;
+
+protocol ShellProvider {
+    // The provider serves the transferred endpoint in the appd-selected identity.
+    1: CreateSession(resource struct {
+        session server_end:bexos.tty.PtySession;
+        environment vector<string:256>:64;
+    }) -> (struct {
+        status bexos.kernel.Status;
+    });
+};

@@ -1,0 +1,48 @@
+base_packages: "//services/appd:appd_elf"
+base_packages: "//services/powerd:powerd_elf"
+base_packages: "//services/storage_verify:storage_verify"
+base_packages: "//lib/crypto:crypto_archive"
+base_packages: "//lib/net:net_archive"
+base_packages: "//lib/tee_driver_trusty:tee_driver_trusty_archive"
+base_packages: "//drivers/d1/nic/virtio/net:virtio_net_driver"
+base_packages: "//services/netstack:netstackd_archive"
+base_packages: "//services/timed:timed_archive"
+base_packages: "//services/jobd:jobd_archive"
+
+autoinstall_packages {
+  package: "//services/storage_verify:storage_verify"
+}
+
+autoinstall_packages {
+  package: "//lib/crypto:crypto_archive"
+}
+
+autoinstall_packages {
+  package: "//lib/net:net_archive"
+}
+
+autoinstall_packages {
+  package: "//lib/tee_driver_trusty:tee_driver_trusty_archive"
+}
+
+autoinstall_packages {
+  package: "//drivers/d1/nic/virtio/net:virtio_net_driver"
+}
+
+autoinstall_packages {
+  package: "//services/netstack:netstackd_archive"
+}
+
+autoinstall_packages {
+  package: "//services/timed:timed_archive"
+}
+
+autoinstall_packages {
+  package: "//services/jobd:jobd_archive"
+}
+
+base_packages: "//apps/brush_shell:brush_shell"
+autoinstall_packages { package: "//apps/brush_shell:brush_shell" }
+
+base_packages: "//services/prefsd:prefsd_archive"
+autoinstall_packages { package: "//services/prefsd:prefsd_archive" }

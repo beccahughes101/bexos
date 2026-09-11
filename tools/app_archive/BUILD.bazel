@@ -1,0 +1,19 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_binary(
+    name = "bex_archive",
+    srcs = ["src/main.rs"],
+    crate_name = "bex_archive",
+    edition = "2024",
+    deps = ["//lib/app_archive:app_archive_host", "//lib/app_manifest"],
+)
+
+rust_test(
+    name = "app_archive_tests",
+    srcs = ["tests/app_archive_tool_tests.rs"],
+    crate_name = "app_archive_tool_tests",
+    edition = "2024",
+    deps = ["//lib/app_archive:app_archive_host", "//lib/app_manifest"],
+)

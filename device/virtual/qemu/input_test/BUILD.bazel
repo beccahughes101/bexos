@@ -1,0 +1,3 @@
+load("//device/virtual/qemu/base:product.bzl","qemu_product")
+package(default_visibility=["//visibility:public"])
+qemu_product(name="input_test",graphics=True,input_fixture=True)

@@ -1,0 +1,72 @@
+diff --git a/build.rs b/build.rs
+--- a/build.rs
++++ b/build.rs
+@@ -13,7 +13,9 @@
+     // A boolean indicating whether there's a `sys` module for this platform.
+     // This is true for `unix` or `windows`, but both of those require the `std`
+     // feature to also be active so check that too.
+-    let supported_os = (unix || windows) && cfg!(feature = "std");
++    // BexOS uses the Linux Rust target, but provides the custom runtime ABI.
++    let bexos = (cfg_is("target_arch", "aarch64") || cfg_is("target_arch", "x86_64")) && cfg_is("target_os", "linux");
++    let supported_os = (unix || windows) && cfg!(feature = "std") && !bexos;
+ 
+     let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap();
+ 
+diff --git a/src/runtime/vm/sys/mod.rs b/src/runtime/vm/sys/mod.rs
+--- a/src/runtime/vm/sys/mod.rs
++++ b/src/runtime/vm/sys/mod.rs
+@@ -54,7 +54,7 @@
+         mod miri;
+         pub use miri::*;
+     }
+-    not(feature = "std") => {
++    any(not(feature = "std"), all(any(target_arch = "aarch64", target_arch = "x86_64"), target_os = "linux")) => {
+         mod custom;
+         pub use custom::*;
+     }
+diff --git a/src/runtime/vm.rs b/src/runtime/vm.rs
+--- a/src/runtime/vm.rs
++++ b/src/runtime/vm.rs
+@@ -116,8 +116,12 @@
+ pub use crate::runtime::vm::provenance::*;
+ pub use crate::runtime::vm::stack_switching::*;
+ pub use crate::runtime::vm::store_box::*;
+-#[cfg(feature = "std")]
++#[cfg(all(feature = "std", has_virtual_memory))]
+ pub use crate::runtime::vm::sys::mmap::open_file_for_mmap;
++#[cfg(all(feature = "std", not(has_virtual_memory)))]
++pub fn open_file_for_mmap(_: &std::path::Path) -> crate::Result<std::fs::File> {
++    crate::bail!("file-backed engine artifacts are unavailable on this platform")
++}
+ #[cfg(has_host_compiler_backend)]
+ pub use crate::runtime::vm::sys::unwind::UnwindRegistration;
+ pub use crate::runtime::vm::table::{Table, TableElementType};
+diff --git a/src/runtime/vm/mmap_vec.rs b/src/runtime/vm/mmap_vec.rs
+--- a/src/runtime/vm/mmap_vec.rs
++++ b/src/runtime/vm/mmap_vec.rs
+@@ -189,7 +189,12 @@
+     /// The file is mapped into memory with a "private mapping" meaning that
+     /// changes are not persisted back to the file itself and are only visible
+     /// within this process.
+-    #[cfg(feature = "std")]
++    #[cfg(all(feature = "std", not(has_virtual_memory)))]
++    pub fn from_file(_file: File) -> Result<MmapVec> {
++        bail!("file-backed engine artifacts are unavailable on this platform")
++    }
++
++    #[cfg(all(feature = "std", has_virtual_memory))]
+     pub fn from_file(file: File) -> Result<MmapVec> {
+         let file = Arc::new(file);
+         let mmap = Mmap::from_file(Arc::clone(&file))
+diff --git a/src/profiling_agent.rs b/src/profiling_agent.rs
+--- a/src/profiling_agent.rs
++++ b/src/profiling_agent.rs
+@@ -17,7 +17,7 @@
+ }
+ 
+ cfg_select! {
+-    all(unix, feature = "std") => {
++    all(unix, feature = "std", not(all(any(target_arch = "aarch64", target_arch = "x86_64"), target_os = "linux"))) => {
+         mod perfmap;
+         pub use perfmap::new as new_perfmap;
+     }

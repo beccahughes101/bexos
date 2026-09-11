@@ -1,0 +1,20 @@
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "wgpu_hal_headless.patch",
+    "mesa_bexos.patch",
+    "vello_shaders_bazel.patch",
+    "vello_image_pressure.patch",
+    "vello_cpu_glyph_atlas.patch",
+    "brush-core_bazel.patch",
+    "brush-core_bexos.patch",
+    "brush-builtins_bazel.patch",
+    "brush-builtins_bexos.patch",
+    "brush-parser_bazel.patch",
+    "wasmtime_fiber_bexos.patch",
+    "wasmtime_bexos.patch",
+    "wasmtime_stack_limits.patch",
+    "smoltcp_tcp_migration.patch",
+    "virtio_drivers_migration.patch",
+    "virtio_drivers_platform_dma.patch",
+])

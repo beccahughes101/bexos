@@ -1,0 +1,8 @@
+package_name: "bexos.test.wasm.children"
+name: "WASM child sandbox fixture"
+processes {
+ name: "children"
+ runner: "wasm"
+ lifecycle { update_strategy: RESTART }
+ runner_options { [type.googleapis.com/bexos.app.WasmRunnerOptions] { path: "/pkg/bin/children.wasm" } }
+}

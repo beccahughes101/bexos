@@ -1,0 +1,57 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "keychain_store",
+    srcs = glob(["src/**/*.rs"]),
+    crate_features = ["redb_backend"],
+    crate_name = "bexos_keychain_store",
+    edition = "2024",
+    deps = [
+        "//lib/redb",
+        "//lib/redb:redb_crate_no_std",
+    ],
+)
+
+rust_library(
+    name = "keychain_store_memory",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "bexos_keychain_store",
+    edition = "2024",
+)
+
+rust_library(
+    name = "keychain_store_host",
+    srcs = glob(["src/**/*.rs"]),
+    crate_features = ["std", "redb_backend"],
+    crate_name = "bexos_keychain_store",
+    edition = "2024",
+    deps = [
+        "//lib/redb:redb_host",
+        "@crates//:redb",
+    ],
+)
+
+rust_library(
+    name = "keychain_store_bexos_std",
+    srcs = glob(["src/**/*.rs"]),
+    crate_features = ["std", "redb_backend"],
+    crate_name = "bexos_keychain_store",
+    edition = "2024",
+    deps = [
+        "//lib/redb:redb_bexos_std",
+        "@crates//:redb",
+    ],
+)
+
+rust_test(
+    name = "keychain_store_tests",
+    srcs = ["tests/keychain_store_tests.rs"],
+    crate_name = "keychain_store_tests",
+    edition = "2024",
+    deps = [
+        ":keychain_store_host",
+        "//lib/redb:redb_host",
+    ],
+)

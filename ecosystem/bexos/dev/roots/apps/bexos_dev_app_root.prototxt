@@ -1,0 +1,11 @@
+anchor_id: "bexos-dev-app-root"
+tier: TIER1_PLATFORM_APP
+algorithm: "Ed25519"
+public_key_hex: "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+permitted_package_prefixes: "bexos.*"
+permitted_package_prefixes: "com.bexos.*"
+valid_from: 0
+valid_until: 0
+is_hardware_anchored: true
+immutable: true
+enterprise: false

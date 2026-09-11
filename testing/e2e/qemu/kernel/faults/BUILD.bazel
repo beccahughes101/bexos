@@ -1,0 +1,17 @@
+load("//build/rules:userspace.bzl", "app_manifest", "userspace_binary")
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//testing/e2e/qemu:qemu_e2e.bzl", "qemu_e2e_test", "qemu_development_e2e_test")
+load("//testing/e2e/qemu:architecture_test.bzl", "qemu_suites")
+package(default_visibility = ["//visibility:public"])
+userspace_binary(name = "probe", srcs = ["probe.rs"], crate_name = "fault_probe", deps = [])
+app_manifest(name = "manifest", src = "package.prototxt")
+app_archive(name = "archive", manifest = ":manifest", entries = {"bin/fault_probe": ":probe"}, compression = "zstd")
+qemu_e2e_test(
+    name = "faults_test", src = "faults_e2e_test.rs", crate_name = "faults_test",
+    deps = ["//testing/e2e", "//tools/qemu:qemu_test"], extra_data = [":archive"], extra_args = ["$(rootpath :archive)"],
+)
+qemu_development_e2e_test(
+    name = "faults_development_test", src = "faults_e2e_test.rs", crate_name = "faults_development_test",
+    deps = ["//testing/e2e", "//tools/qemu:qemu_test"], extra_data = [":archive"], extra_args = ["$(rootpath :archive)"],
+)
+qemu_suites()

@@ -1,0 +1,2 @@
+path: "/pkg/child.wasm"
+limits { fuel: 100000 }

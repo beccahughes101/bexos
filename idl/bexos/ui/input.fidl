@@ -1,0 +1,10 @@
+library bexos.ui.input;
+type Status = strict enum : int32 { OK = 0; INVALID = -8; UNAVAILABLE = -14; };
+struct RawInputEvent { kind uint16; code uint16; value int32; };
+struct InputReport { sequence uint64; reset bool; events vector<RawInputEvent>:64; };
+// Each capability identifies one hardware device. Input reports contain no
+// caller-supplied device identity. Only the compositor is granted this service.
+protocol InputDevice {
+    1: Subscribe(resource struct { sink handle:CHANNEL; }) -> (struct { status Status; node uint64; axes array<int32,8>; });
+};
+struct InputEvent { kind uint32; device uint64; id uint32; phase uint32; x float64; y float64; buttons uint32; scroll_x float32; scroll_y float32; code uint32; key_state uint32; modifiers uint32; unicode uint32; };

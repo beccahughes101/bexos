@@ -1,0 +1,24 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "lazy_service",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "bexos_lazy_service",
+    edition = "2024",
+    deps = [
+        "//lib/migration",
+        "//lib/userspace",
+    ],
+)
+
+rust_test(
+    name = "lazy_service_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "lazy_service_tests",
+    edition = "2024",
+    deps = [
+        ":lazy_service",
+    ],
+)

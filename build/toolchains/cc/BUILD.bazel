@@ -1,0 +1,180 @@
+load(":host_tools.bzl", "host_tools", "llvm_resource_headers")
+load("@rules_cc//cc/toolchains:cc_toolchain.bzl", "cc_toolchain")
+load(":linux_config.bzl", "cc_toolchain_config")
+load(":host_config.bzl", "host_cc_config")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_toolchain_config(
+    name = "aarch64_linux_config",
+)
+
+cc_toolchain(
+    name = "aarch64_linux_cc",
+    all_files = ":toolchain_files",
+    ar_files = ":toolchain_files",
+    compiler_files = ":toolchain_files",
+    dwp_files = ":toolchain_files",
+    linker_files = ":toolchain_files",
+    objcopy_files = ":toolchain_files",
+    strip_files = ":toolchain_files",
+    toolchain_config = ":aarch64_linux_config",
+)
+
+filegroup(
+    name = "toolchain_files",
+    srcs = [
+        "ar.sh",
+        "clang.sh",
+        "clang_x86_64.sh",
+        "clang_common.sh",
+        "clang_aarch64_none.sh",
+        "clang_x86_64_none.sh",
+        "clang_aarch64_musl.sh",
+        "include/assert.h",
+        "include/string.h",
+        "nm.sh",
+        "strip.sh",
+        ":host_llvm",
+    ],
+)
+
+toolchain(
+    name = "aarch64_linux_toolchain",
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:linux",
+        "//build/platforms/constraints:bexos_userspace_abi",
+    ],
+    toolchain = ":aarch64_linux_cc",
+    toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",
+)
+
+# Rust's toolchain metadata still resolves a C toolchain for static Linux
+# fixture executables. Their CRT and libc come from Rust's pinned musl sysroot.
+cc_toolchain_config(name = "aarch64_musl_config", cpu = "aarch64", abi = "linux-musl", clang_wrapper = "clang_aarch64_musl.sh")
+cc_toolchain(
+    name = "aarch64_musl_cc",
+    all_files = ":toolchain_files",
+    ar_files = ":toolchain_files",
+    compiler_files = ":toolchain_files",
+    dwp_files = ":toolchain_files",
+    linker_files = ":toolchain_files",
+    objcopy_files = ":toolchain_files",
+    strip_files = ":toolchain_files",
+    toolchain_config = ":aarch64_musl_config",
+)
+toolchain(
+    name = "aarch64_musl_toolchain",
+    target_compatible_with = ["@platforms//cpu:aarch64", "@platforms//os:linux", "//testing/e2e/qemu/venus_linux:musl_abi"],
+    toolchain = ":aarch64_musl_cc",
+    toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",
+)
+
+cc_toolchain_config(name = "x86_64_linux_config", cpu = "x86_64", clang_wrapper = "clang_x86_64.sh")
+cc_toolchain(
+    name = "x86_64_linux_cc",
+    all_files = ":toolchain_files",
+    ar_files = ":toolchain_files",
+    compiler_files = ":toolchain_files",
+    dwp_files = ":toolchain_files",
+    linker_files = ":toolchain_files",
+    objcopy_files = ":toolchain_files",
+    strip_files = ":toolchain_files",
+    toolchain_config = ":x86_64_linux_config",
+)
+toolchain(
+    name = "x86_64_linux_toolchain",
+    target_compatible_with = ["@platforms//cpu:x86_64", "@platforms//os:linux", "//build/platforms/constraints:bexos_userspace_abi"],
+    toolchain = ":x86_64_linux_cc",
+    toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",
+)
+
+host_tools(
+    name = "host_llvm",
+    tools = [":llvm_headers", "@llvm//tools:clang", "@llvm//tools:llvm-ar", "@llvm//tools:llvm-nm", "@llvm//tools:llvm-strip"],
+)
+
+cc_toolchain_config(name = "aarch64_none_config", cpu = "aarch64", abi = "none-elf", clang_wrapper = "clang_aarch64_none.sh")
+cc_toolchain(
+    name = "aarch64_none_cc",
+    all_files = ":toolchain_files",
+    ar_files = ":toolchain_files",
+    compiler_files = ":toolchain_files",
+    dwp_files = ":toolchain_files",
+    linker_files = ":toolchain_files",
+    objcopy_files = ":toolchain_files",
+    strip_files = ":toolchain_files",
+    toolchain_config = ":aarch64_none_config",
+)
+toolchain(
+    name = "aarch64_none_toolchain",
+    target_compatible_with = ["@platforms//cpu:aarch64", "@platforms//os:none"],
+    toolchain = ":aarch64_none_cc",
+    toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",
+)
+
+cc_toolchain_config(name = "x86_64_none_config", cpu = "x86_64", abi = "none-elf", clang_wrapper = "clang_x86_64_none.sh")
+cc_toolchain(
+    name = "x86_64_none_cc",
+    all_files = ":toolchain_files",
+    ar_files = ":toolchain_files",
+    compiler_files = ":toolchain_files",
+    dwp_files = ":toolchain_files",
+    linker_files = ":toolchain_files",
+    objcopy_files = ":toolchain_files",
+    strip_files = ":toolchain_files",
+    toolchain_config = ":x86_64_none_config",
+)
+toolchain(
+    name = "x86_64_none_toolchain",
+    target_compatible_with = ["@platforms//cpu:x86_64", "@platforms//os:none"],
+    toolchain = ":x86_64_none_cc",
+    toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",
+)
+
+# Resolve resource headers on the execution platform, alongside the compiler.
+alias(
+    name = "llvm_headers",
+    actual = llvm_resource_headers(),
+)
+
+# Native host tools use LLVM with the host runtime instead of the freestanding
+# guest sysroot. Register these after the specialized guest toolchains.
+host_tools(
+    name = "native_llvm",
+    tools = [":llvm_headers", "@llvm//tools:clang", "@llvm//tools:clang++", "@llvm//tools:llvm-ar", "@llvm//tools:llvm-nm", "@llvm//tools:llvm-strip"],
+)
+filegroup(
+    name = "native_toolchain_files",
+    srcs = ["clang_host.sh", "ar.sh", "nm.sh", "strip.sh", ":native_llvm"] + select({
+        "@platforms//os:osx": ["@trusty_macos_sdk//:toolchain_files"],
+        "//conditions:default": [],
+    }),
+)
+[host_cc_config(
+    name = "native_" + cpu + "_config",
+    cpu = cpu,
+    sdk_marker = select({
+        "@platforms//os:osx": "@trusty_macos_sdk//:MacOSX.sdk/usr/include/stdio.h",
+        "//conditions:default": None,
+    }),
+) for cpu in ["x86_64", "aarch64"]]
+[cc_toolchain(
+    name = "native_" + cpu + "_cc",
+    all_files = ":native_toolchain_files",
+    ar_files = ":native_toolchain_files",
+    compiler_files = ":native_toolchain_files",
+    dwp_files = ":native_toolchain_files",
+    linker_files = ":native_toolchain_files",
+    objcopy_files = ":native_toolchain_files",
+    strip_files = ":native_toolchain_files",
+    toolchain_config = ":native_" + cpu + "_config",
+) for cpu in ["x86_64", "aarch64"]]
+[toolchain(
+    name = "native_" + os + "_" + cpu + "_toolchain",
+    exec_compatible_with = ["@platforms//cpu:" + cpu, "@platforms//os:" + os],
+    target_compatible_with = ["@platforms//cpu:" + cpu, "@platforms//os:" + os],
+    toolchain = ":native_" + cpu + "_cc",
+    toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",
+) for os, cpu in [("linux", "x86_64"), ("linux", "aarch64"), ("osx", "aarch64")]]

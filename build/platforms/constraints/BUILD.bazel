@@ -1,0 +1,30 @@
+package(default_visibility = ["//visibility:public"])
+
+constraint_setting(name = "execution_tier")
+
+constraint_value(
+    name = "tier_d0_kernel",
+    constraint_setting = ":execution_tier",
+)
+
+constraint_value(
+    name = "tier_d1_native",
+    constraint_setting = ":execution_tier",
+)
+
+constraint_value(
+    name = "tier_d2_wasm",
+    constraint_setting = ":execution_tier",
+)
+
+constraint_value(
+    name = "tier_secure_world",
+    constraint_setting = ":execution_tier",
+)
+
+constraint_setting(name = "userspace_abi")
+
+constraint_value(
+    name = "bexos_userspace_abi",
+    constraint_setting = ":userspace_abi",
+)

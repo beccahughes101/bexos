@@ -1,0 +1,45 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+load("//build/platforms:architecture.bzl", "guest_select")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "bootfs_parser",
+    srcs = ["src/bootfs_lib.rs", "src/bootfs.rs"],
+    crate_root = "src/bootfs_lib.rs",
+    crate_name = "bexos_bootfs_parser",
+    edition = "2024",
+)
+
+rust_library(
+    name = "core",
+    rustc_flags = guest_select([], ["--cfg=bexos_arch_x86_64"]),
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "bexos_kernel_core",
+    edition = "2024",
+    deps = ["@crates//:rand_chacha", "@crates//:sha2", "//lib/elf", "//idl:kernel_fidl_rust", "//lib/boot", "//lib/migration", "//lib/time_abi"],
+)
+
+rust_test(
+    name = "core_tests",
+    crate_root = "tests/phase2_core_tests.rs",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "core_tests",
+    edition = "2024",
+    deps = [
+        ":core",
+        "//lib/boot",
+        "//idl:kernel_fidl_rust",
+        "//lib/migration",
+        "//lib/time_abi",
+    ],
+)
+
+rust_test(
+    name = "architecture_tests",
+    srcs = ["tests/architecture_tests.rs"],
+    crate_name = "architecture_tests",
+    edition = "2024",
+    deps = [":core"],
+)

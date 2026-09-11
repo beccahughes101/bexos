@@ -1,0 +1,59 @@
+# Isolated unresponsive-candidate fixture with a bounded preparation deadline.
+package_name: "bexos.service.teed"
+name: "teed"
+library_dependencies {
+ package_name: "bexos.lib.tee_driver.trusty"
+ mount_alias: "bexos.lib.tee_driver.trusty"
+ abi_version: 1
+}
+library_dependencies {
+ package_name: "bexos.lib.crypto"
+ mount_alias: "bexos.lib.crypto"
+ abi_version: 1
+}
+library_dependencies {
+ package_name: "bexos.lib.net"
+ mount_alias: "bexos.lib.net"
+ abi_version: 1
+}
+permissions {
+ name: "TEE_MANAGER_ACCESS"
+ usage_description: "Manage trusted applications and TEE core updates."
+}
+processes {
+ name: "teed"
+ runner: "elf"
+ lifecycle { update_strategy: HEART_TRANSPLANT preparation_timeout_ms: 300 }
+ service: true
+ permissions {
+  name: "TEE_MANAGER_ACCESS"
+  usage_description: "Manage trusted applications and TEE core updates."
+ }
+ wave: 3
+ runner_options {
+  [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/teed" }
+ }
+}
+services_exposed {
+ name: "tee_manager"
+ protocol: "TeeManager"
+ lifecycle: SINGLETON
+ visibility: PUBLIC
+ bind_permission: "TEE_MANAGER_ACCESS"
+ capabilities {
+  capability: "Public"
+  method_ordinals: 1
+  method_ordinals: 2
+  method_ordinals: 3
+  method_ordinals: 4
+  method_ordinals: 5
+  method_ordinals: 6
+  method_ordinals: 7
+  method_ordinals: 8
+  method_ordinals: 9
+  method_ordinals: 10
+  method_ordinals: 11
+  method_ordinals: 12
+  method_ordinals: 13
+ }
+}

@@ -1,0 +1,9 @@
+--- a/src/compile/mod.rs
++++ b/src/compile/mod.rs
+@@ -290,5 +290,5 @@
+     env::var_os("UNSTABLE_BAZEL_VELLO_SHADERS_CRATE_MANIFEST_PATH")
+         .and_then(|p| Path::new(&p).parent().map(|p| p.to_owned()))
+-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
++        .unwrap_or_else(|| PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("build script manifest directory")))
+         .to_path_buf()
+ }

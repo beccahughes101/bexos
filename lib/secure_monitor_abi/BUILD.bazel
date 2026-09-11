@@ -1,0 +1,12 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "secure_monitor_abi",
+    srcs = ["src/lib.rs", "src/transport.rs", "src/boot.rs", "src/firmware.rs"],
+    crate_name = "bexos_secure_monitor_abi",
+    edition = "2024",
+)
+
+rust_test(name = "tests", crate = ":secure_monitor_abi")

@@ -1,0 +1,81 @@
+library bexos.app.worker;
+
+type WorkerLaunchStatus = strict enum : int32 {
+    OK = 0,
+    NOT_FOUND = -1,
+    ACCESS_DENIED = -2,
+    INVALID_ARGS = -8,
+    STORAGE = -20,
+    LAUNCH_FAILED = -22,
+};
+
+type JobNetworkConstraint = strict enum : uint8 {
+    NONE = 1,
+    ANY = 2,
+    UNMETERED_ONLY = 3,
+};
+
+type PackagePolicyEventKind = strict enum : uint8 {
+    INSTALLED = 1,
+    UPDATED = 2,
+    UNINSTALLED = 3,
+};
+
+struct JobDeclaration {
+    job_id string:64;
+    target_component string:64;
+    initial_delay_seconds uint64;
+    interval_seconds uint64;
+    flex_window_seconds uint32;
+    network JobNetworkConstraint;
+    requires_charging bool;
+    requires_device_idle bool;
+    requires_battery_not_low bool;
+    persist_across_reboots bool;
+    max_execution_seconds uint32;
+};
+
+@discoverable
+protocol WorkerLauncher {
+    1: SpawnWorker(resource struct {
+        package_id string:128;
+        process_name string:64;
+        uid uint64;
+        job_token uint64;
+        job_control handle:CHANNEL;
+    }) -> (struct {
+        status WorkerLaunchStatus;
+    });
+
+    2: GetJobDeclarations(struct {
+        package_id string:128;
+    }) -> (struct {
+        status WorkerLaunchStatus;
+        package_instance_id uint64;
+        declarations vector<JobDeclaration>:256;
+    });
+
+    3: StopWorker(struct {
+        package_id string:128;
+        uid uint64;
+        job_token uint64;
+        exit_code int32;
+    }) -> (struct {
+        status WorkerLaunchStatus;
+    });
+
+    4: WatchPackagePolicy(resource struct {
+        watcher handle:CHANNEL;
+    }) -> (struct {
+        status WorkerLaunchStatus;
+    });
+};
+
+protocol PackagePolicyWatcher {
+    1: OnPackagePolicyChanged(struct {
+        generation uint64;
+        package_id string:128;
+        package_instance_id uint64;
+        kind PackagePolicyEventKind;
+    });
+};

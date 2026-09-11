@@ -1,0 +1,5 @@
+load("//device/virtual/qemu/base:product.bzl", "qemu_product")
+
+package(default_visibility = ["//visibility:public"])
+
+qemu_product(name = "nongui", graphics = False)

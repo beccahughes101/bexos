@@ -1,0 +1,44 @@
+load("//testing/e2e/qemu:architecture_test.bzl", "qemu_suites")
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest")
+load("//testing/e2e/qemu:qemu_e2e.bzl", "QEMU_BOOT_DATA", "qemu_e2e_test", "qemu_development_e2e_test")
+
+package(default_visibility = ["//visibility:public"])
+
+app_manifest(
+    name = "job_test_manifest",
+    src = "job_test_app.prototxt",
+)
+
+app_archive(
+    name = "job_test_archive",
+    manifest = ":job_test_manifest",
+    compression = "none",
+)
+
+qemu_e2e_test(
+    name = "jobs_smoke_e2e_test",
+    src = "jobs_smoke_e2e_test.rs",
+    crate_name = "jobs_smoke_e2e_test",
+    boot_data = QEMU_BOOT_DATA,
+    extra_data = [":job_test_archive"],
+    extra_args = ["$(rootpath :job_test_archive)"],
+    deps = [
+        "//host/debug_client",
+        "//testing/e2e",
+        "//tools/qemu:qemu_test",
+    ],
+    env = {"BEXOS_QEMU_TIMEOUT_SECONDS": "600"},
+)
+
+
+qemu_development_e2e_test(
+    name = "jobs_development_test",
+    src = "jobs_smoke_e2e_test.rs",
+    crate_name = "jobs_development_test",
+    deps = ["//host/debug_client", "//testing/e2e", "//tools/qemu:qemu_test"],
+    extra_data = [":job_test_archive"],
+    extra_args = ["$(rootpath :job_test_archive)"],
+)
+
+qemu_suites()

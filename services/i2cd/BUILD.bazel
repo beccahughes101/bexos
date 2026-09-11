@@ -1,0 +1,93 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "topology_pb",
+    srcs = [
+        "package/topology.prototxt",
+        "//idl:i2c_spi_topology_proto_src",
+    ],
+    outs = ["topology.pb"],
+    cmd = "$(location @protobuf//:protoc) --proto_path=. --encode=bexos.hardware.i2c_spi.Topology idl/bexos/hardware/i2c_spi_topology.proto < $(location package/topology.prototxt) > $@",
+    tools = ["@protobuf//:protoc"],
+)
+
+rust_library(
+    name = "i2cd_lib",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_name = "bexos_i2cd",
+    edition = "2024",
+    compile_data = [":topology_pb"],
+    rustc_env = {"I2C_SPI_TOPOLOGY": "$(execpath :topology_pb)"},
+    deps = [
+        "//idl:hardware_manager_fidl_rust",
+        "//idl:i2c_spi_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//lib/i2c_spi",
+        "//lib/migration",
+        "//lib/userspace",
+        "//lib/userspace_async",
+        "@crates//:tokio",
+    ],
+)
+
+std_service_binary(
+    name = "i2cd_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_i2cd_elf",
+    deps = [
+        ":i2cd_lib",
+        "@crates//:tokio",
+    ],
+)
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_i2cd_replacement",
+    deps = [
+        ":i2cd_lib",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "runtime_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "i2cd_tests",
+    edition = "2024",
+    compile_data = [":topology_pb"],
+    rustc_env = {"I2C_SPI_TOPOLOGY": "$(execpath :topology_pb)"},
+    deps = [
+        ":i2cd_lib",
+        "//idl:i2c_spi_fidl_rust",
+        "//lib/i2c_spi",
+        "//lib/migration",
+        "//lib/userspace",
+    ],
+)
+
+app_manifest(name = "package_manifest", src = "package/i2cd.prototxt")
+
+app_archive(
+    name = "i2cd",
+    manifest = ":package_manifest",
+    entries = {
+        "bin/i2cd": ":i2cd_elf",
+        "config/i2c_spi_topology.pb": ":topology_pb",
+    },
+    compression = "zstd",
+)
+
+app_archive(
+    name = "replacement_archive",
+    manifest = ":package_manifest",
+    entries = {
+        "bin/i2cd": ":replacement_elf",
+        "config/i2c_spi_topology.pb": ":topology_pb",
+    },
+    compression = "zstd",
+)

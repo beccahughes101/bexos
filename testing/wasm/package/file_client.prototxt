@@ -1,0 +1,13 @@
+package_name: "bexos.test.wasm.file_client"
+name: "WASM migration connectivity probe"
+processes {
+ name: "file_client"
+ runner: "elf"
+ lifecycle { update_strategy: RESTART }
+ runner_options { [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/client" } }
+}
+services_consumed {
+ name: "bexos.test.wasm.FileCounter"
+ link_type: REQUIRED
+ capabilities { capability: "Public" methods { ordinal: 1 link_type: REQUIRED } }
+}

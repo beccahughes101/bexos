@@ -1,0 +1,15 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+package(default_visibility = ["//visibility:public"])
+cc_library(
+    name = "stdio",
+    srcs = ["format.c", "stdio.c"],
+    hdrs = ["format.h"],
+    defines = ["BEXOS_GNU_HEADERS", "_GNU_SOURCE"],
+    copts = ["-std=c11", "-ffunction-sections", "-fdata-sections", "-fvisibility=hidden"],
+    deps = ["@nanoprintf//:headers", "@mesa_linux_uapi//:headers"] + select({
+        "@platforms//cpu:aarch64": ["@mesa_gnu_headers_aarch64//:headers"],
+        "@platforms//cpu:x86_64": ["@mesa_gnu_headers_x86_64//:headers"],
+    }),
+    target_compatible_with = ["//build/platforms/constraints:bexos_userspace_abi"],
+)
+cc_library(name = "format_probe", srcs = ["format_probe.c"], deps = [":stdio"])

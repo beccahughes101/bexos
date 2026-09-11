@@ -1,0 +1,43 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "trust_store",
+    srcs = ["src/lib.rs"],
+    crate_name = "bexos_trust_store",
+    edition = "2024",
+    deps = ["@crates//:blake3"],
+)
+
+rust_library(
+    name = "trust_store_host",
+    srcs = ["src/lib.rs"],
+    crate_features = ["std", "redb_backend"],
+    crate_name = "bexos_trust_store",
+    edition = "2024",
+    deps = [
+        "@crates//:blake3",
+        "@crates//:redb",
+    ],
+)
+
+rust_library(
+    name = "trust_store_bexos_std",
+    srcs = ["src/lib.rs"],
+    crate_features = ["std", "redb_backend"],
+    crate_name = "bexos_trust_store",
+    edition = "2024",
+    deps = [
+        "@crates//:blake3",
+        "@crates//:redb",
+    ],
+)
+
+rust_test(
+    name = "trust_store_tests",
+    srcs = ["tests/trust_store_tests.rs"],
+    crate_name = "trust_store_tests",
+    edition = "2024",
+    deps = [":trust_store_host"],
+)

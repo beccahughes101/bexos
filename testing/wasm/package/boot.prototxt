@@ -1,0 +1,11 @@
+package_name: "bexos.test.wasm.boot"
+name: "Boot WASI command fixture"
+processes {
+ name: "boot"
+ runner: "wasm"
+ wave: 4
+ lifecycle { update_strategy: RESTART }
+ runner_options {
+  [type.googleapis.com/bexos.app.WasmRunnerOptions] { path: "/pkg/bin/boot.wasm" }
+ }
+}

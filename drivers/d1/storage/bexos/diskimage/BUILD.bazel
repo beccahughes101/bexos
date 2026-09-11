@@ -1,0 +1,94 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "diskimage",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = [
+            "src/main.rs",
+            "src/guest.rs",
+            "src/guest/**/*.rs",
+        ],
+    ),
+    crate_name = "bexos_d1_diskimage",
+    edition = "2024",
+    deps = [
+        "//idl:block_fidl_rust",
+        "@d1_crates//:aes",
+        "@d1_crates//:blake3",
+    ],
+)
+
+rust_library(
+    name = "diskimage_std",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_features = [
+        "guest",
+        "std",
+    ],
+    crate_name = "bexos_d1_diskimage",
+    edition = "2024",
+    deps = [
+        "//idl:block_fidl_rust",
+        "//idl:diskimage_fidl_rust",
+        "//idl:fs_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//lib/migration",
+        "//lib/userspace",
+        "@crates//:aes",
+        "@crates//:blake3",
+        "@crates//:tokio",
+    ],
+)
+
+std_service_binary(
+    name = "diskimage_driver",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_d1_diskimage_driver",
+    deps = [
+        ":diskimage_std",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "diskimage_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "diskimage_tests",
+    edition = "2024",
+    deps = [
+        ":diskimage",
+        "//idl:block_fidl_rust",
+    ],
+)
+
+rust_test(
+    name = "diskimage_async_tests",
+    srcs = ["tests/diskimage_async_tests.rs"],
+    crate_name = "diskimage_async_tests",
+    edition = "2024",
+    deps = [":diskimage_std", "//idl:diskimage_fidl_rust"],
+)
+
+app_manifest(name = "package_manifest", src = "package/diskimage_driver.prototxt")
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_d1_diskimage_driver_replacement",
+    deps = [
+        ":diskimage_std",
+        "@crates//:tokio",
+    ],
+)
+
+app_archive(
+    name = "replacement_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/diskimage_driver": ":replacement_elf"},
+    compression = "zstd",
+)

@@ -1,0 +1,11 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_binary(
+    name = "trace_analysis",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_trace_analysis_cli",
+    edition = "2024",
+    deps = ["//host/trace_analysis"],
+)

@@ -1,0 +1,31 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "distribution",
+    srcs = ["src/lib.rs"],
+    crate_name = "bexos_distribution",
+    edition = "2024",
+    deps = ["//lib/net"],
+)
+
+rust_library(
+    name = "distribution_live",
+    srcs = ["src/lib.rs"],
+    crate_features = ["live_https"],
+    crate_name = "bexos_distribution",
+    edition = "2024",
+    deps = [
+        "//lib/net:net_secure",
+        "//lib/userspace",
+    ],
+)
+
+rust_test(
+    name = "distribution_tests",
+    srcs = ["tests/distribution_tests.rs"],
+    crate_name = "distribution_tests",
+    edition = "2024",
+    deps = [":distribution"],
+)

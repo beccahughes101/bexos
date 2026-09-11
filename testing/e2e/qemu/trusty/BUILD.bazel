@@ -1,0 +1,52 @@
+load("//testing/e2e/qemu:architecture_test.bzl", "qemu_suites")
+load("//testing/e2e/qemu:qemu_e2e.bzl", "QEMU_BOOT_DATA", "qemu_e2e_test")
+
+package(default_visibility = ["//visibility:public"])
+
+qemu_e2e_test(
+    name = "trusty_security_stack_e2e_test",
+    src = "trusty_security_stack_e2e_test.rs",
+    crate_name = "trusty_security_stack_e2e_test",
+    boot_data = QEMU_BOOT_DATA,
+    extra_data = ["//device/virtual/qemu/nongui:vbmeta.stale.img", "//third_party/trusty:bl33-rollback.bin", "//third_party/trusty:rollback_nt_fw_content.crt"],
+    x86_extra_data = ["//device/virtual/qemu/nongui:vbmeta.stale.img", "//boot/efi:cached/rollback_loader.efi"],
+    x86_env_overrides = {
+        "BEXOS_QEMU_ROLLBACK_PROVISIONER": "$(rootpath //boot/efi:cached/rollback_loader.efi)",
+        "BEXOS_QEMU_ROLLBACK_CERTIFICATE": "",
+    },
+    env = {
+        "BEXOS_QEMU_ROLLBACK_PROVISIONER": "$(rootpath //third_party/trusty:bl33-rollback.bin)",
+        "BEXOS_QEMU_ROLLBACK_CERTIFICATE": "$(rootpath //third_party/trusty:rollback_nt_fw_content.crt)",
+        "BEXOS_QEMU_STALE_VBMETA": "$(rootpath //device/virtual/qemu/nongui:vbmeta.stale.img)",
+        "BEXOS_QEMU_TIMEOUT_SECONDS": "1800",
+    },
+    deps = [
+        "//host/debug_client",
+        "//kernel/core",
+        "//testing/e2e",
+        "//tools/qemu:qemu_test",
+    ],
+)
+
+qemu_e2e_test(
+    name = "authmgr_acceptance_e2e_test",
+    trusty_variant = "acceptance",
+    src = "authmgr_acceptance_e2e_test.rs",
+    crate_name = "authmgr_acceptance_e2e_test",
+    boot_data = dict(QEMU_BOOT_DATA,
+        rpmbd = "//third_party/trusty:acceptance_cached/rpmb_dev",
+        rpmb_template = "//third_party/trusty:acceptance_cached/RPMB_DATA",
+    ),
+    secure_firmware = {
+        "bl1": "//third_party/trusty:acceptance_cached/bl1.bin",
+        "bl2": "//third_party/trusty:acceptance_cached/bl2.bin",
+        "bl31": "//third_party/trusty:acceptance_cached/bl31.bin",
+        "bl32": "//third_party/trusty:acceptance_cached/lk.bin",
+        "bl33": "//third_party/trusty:acceptance_cached/bl33.bin",
+        "certificates": "//third_party/trusty:acceptance_certificates",
+    },
+    env = {"BEXOS_QEMU_TIMEOUT_SECONDS": "600"},
+    deps = ["//testing/e2e", "//tools/qemu:qemu_test"],
+)
+
+qemu_suites()

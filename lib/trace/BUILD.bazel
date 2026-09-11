@@ -1,0 +1,18 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "trace",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "bexos_trace",
+    edition = "2024",
+)
+
+rust_test(
+    name = "trace_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "trace_tests",
+    edition = "2024",
+    deps = [":trace"],
+)

@@ -1,0 +1,139 @@
+load("//build/platforms:architecture.bzl", "guest_select")
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:optimized_artifact.bzl", "optimized_artifact")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//build/rules:userspace.bzl", "std_service_binary", "app_manifest")
+
+package(default_visibility = ["//visibility:public"])
+
+app_manifest(name = "camera_provider_manifest_bin", src = "testdata/camera_provider.prototxt")
+
+app_manifest(name = "camera_client_manifest_bin", src = "testdata/camera_client.prototxt")
+
+rust_library(
+    name = "appd",
+    rustc_flags = select({"//services/scened:standalone": ["--cfg=standalone_graphics"], "//conditions:default": []}) + guest_select([], ["--cfg=bexos_arch_x86_64"]) + select({":bootui_transplant_validation": ["--cfg=bootui_transplant_validation"], "//conditions:default": []}),
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_features = ["persistent"],
+    crate_name = "bexos_appd",
+    compile_data = ["//services/wasm_runner:runtime_digest"],
+    rustc_env = {"BEXOS_WASM_RUNNER_DIGEST": "$(execpath //services/wasm_runner:runtime_digest)"},
+    edition = "2024",
+    deps = ["//lib/component_config", "//lib/debug_wire","//lib/app_manifest","//lib/elf",
+        "//lib/userspace",
+        "//lib/wasm_abi",
+        "//lib/trace",
+        "//lib/trusty_client",
+        "//lib/migration",
+        "//lib/update",
+        "//idl:migration_fidl_rust",
+        "//lib/app_archive",
+        "//lib/app_registry:app_registry_bexos_std",
+        "//lib/permission_store:permission_store_bexos_std",
+        "//lib/opener_store:opener_store_bexos_std",
+        "//lib/domain_association:domain_association_bexos_std",
+        "//lib/distribution",
+        "//lib/package_version",
+        "//lib/redb:redb_bexos_std",
+        "//lib/boot",
+        "//lib/crypto",
+        "//idl:bootstrap_fidl_rust",
+        "//idl:hardware_manager_fidl_rust",
+        "//drivers/d1/storage/bexos/bexfs:bexfs",
+        "//idl:vfs_manager_fidl_rust",
+        "//idl:user_manager_fidl_rust",
+        "//idl:fs_fidl_rust",
+        "//idl:block_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//idl:graphics_fidl_rust",
+        "//idl:shell_session_fidl_rust",
+        "//lib/graphics_runtime",
+        "//idl:tracing_fidl_rust",
+        "//idl:tee_manager_fidl_rust",
+        "//idl:app_debug_fidl_rust",
+        "//idl:app_lifecycle_fidl_rust",
+        "//idl:app_manager_fidl_rust",
+        "//idl:app_service_directory_fidl_rust",
+        "//idl:app_opener_fidl_rust",
+        "//idl:app_version_manager_fidl_rust",
+        "//idl:app_worker_fidl_rust",
+        "//kernel/core",
+        "@crates//:blake3",
+        "@crates//:redb",
+        "@crates//:sha2",
+        "@crates//:tokio",
+    ],
+)
+
+std_service_binary(
+    name = "appd_binary",
+    srcs = ["src/main.rs"],
+    crate_name = "appd_elf",
+    deps = ["//lib/app_manifest",
+        ":appd",
+        "@crates//:tokio",
+    ],
+)
+
+# The entry point alone is tiny; startup spends its time in the loader and its
+# dependencies. Keep the complete service graph optimized in fastbuild images.
+optimized_artifact(name = "appd_elf", src = ":appd_binary")
+
+rust_test(
+    name = "appd_tests",
+    compile_data = ["//tools/app_manifest:automatic_fixture", "//testing/wasm:command_manifest", "//services/wasm_runner:wasm_runner_elf", "//services/wasm_runner:replacement_archive", "//testing/wasm:command_archive"],
+    rustc_env = {"NATIVE_COMMAND_MANIFEST": "$(execpath //tools/app_manifest:automatic_fixture)", "WASM_TEST_MANIFEST": "$(execpath //testing/wasm:command_manifest)", "WASM_TEST_RUNTIME": "$(execpath //services/wasm_runner:wasm_runner_elf)", "WASM_TEST_RUNTIME_ARCHIVE": "$(execpath //services/wasm_runner:replacement_archive)", "WASM_TEST_COMMAND_ARCHIVE": "$(execpath //testing/wasm:command_archive)"},
+    srcs = glob(["tests/**/*.rs"]),
+    data = [
+        "//lib/crypto:crypto_shared",
+        "//lib/net:net_shared",
+    ],
+    crate_name = "appd_tests",
+    edition = "2024",
+    deps = ["//lib/app_manifest",
+        ":appd",
+        "//lib/boot",
+        "//lib/permission_store",
+        "//lib/opener_store",
+        "//lib/userspace",
+        "//lib/wasm_abi",
+        "//lib/trace",
+        "//lib/trusty_client",
+        "//idl:camera_fidl_rust",
+        "//idl:app_debug_fidl_rust",
+        "//idl:app_lifecycle_fidl_rust",
+        "//idl:app_manager_fidl_rust",
+        "//idl:app_service_directory_fidl_rust",
+        "//idl:app_opener_fidl_rust",
+        "//idl:fs_fidl_rust",
+        "//idl:hardware_manager_fidl_rust",
+        "//lib/domain_association:domain_association_host",
+        "//lib/distribution",
+        "//idl:kernel_fidl_rust",
+        "//idl:graphics_fidl_rust",
+        "//idl:shell_session_fidl_rust",
+        "//lib/graphics_runtime",
+        "//idl:tracing_fidl_rust",
+        "//idl:tee_manager_fidl_rust",
+        "//kernel/core",
+        "@crates//:blake3",
+    ],
+)
+
+app_manifest(name = "package_manifest", src = "package/appd.prototxt")
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "replacement_elf_replacement",
+    deps = ["//lib/app_manifest",
+        ":appd",
+        "@crates//:tokio",
+    ],
+)
+app_archive(name = "replacement_archive", manifest = ":package_manifest", entries = {"bin/appd": ":replacement_elf"}, compression = "zstd")
+
+# Only the lifecycle E2E build holds readiness for splash transplantation.
+config_setting(name = "bootui_transplant_validation", define_values = {"bootui_transplant_validation": "true"})
+
+rust_test(name = "shell_policy_tests", crate = ":appd")

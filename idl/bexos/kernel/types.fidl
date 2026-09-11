@@ -1,0 +1,52 @@
+library bexos.kernel;
+
+/// Universal capability handle rights bitmask
+type Rights = strict bits : uint32 {
+    TRANSFER = 0x00000001, // Can be transferred across channels
+    READ = 0x00000002, // Can read bytes / messages
+    WRITE = 0x00000004, // Can write bytes / messages
+    EXECUTE = 0x00000008, // Executable memory mapping (W^X restricted)
+    MAP = 0x00000010, // Can be mapped into virtual address space
+    DUPLICATE = 0x00000020, // Can duplicate handle with equal/fewer rights
+    SIGNAL = 0x00000040, // Can trigger/wait on object signals
+    MANAGE_TASK = 0x00000080, // Suspend/Resume/Kill tasks
+    ADMIN = 0x80000000, // Reserved for appd & Orchestrator
+};
+
+/// Signals emitted on handles for asynchronous polling/waiting
+type Signals = strict bits : uint32 {
+    READABLE = 0x00000001,
+    WRITABLE = 0x00000002,
+    PEER_CLOSED = 0x00000004,
+    SIGNALED = 0x00000008,
+    SUSPENDED = 0x00000010,
+    TERMINATED = 0x00000020,
+};
+
+type Status = strict enum : int32 {
+    OK = 0,
+    ERR_INVALID_HANDLE = -1,
+    ERR_ACCESS_DENIED = -2,
+    ERR_NO_MEMORY = -3,
+    ERR_BUFFER_TOO_SMALL = -4,
+    ERR_PEER_CLOSED = -5,
+    ERR_TIMED_OUT = -6,
+    ERR_ALREADY_EXISTS = -7,
+    ERR_INVALID_ARGS = -8,
+    ERR_RESOURCE_EXHAUSTED = -9,
+};
+
+/// Per-process hardware access granted after appd validates platform policy.
+type HardwareAccess = strict enum : uint32 {
+    NONE = 0,
+    ISOLATED = 1,
+    DIRECT = 2,
+};
+
+type SystemPowerState = strict enum : uint8 {
+    ACTIVE = 1,
+    SUSPEND_TO_RAM = 2,
+    SUSPEND_TO_DISK = 3,
+    REBOOT = 4,
+    POWEROFF = 5,
+};

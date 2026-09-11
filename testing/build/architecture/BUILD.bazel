@@ -1,0 +1,87 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+load("//build/platforms:architecture.bzl", "guest_platform", "guest_select")
+load("//testing/e2e/qemu:architecture_test.bzl", "architecture_test")
+
+cc_library(name = "c_probe", srcs = ["probe.c", "probe.cc"])
+
+rust_binary(
+    name = "elf_probe",
+    srcs = ["probe.rs"],
+    edition = "2024",
+    platform = guest_platform("userspace_freestanding"),
+    linker_script = guest_select("//lib/userspace:aarch64.ld", "//lib/userspace:x86_64.ld"),
+    rustc_flags = ["-C", "panic=abort", "-C", "relocation-model=static"],
+    link_deps = [":c_probe"],
+)
+
+PROBE_ENV = {
+    "ELF_PROBE": "$(rootpath :elf_probe)",
+    "DEVICE_CONFIG": "$(rootpath //device/virtual/qemu/nongui:device_prototxt_source)",
+    "PLATFORM_CONFIG": "$(rootpath //device/virtual/qemu/nongui:platform_pcfg_prototxt_source)",
+    "HARDWARE_CONFIG": "$(rootpath //device/virtual/qemu/nongui:qemu_hardware_aib_prototxt_source)",
+}
+
+sh_test(
+    name = "closure_test",
+    srcs = ["validate.sh"],
+    data = [
+        "validate.py",
+        ":elf_probe",
+        "//device/virtual/qemu/nongui:device_prototxt_source",
+        "//device/virtual/qemu/nongui:platform_pcfg_prototxt_source",
+        "//device/virtual/qemu/nongui:qemu_hardware_aib_prototxt_source",
+    ],
+    env = guest_select(
+        dict(PROBE_ENV, BEXOS_QEMU_ARCH = "aarch64"),
+        dict(PROBE_ENV, BEXOS_QEMU_ARCH = "x86_64"),
+    ),
+    tags = ["manual"],
+)
+
+architecture_test(name = "aarch64_test", test = ":closure_test", architecture = "aarch64")
+architecture_test(name = "x86_64_test", test = ":closure_test", architecture = "x86_64")
+sh_test(
+    name = "bootfs_closure_test",
+    srcs = ["validate_bootfs.sh"],
+    data = ["validate_bootfs.py", "//device/virtual/qemu/nongui:bootfs.img"],
+    env = guest_select(
+        {"BOOTFS_IMAGE": "$(rootpath //device/virtual/qemu/nongui:bootfs.img)", "BEXOS_QEMU_ARCH": "aarch64"},
+        {"BOOTFS_IMAGE": "$(rootpath //device/virtual/qemu/nongui:bootfs.img)", "BEXOS_QEMU_ARCH": "x86_64"},
+    ),
+    tags = ["manual"],
+)
+
+architecture_test(name = "aarch64_bootfs_test", test = ":bootfs_closure_test", architecture = "aarch64")
+architecture_test(name = "x86_64_bootfs_test", test = ":bootfs_closure_test", architecture = "x86_64")
+sh_test(
+    name = "workstation_bootfs_closure_test",
+    srcs = ["validate_bootfs.sh"],
+    data = ["validate_bootfs.py", "//device/virtual/qemu/workstation:bootfs.img"],
+    env = guest_select(
+        {"BOOTFS_IMAGE": "$(rootpath //device/virtual/qemu/workstation:bootfs.img)", "BEXOS_QEMU_PRODUCT": "workstation", "BEXOS_QEMU_ARCH": "aarch64"},
+        {"BOOTFS_IMAGE": "$(rootpath //device/virtual/qemu/workstation:bootfs.img)", "BEXOS_QEMU_PRODUCT": "workstation", "BEXOS_QEMU_ARCH": "x86_64"},
+    ),
+    tags = ["manual"],
+)
+
+architecture_test(name = "workstation_aarch64_bootfs_test", test = ":workstation_bootfs_closure_test", architecture = "aarch64")
+architecture_test(name = "workstation_x86_64_bootfs_test", test = ":workstation_bootfs_closure_test", architecture = "x86_64")
+
+sh_test(
+    name = "emulated_bootfs_closure_test",
+    srcs = ["validate_bootfs.sh"],
+    data = ["validate_bootfs.py", "//device/virtual/qemu/nongui:bootfs.emulated.img"],
+    env = guest_select(
+        {"BOOTFS_IMAGE": "$(rootpath //device/virtual/qemu/nongui:bootfs.emulated.img)", "BEXOS_QEMU_TEE": "software", "BEXOS_QEMU_ARCH": "aarch64"},
+        {"BOOTFS_IMAGE": "$(rootpath //device/virtual/qemu/nongui:bootfs.emulated.img)", "BEXOS_QEMU_TEE": "software", "BEXOS_QEMU_ARCH": "x86_64"},
+    ),
+    tags = ["manual"],
+)
+
+architecture_test(name = "aarch64_emulated_bootfs_test", test = ":emulated_bootfs_closure_test", architecture = "aarch64")
+
+test_suite(
+    name = "all",
+    tests = [":aarch64_test", ":x86_64_test", ":aarch64_bootfs_test", ":x86_64_bootfs_test", ":workstation_aarch64_bootfs_test", ":workstation_x86_64_bootfs_test", ":aarch64_emulated_bootfs_test"],
+)

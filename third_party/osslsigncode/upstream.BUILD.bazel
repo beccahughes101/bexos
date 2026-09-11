@@ -1,0 +1,15 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+package(default_visibility = ["//visibility:public"])
+cc_binary(
+    name = "osslsigncode",
+    srcs = ["osslsigncode.c", "helpers.c", "utf.c", "msi.c", "pe.c", "cab.c", "cat.c", "appx.c", "script.c", "osslsigncode.h", "helpers.h", "utf.h"],
+    defines = [
+        'PACKAGE_STRING=\\"osslsigncode-2.12\\"',
+        'PACKAGE_BUGREPORT=\\"https://github.com/mtrojnar/osslsigncode/issues\\"',
+        'VERSION_MAJOR=\\"2\\"',
+        'VERSION_MINOR=\\"12\\"',
+        "HAVE_SYS_MMAN_H", "HAVE_MMAP", "HAVE_TERMIOS_H", "HAVE_GETPASS",
+    ],
+    linkopts = ["-lz"],
+    deps = ["@secure_boot_host_openssl//:openssl"],
+)

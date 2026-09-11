@@ -1,0 +1,41 @@
+package_name: "bexos.hardware:camera"
+name: "Camera Provider"
+permissions {
+  name: "CAMERA"
+  values: "front"
+  values: "back"
+  usage_description: "Capture camera frames."
+}
+permissions {
+  name: "RAW_SENSOR_TUNING"
+  values: "sensor0"
+  requirement: PERMISSION_OPTIONAL
+  usage_description: "Tune raw camera sensor controls."
+}
+processes {
+  name: "camera_service"
+  runner: "elf"
+  service: true
+  wave: 1
+}
+services_exposed {
+  name: "bexos.hardware.Camera"
+  protocol: "CameraController"
+  lifecycle: SINGLETON
+  visibility: PUBLIC
+  bind_permission: "CAMERA"
+  metadata {
+    key: "category"
+    value: "hardware.camera"
+  }
+  metadata {
+    key: "supports_capture"
+    value: "true"
+  }
+  capabilities {
+    capability: "Camera"
+    permission: "CAMERA"
+    method_ordinals: 2
+    method_ordinals: 3
+  }
+}

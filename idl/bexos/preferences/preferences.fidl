@@ -1,0 +1,58 @@
+library bexos.preferences;
+
+type Status = strict enum : int32 {
+    OK = 0; NOT_FOUND = -1; ACCESS_DENIED = -2; INVALID_ARGS = -8;
+    CONFLICT = -9; BUSY = -11; REJECTED = -12; TIMEOUT = -13;
+    STORAGE = -20; COMMITTED_PENDING = 1;
+};
+struct BoolConfig { value bool; };
+struct Uint32Config { value uint32; };
+struct Uint64Config { value uint64; };
+struct StringConfig { value string:65536; };
+struct BytesConfig { value vector<uint8>:65536; };
+type ConfigValue = strict union {
+    1: bool_value BoolConfig;
+    2: uint32_value Uint32Config;
+    3: uint64_value Uint64Config;
+    4: string_value StringConfig;
+    5: bytes_value BytesConfig;
+};
+struct Assignment { key string:64; value ConfigValue; };
+
+@discoverable
+protocol UserPreferences {
+    1: GetPreferences(struct { package_id string:128; }) -> (resource struct {
+        status Status; generation uint64; config vector<handle>:1; config_len uint64;
+        schema vector<uint8>:65536; locks vector<string:64>:256;
+    });
+    2: SetPreference(struct { package_id string:128; key string:64; expected_generation uint64; value ConfigValue; }) -> (struct { status Status; generation uint64; });
+    3: ResetToDefaults(struct { package_id string:128; expected_generation uint64; }) -> (struct { status Status; generation uint64; });
+    // Management capability is reserved for Settings and the privileged debugger.
+    4: Manage(struct { package_id string:128; uid uint64; operation uint32; expected_generation uint64; assignments vector<Assignment>:256; }) -> (resource struct {
+        status Status; generation uint64; config vector<handle>:1; config_len uint64;
+        schema vector<uint8>:65536; locks vector<string:64>:256;
+    });
+};
+
+// Only appd can establish this private provider connection. No caller identity
+// or schema supplied on a public UserPreferences connection is authoritative.
+protocol PreferencesAdmin {
+    16: Reconcile(struct { installed vector<string:128>:256; }) -> (struct { status Status; });
+    15: Freeze(struct { frozen bool; }) -> (struct { status Status; });
+    10: RegisterPackage(struct { package_key string:128; package_id string:128; schema vector<uint8>:65536; baseline vector<uint8>:65536; policy vector<uint8>:65536; legacy_generation uint64; legacy_config vector<uint8>:65536; }) -> (struct { status Status; });
+    11: Resolve(struct { package_key string:128; uid uint64; }) -> (resource struct { status Status; generation uint64; config vector<handle>:1; config_len uint64; });
+    12: AttachReceiver(resource struct { package_key string:128; uid uint64; receiver handle:CHANNEL; }) -> (struct { status Status; });
+    // 0 get, 1 set assignments, 2 reset assignments and runtime locks,
+    // 3 lock names, 4 unlock names. Operator revisions remain package-specific.
+    13: Operator(struct { package_key string:128; operation uint32; expected_generation uint64; config vector<uint8>:65536; names vector<string:64>:256; }) -> (resource struct { status Status; generation uint64; config vector<handle>:1; config_len uint64; locks vector<string:64>:256; });
+    14: UserState(struct { uid uint64; unlocked bool; deleted bool; }) -> (struct { status Status; });
+};
+
+protocol ConfigObserver {
+    // Receiver opts in before participating; merely receiving an endpoint is
+    // insufficient. This request travels from the application to prefsd.
+    1: Register() -> (resource struct { status Status; config vector<handle>:1; config_len uint64; });
+    2: Prepare(resource struct { transaction_id uint64; generation uint64; config handle:VMO; config_len uint64; }) -> (struct { status Status; transaction_id uint64; generation uint64; });
+    3: Commit(struct { transaction_id uint64; generation uint64; }) -> (struct { status Status; transaction_id uint64; generation uint64; });
+    4: Abort(struct { transaction_id uint64; generation uint64; });
+};

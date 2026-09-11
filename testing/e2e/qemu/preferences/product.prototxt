@@ -1,0 +1,2 @@
+product_name: "preference-test"
+component_config_values { package_id: "com.example.preferences_probe" locked_fields: "managed" }

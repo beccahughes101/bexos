@@ -1,0 +1,255 @@
+library bexos.usb.host;
+
+using bexos.kernel;
+
+type Status = strict enum : int32 {
+    OK = 0;
+    ERR_INVALID_HANDLE = -1;
+    ERR_ACCESS_DENIED = -2;
+    ERR_NO_MEMORY = -3;
+    ERR_BUFFER_TOO_SMALL = -4;
+    ERR_PEER_CLOSED = -5;
+    ERR_TIMED_OUT = -6;
+    ERR_ALREADY_EXISTS = -7;
+    ERR_INVALID_ARGS = -8;
+    ERR_NOT_FOUND = -9;
+    ERR_BAD_STATE = -10;
+    ERR_UNSUPPORTED = -11;
+    ERR_STALL = -12;
+    ERR_DISCONNECTED = -13;
+};
+
+type UsbSpeed = strict enum : uint8 {
+    LOW = 1;
+    FULL = 2;
+    HIGH = 3;
+    SUPER = 4;
+};
+
+type TransferDirection = strict enum : uint8 {
+    OUT = 1;
+    IN = 2;
+    NONE = 3;
+};
+
+type TransferType = strict enum : uint8 {
+    CONTROL = 0;
+    ISOCHRONOUS = 1;
+    BULK = 2;
+    INTERRUPT = 3;
+};
+
+type EndpointRecovery = strict enum : uint8 {
+    CLEAR_HALT = 1;
+    RESET_ENDPOINT = 2;
+    RESET_INTERFACE = 3;
+};
+
+type TopologyEventKind = strict enum : uint8 {
+    ATTACHED = 1;
+    CONFIGURED = 2;
+    REMOVED = 3;
+    REJECTED = 4;
+};
+
+struct EndpointInfo {
+    address uint8;
+    transfer_type TransferType;
+    direction TransferDirection;
+    max_packet_size uint16;
+    interval uint8;
+};
+
+struct InterfaceInfo {
+    device_id uint64;
+    interface_id uint64;
+    generation uint64;
+    class_code uint8;
+    subclass uint8;
+    protocol uint8;
+    speed UsbSpeed;
+    endpoints vector<EndpointInfo>:8;
+};
+
+struct TopologyEvent {
+    kind TopologyEventKind;
+    device_id uint64;
+    parent_id uint64;
+    port uint8;
+    generation uint64;
+    speed UsbSpeed;
+    vendor_id uint16;
+    product_id uint16;
+    class_code uint8;
+    subclass uint8;
+    protocol uint8;
+    reason uint32;
+};
+
+struct ControlSetup {
+    request_type uint8;
+    request uint8;
+    value uint16;
+    index uint16;
+    length uint16;
+};
+
+struct TransferRequest {
+    transfer_id uint64;
+    endpoint uint8;
+    direction TransferDirection;
+    setup ControlSetup;
+    buffer_id uint32;
+    buffer_offset uint64;
+    length uint32;
+    timeout_us uint64;
+};
+
+struct TransferCompletion {
+    transfer_id uint64;
+    status Status;
+    actual_length uint32;
+    generation uint64;
+};
+
+struct BufferInfo {
+    buffer_id uint32;
+    size_bytes uint64;
+    device_address uint64;
+};
+
+@discoverable
+protocol XhciController {
+    1: GetControllerInfo() -> (struct {
+        status Status;
+        port_count uint16;
+        scratchpad_count uint16;
+        max_slots uint8;
+        generation uint64;
+    });
+
+    2: RegisterBusManager(resource struct {
+        events handle:CHANNEL;
+    }) -> (resource struct {
+        status Status;
+        bus handle:CHANNEL;
+    });
+
+    3: RegisterBuffer(resource struct {
+        vmo handle:VMO;
+        offset uint64;
+        size_bytes uint64;
+        direction TransferDirection;
+    }) -> (struct {
+        status Status;
+        info BufferInfo;
+    });
+
+    4: UnregisterBuffer(struct {
+        buffer_id uint32;
+    }) -> (struct {
+        status Status;
+    });
+
+    5: SubmitTransfer(struct {
+        request TransferRequest;
+    }) -> (struct {
+        status Status;
+    });
+
+    6: CancelTransfer(struct {
+        transfer_id uint64;
+    }) -> (struct {
+        status Status;
+    });
+
+    7: RecoverEndpoint(struct {
+        interface_id uint64;
+        endpoint uint8;
+        action EndpointRecovery;
+    }) -> (struct {
+        status Status;
+    });
+
+    8: GetCompletionChannel() -> (resource struct {
+        status Status;
+        completions handle:CHANNEL;
+    });
+
+    9: GetMigrationMarkers() -> (struct {
+        command_ring uint64;
+        event_ring uint64;
+        scratchpad_table uint64;
+    });
+};
+
+protocol UsbBus {
+    1: SubscribeTopology(resource struct {
+        sink handle:CHANNEL;
+    }) -> (struct {
+        status Status;
+        generation uint64;
+    });
+
+    2: ClaimInterface(struct {
+        device_id uint64;
+        interface_number uint8;
+    }) -> (resource struct {
+        status Status;
+        info InterfaceInfo;
+        interface_channel handle:CHANNEL;
+    });
+
+    3: ReleaseInterface(struct {
+        interface_id uint64;
+    }) -> (struct {
+        status Status;
+    });
+};
+
+protocol UsbInterface {
+    1: GetInfo() -> (struct {
+        status Status;
+        info InterfaceInfo;
+    });
+
+    2: RegisterBuffer(resource struct {
+        vmo handle:VMO;
+        offset uint64;
+        size_bytes uint64;
+        direction TransferDirection;
+    }) -> (struct {
+        status Status;
+        info BufferInfo;
+    });
+
+    3: UnregisterBuffer(struct {
+        buffer_id uint32;
+    }) -> (struct {
+        status Status;
+    });
+
+    4: SubmitTransfer(struct {
+        request TransferRequest;
+    }) -> (struct {
+        status Status;
+    });
+
+    5: CancelTransfer(struct {
+        transfer_id uint64;
+    }) -> (struct {
+        status Status;
+    });
+
+    6: RecoverEndpoint(struct {
+        endpoint uint8;
+        action EndpointRecovery;
+    }) -> (struct {
+        status Status;
+    });
+
+    7: GetCompletionChannel() -> (resource struct {
+        status Status;
+        completions handle:CHANNEL;
+    });
+};

@@ -1,0 +1,17 @@
+load("//testing/e2e/qemu:architecture_test.bzl", "qemu_suites")
+load("//testing/e2e/qemu:qemu_e2e.bzl", "QEMU_BOOT_DATA", "qemu_e2e_test")
+
+package(default_visibility = ["//visibility:public"])
+
+qemu_e2e_test(
+    name = "nvme_smoke_test",
+    src = "nvme_smoke_test.rs",
+    crate_name = "nvme_smoke_test",
+    boot_data = QEMU_BOOT_DATA,
+    deps = [
+        "//testing/e2e",
+        "//tools/qemu:qemu_test",
+    ],
+)
+
+qemu_suites()

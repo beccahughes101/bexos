@@ -1,0 +1,4 @@
+uuid: "b14d6b6c-77d1-4aab-8db3-50dc10804f85"
+app_name: "bexos.authmgr.acceptance"
+min_heap: 262144
+min_stack: 65536

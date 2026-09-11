@@ -1,0 +1,12 @@
+library bexos.hardware.rpmb;
+
+/// Untrusted frame transport. Authentication and counters remain in Trusty.
+protocol RpmbTransport {
+    1: Exchange(struct {
+        read_frames uint32;
+        frames vector<uint8>;
+    }) -> (struct {
+        status int32;
+        frames vector<uint8>;
+    });
+};

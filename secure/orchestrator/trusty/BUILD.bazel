@@ -1,0 +1,58 @@
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "all_sources",
+    srcs = glob(["**"], exclude = ["BUILD.bazel"]),
+)
+
+cc_library(
+    name = "state",
+    srcs = ["state.c"],
+    hdrs = glob(["include/*.h"]),
+    includes = ["."],
+)
+
+cc_test(
+    name = "state_test",
+    srcs = ["state_test.c"],
+    deps = [":state"],
+)
+
+cc_library(
+    name = "journal_state",
+    srcs = ["journal_state.c"],
+    hdrs = ["include/bexos_journal.h"],
+)
+
+cc_test(
+    name = "journal_state_test",
+    srcs = ["journal_state_test.c"],
+    deps = [":journal_state"],
+)
+
+cc_library(
+    name = "boot_selection",
+    srcs = ["boot_selection.c"],
+    hdrs = ["include/bexos_boot_selection.h"],
+    deps = [":journal_state"],
+)
+
+cc_test(
+    name = "boot_selection_test",
+    srcs = ["boot_selection_test.c"],
+    deps = [":boot_selection"],
+)
+
+cc_binary(
+    name = "boot_selection_fixture",
+    testonly = True,
+    srcs = ["boot_selection_fixture.c"],
+    deps = [":boot_selection"],
+)
+genrule(
+    name = "boot_selection_records",
+    testonly = True,
+    outs = ["boot_selection.records"],
+    tools = [":boot_selection_fixture"],
+    cmd = "$(location :boot_selection_fixture) > $@",
+)

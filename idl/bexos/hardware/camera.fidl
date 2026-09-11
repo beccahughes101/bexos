@@ -1,0 +1,49 @@
+library bexos.hardware.camera;
+
+using bexos.media;
+
+alias FrameBytes = vector<uint8>:4096;
+
+enum CameraState : uint32 {
+    IDLE = 0;
+    STREAMING = 1;
+};
+
+bits CameraFlags : uint32 {
+    HDR = 1;
+    DEPTH = 2;
+};
+
+struct CameraStatus {
+    ready bool;
+    state CameraState;
+};
+
+table CaptureOptions {
+    1: width uint32;
+    2: height uint32;
+};
+
+protocol CameraController {
+    1: GetStatus() -> (struct {
+        ready bool;
+        state CameraState;
+    });
+
+    @permission("CAMERA")
+    CaptureFrame(struct {
+        options CaptureOptions?;
+    }) -> (struct {
+        frame FrameBytes;
+    });
+
+    @permission("android.permission.CAMERA_RECORD=Camera1")
+    RecordStream(resource struct {
+        client_sink client_end:AudioVideoSink;
+    });
+
+    @permission("request.permissions.contains('CAMERA') && client.is_foreground")
+    RecordHighResVideo() -> (struct {
+        stream_handle handle;
+    });
+};

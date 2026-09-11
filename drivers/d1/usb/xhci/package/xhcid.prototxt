@@ -1,0 +1,40 @@
+package_name: "bexos.driver.usb.xhcid"
+name: "xhcid"
+library_dependencies { package_name: "bexos.lib.crypto" mount_alias: "bexos.lib.crypto" abi_version: 1 }
+library_dependencies { package_name: "bexos.lib.net" mount_alias: "bexos.lib.net" abi_version: 1 }
+driver_info { name: "xhci_d1_driver" package_id: "bexos.driver.usb.xhcid" version: "1.0.0" }
+bind_rules {
+ condition {
+  bus: BUS_PCI
+  property { key: "pci.class" value: 0x0c }
+  property { key: "pci.subclass" value: 0x03 }
+  property { key: "pci.prog_if" value: 0x30 }
+ }
+}
+processes {
+ name: "xhcid"
+ runner: "elf"
+ lifecycle { update_strategy: HEART_TRANSPLANT preparation_timeout_ms: 30000 }
+ service: true
+ wave: 1
+ resource_group: "system"
+ runner_options { [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/xhcid" } }
+}
+services_exposed {
+ name: "bexos.usb.host.XhciController"
+ protocol: "XhciController"
+ lifecycle: MULTIPLE_INSTANCE
+ visibility: PRIVATE
+ capabilities {
+  capability: "UsbBusManager"
+  method_ordinals: 1
+  method_ordinals: 2
+  method_ordinals: 3
+  method_ordinals: 4
+  method_ordinals: 5
+  method_ordinals: 6
+  method_ordinals: 7
+  method_ordinals: 8
+  method_ordinals: 9
+ }
+}

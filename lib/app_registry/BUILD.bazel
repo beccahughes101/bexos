@@ -1,0 +1,58 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "app_registry",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "bexos_app_registry",
+    edition = "2024",
+    deps = ["//lib/app_manifest",
+        "//lib/app_archive",
+        "//lib/migration",
+        "//lib/package_version",
+        "//lib/redb",
+    ],
+)
+
+rust_library(
+    name = "app_registry_host",
+    srcs = glob(["src/**/*.rs"]),
+    crate_features = ["std", "redb_backend"],
+    crate_name = "bexos_app_registry",
+    edition = "2024",
+    deps = ["//lib/app_manifest",
+        "//lib/app_archive:app_archive_host",
+        "//lib/migration",
+        "//lib/package_version",
+        "//lib/redb:redb_host",
+        "@crates//:redb",
+    ],
+)
+
+rust_library(
+    name = "app_registry_bexos_std",
+    srcs = glob(["src/**/*.rs"]),
+    crate_features = ["std", "redb_backend"],
+    crate_name = "bexos_app_registry",
+    edition = "2024",
+    deps = ["//lib/app_manifest",
+        "//lib/app_archive",
+        "//lib/migration",
+        "//lib/package_version",
+        "//lib/redb:redb_bexos_std",
+        "@crates//:redb",
+    ],
+)
+
+rust_test(
+    name = "app_registry_tests",
+    srcs = ["tests/app_registry_tests.rs"],
+    crate_name = "app_registry_tests",
+    edition = "2024",
+    deps = ["//lib/app_manifest",
+        ":app_registry_host",
+        "//lib/app_archive:app_archive_host",
+        "//lib/redb:redb_host",
+    ],
+)

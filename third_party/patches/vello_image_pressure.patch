@@ -1,0 +1,29 @@
+--- a/src/image_cache.rs
++++ b/src/image_cache.rs
+@@ -8,7 +8,6 @@
+ 
+ const DEFAULT_ATLAS_SIZE: i32 = 1024;
+ const MAX_ATLAS_SIZE: i32 = 8192;
+-const EVICT_AFTER_GENERATIONS: u64 = 2;
+ 
+ #[derive(Default)]
+ pub struct Images<'a> {
+@@ -176,12 +175,14 @@
+         if self.evicted_in_resolve != 0 {
+             return false;
+         }
+-        let Some(stale_before) = self.generation.checked_sub(EVICT_AFTER_GENERATIONS) else {
+-            return false;
+-        };
++        // Called only after allocation fails. Keep every image already resolved
++        // in this pass, but reclaim unused previous-frame residency before
++        // growing the atlas. Retaining two old scenes here can require a 64 MiB
++        // replacement texture even when each scene fits the existing atlas.
++        // Later images in this pass are uploaded again if they were reclaimed.
+         for (_id, resident) in self
+             .map
+-            .extract_if(|_, resident| resident.last_used_generation < stale_before)
++            .extract_if(|_, resident| resident.last_used_generation != self.generation)
+         {
+             self.atlas.deallocate(resident.alloc_id);
+             self.evicted_in_resolve += 1;

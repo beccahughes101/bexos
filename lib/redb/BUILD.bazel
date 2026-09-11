@@ -1,0 +1,119 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "redb_crate_no_std",
+    srcs = [
+        "@crates__redb-4.2.0//:src/backends.rs",
+        "@crates__redb-4.2.0//:src/complex_types.rs",
+        "@crates__redb-4.2.0//:src/db.rs",
+        "@crates__redb-4.2.0//:src/error.rs",
+        "@crates__redb-4.2.0//:src/io.rs",
+        "@crates__redb-4.2.0//:src/key_range.rs",
+        "@crates__redb-4.2.0//:src/lib.rs",
+        "@crates__redb-4.2.0//:src/multimap_table.rs",
+        "@crates__redb-4.2.0//:src/sealed.rs",
+        "@crates__redb-4.2.0//:src/sync.rs",
+        "@crates__redb-4.2.0//:src/table.rs",
+        "@crates__redb-4.2.0//:src/transaction_tracker.rs",
+        "@crates__redb-4.2.0//:src/transactions.rs",
+        "@crates__redb-4.2.0//:src/tree_store/btree.rs",
+        "@crates__redb-4.2.0//:src/tree_store/btree_base.rs",
+        "@crates__redb-4.2.0//:src/tree_store/btree_cursor.rs",
+        "@crates__redb-4.2.0//:src/tree_store/btree_cursor_range.rs",
+        "@crates__redb-4.2.0//:src/tree_store/btree_iters.rs",
+        "@crates__redb-4.2.0//:src/tree_store/btree_mutator.rs",
+        "@crates__redb-4.2.0//:src/tree_store/extract_if.rs",
+        "@crates__redb-4.2.0//:src/tree_store/mod.rs",
+        "@crates__redb-4.2.0//:src/tree_store/multimap_btree.rs",
+        "@crates__redb-4.2.0//:src/tree_store/page_store/backends.rs",
+        "@crates__redb-4.2.0//:src/tree_store/page_store/base.rs",
+        "@crates__redb-4.2.0//:src/tree_store/page_store/bitmap.rs",
+        "@crates__redb-4.2.0//:src/tree_store/page_store/buddy_allocator.rs",
+        "@crates__redb-4.2.0//:src/tree_store/page_store/cached_file.rs",
+        "@crates__redb-4.2.0//:src/tree_store/page_store/fast_hash.rs",
+        "@crates__redb-4.2.0//:src/tree_store/page_store/file_backend/fallback.rs",
+        "@crates__redb-4.2.0//:src/tree_store/page_store/file_backend/mod.rs",
+        "@crates__redb-4.2.0//:src/tree_store/page_store/file_backend/optimized.rs",
+        "@crates__redb-4.2.0//:src/tree_store/page_store/header.rs",
+        "@crates__redb-4.2.0//:src/tree_store/page_store/layout.rs",
+        "@crates__redb-4.2.0//:src/tree_store/page_store/lru_cache.rs",
+        "@crates__redb-4.2.0//:src/tree_store/page_store/mod.rs",
+        "@crates__redb-4.2.0//:src/tree_store/page_store/page_manager.rs",
+        "@crates__redb-4.2.0//:src/tree_store/page_store/region.rs",
+        "@crates__redb-4.2.0//:src/tree_store/page_store/savepoint.rs",
+        "@crates__redb-4.2.0//:src/tree_store/page_store/xxh3.rs",
+        "@crates__redb-4.2.0//:src/tree_store/table_tree.rs",
+        "@crates__redb-4.2.0//:src/tree_store/table_tree_base.rs",
+        "@crates__redb-4.2.0//:src/tuple_types.rs",
+        "@crates__redb-4.2.0//:src/types.rs",
+        "@crates__redb-4.2.0//:src/types/chrono_v0_4.rs",
+        "@crates__redb-4.2.0//:src/types/uuid.rs",
+    ],
+    crate_features = ["experimental-api-5"],
+    crate_name = "redb",
+    crate_root = "@crates__redb-4.2.0//:src/lib.rs",
+    edition = "2024",
+    rustc_flags = [
+        "-Cpanic=abort",
+        "--cfg=redb_no_std",
+        "--check-cfg=cfg(feature, values(\"cache_metrics\", \"chrono_v0_4\", \"experimental-api-5\", \"experimental_cursor\", \"logging\", \"uuid\"))",
+        "--check-cfg=cfg(fuzzing)",
+        "--check-cfg=cfg(redb_no_std)",
+        "--check-cfg=cfg(test)",
+    ],
+)
+
+rust_library(
+    name = "redb",
+    srcs = ["src/lib.rs"],
+    crate_features = [
+        "redb_backend",
+        "redb_no_std",
+    ],
+    crate_name = "bexos_redb",
+    edition = "2024",
+    deps = [":redb_crate_no_std"],
+)
+
+rust_library(
+    name = "redb_std",
+    srcs = ["src/lib.rs"],
+    crate_features = ["std", "redb_backend"],
+    crate_name = "bexos_redb",
+    edition = "2024",
+    deps = ["@crates//:redb"],
+)
+
+alias(
+    name = "redb_host",
+    actual = ":redb_std",
+)
+
+rust_library(
+    name = "redb_bexos_std",
+    srcs = ["src/lib.rs"],
+    crate_features = [
+        "std",
+        "redb_backend",
+        "bexos_libc_runtime",
+    ],
+    crate_name = "bexos_redb",
+    edition = "2024",
+    deps = [
+        "//lib/userspace",
+        "@crates//:redb",
+    ],
+)
+
+rust_test(
+    name = "redb_tests",
+    srcs = ["tests/redb_tests.rs"],
+    crate_name = "redb_tests",
+    edition = "2024",
+    deps = [
+        ":redb_host",
+        "@crates//:redb",
+    ],
+)

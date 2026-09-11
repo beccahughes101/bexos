@@ -1,0 +1,2 @@
+name: "input_fixture"
+packages { label: "//testing/e2e/qemu/graphics/input_fixture:fixture_elf" package_id: "bexos.testing.input_fixture" placement: BOOTFS }

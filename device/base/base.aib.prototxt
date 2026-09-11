@@ -1,0 +1,30 @@
+name: "base"
+
+packages { label: "//drivers/d1/storage/bexos/bexfs:bexfs_driver" package_id: "bexos.driver.storage.bexfs" placement: BOOTFS }
+packages { label: "//drivers/d1/storage/bexos/archivefs:archivefs_driver" package_id: "bexos.driver.storage.archivefs" placement: BOOTFS }
+packages { label: "//drivers/d1/storage/bexos/memfs:memfs_driver" package_id: "bexos.driver.storage.memfs" placement: BOOTFS }
+packages { label: "//drivers/d1/storage/bexos/diskimage:diskimage_driver" package_id: "bexos.driver.storage.diskimage" placement: BOOTFS }
+packages { label: "//services/vfsd:vfsd_elf" package_id: "bexos.service.vfsd" placement: BOOTFS }
+packages { label: "//services/teed:teed_elf" package_id: "bexos.service.teed" placement: BOOTFS }
+packages { label: "//services/debugd:debugd_elf" package_id: "bexos.driver.debugd" placement: BOOTFS }
+packages { label: "//services/traced:traced_elf" package_id: "bexos.service.traced" placement: BOOTFS }
+packages { label: "//services/updated:updated_elf" package_id: "bexos.service.updated" placement: BOOTFS }
+packages { label: "//services/trustd:trustd_elf" package_id: "bexos.service.trustd" placement: BOOTFS }
+packages { label: "//services/powerd:powerd_elf" package_id: "bexos.service.powerd" placement: BOOTFS }
+packages { label: "//services/usersd:usersd_elf" package_id: "bexos.service.usersd" placement: BOOTFS }
+packages { label: "//services/keychaind:keychaind_elf" package_id: "bexos.service.keychaind" placement: BOOTFS }
+packages { label: "//services/appd:appd_elf" package_id: "bexos.platform.appd" placement: BOOTFS }
+packages { label: "//services/storage_verify:storage_verify" package_id: "bexos.platform.storage_verify" placement: SYSTEM_IMAGE }
+packages { label: "//lib/crypto:crypto_archive" package_id: "bexos.lib.crypto" placement: SYSTEM_IMAGE }
+packages { label: "//lib/net:net_archive" package_id: "bexos.lib.net" placement: SYSTEM_IMAGE }
+packages { label: "//lib/tee_driver_trusty:tee_driver_trusty_archive" package_id: "bexos.lib.tee_driver.trusty" placement: SYSTEM_IMAGE }
+packages { label: "//lib/tee_driver_software:tee_driver_software_archive" package_id: "bexos.lib.tee_driver.software" placement: SYSTEM_IMAGE }
+packages { label: "//services/netstack:netstackd_archive" package_id: "bexos.service.netstackd" placement: SYSTEM_IMAGE }
+packages { label: "//services/timed:timed_archive" package_id: "bexos.service.timed" placement: SYSTEM_IMAGE }
+packages { label: "//services/jobd:jobd_archive" package_id: "bexos.service.jobd" placement: SYSTEM_IMAGE }
+
+packages { label: "//services/wasm_runner:wasm_runner_archive" package_id: "bexos.platform.wasm_runner" placement: SYSTEM_IMAGE }
+
+packages { label: "//apps/brush_shell:brush_shell" package_id: "bexos.app.brush_shell" placement: SYSTEM_IMAGE }
+
+packages { label: "//services/prefsd:prefsd_archive" package_id: "bexos.service.prefsd" placement: SYSTEM_IMAGE }

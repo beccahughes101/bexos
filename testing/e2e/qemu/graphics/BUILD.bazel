@@ -1,0 +1,238 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/platforms:architecture.bzl", "guest_select")
+load("//testing/e2e/qemu:architecture_test.bzl", "architecture_test")
+package(default_visibility = ["//visibility:public"])
+
+TRANSPLANT_ARCHIVE_ENV = {
+    "BOOT_UI_GPU_REPLACEMENT_ARCHIVE": "$(rootpath //drivers/d1/display/virtio/gpu:replacement_archive)",
+    "BOOT_UI_GPU_REJECT_ARCHIVE": "$(rootpath :gpu_reject_archive)",
+    "BOOT_UI_SCENED_REPLACEMENT_ARCHIVE": "$(rootpath //services/scened:replacement_archive)",
+    "BOOT_UI_SCENED_REJECT_ARCHIVE": "$(rootpath :scened_reject_archive)",
+    "BOOT_UI_SPLASH_REPLACEMENT_ARCHIVE": "$(rootpath //services/splashd:replacement_archive)",
+    "BOOT_UI_PCI_REPLACEMENT_ARCHIVE": "$(rootpath //drivers/d1/bus/generic/pci:replacement_archive)",
+    "BOOT_UI_INPUT_REPLACEMENT_ARCHIVE": "$(rootpath //drivers/d1/input/virtio:replacement_archive)",
+    "BOOT_UI_INPUT_FIXTURE_REPLACEMENT_ARCHIVE": "$(rootpath //testing/e2e/qemu/graphics/input_fixture:replacement_archive)",
+}
+
+TRANSPLANT_ARCHIVE_DATA = [
+    ":gpu_reject_archive",
+    ":scened_reject_archive",
+    "//drivers/d1/bus/generic/pci:replacement_archive",
+    "//drivers/d1/display/virtio/gpu:replacement_archive",
+    "//drivers/d1/input/virtio:replacement_archive",
+    "//services/scened:replacement_archive",
+    "//services/splashd:replacement_archive",
+    "//testing/e2e/qemu/graphics/input_fixture:replacement_archive",
+]
+
+sh_test(
+    name = "boot_ui_test",
+    srcs = ["test.sh"],
+    env = guest_select(dict({
+        "BOOT_UI_PROBE": "$(rootpath :transplant_probe)",
+        "BOOT_UI_SCRIPT": "$(rootpath boot_ui_test.py)",
+        "BOOT_UI_BOOTFS": "$(rootpath //device/virtual/qemu/workstation:bootfs.emulated.img)",
+        "BOOT_UI_HANDOFF": "$(rootpath //device/virtual/qemu/workstation:boot_handoff.emulated.bin)",
+        "BOOT_UI_EVIDENCE": "$(rootpath //device/virtual/qemu/workstation:boot_evidence.emulated.bin)",
+        "BOOT_UI_DISK": "$(rootpath //device/virtual/qemu/workstation:qemu_nvme_development_gpt.img)",
+        "BOOT_UI_ARCH": "aarch64",
+        "BOOT_UI_KERNEL": "$(rootpath //kernel:kernel)",
+    }.items() + TRANSPLANT_ARCHIVE_ENV.items()), dict({
+        "BOOT_UI_PROBE": "$(rootpath :transplant_probe)",
+        "BOOT_UI_SCRIPT": "$(rootpath boot_ui_test.py)",
+        "BOOT_UI_BOOTFS": "$(rootpath //device/virtual/qemu/workstation:bootfs.emulated.img)",
+        "BOOT_UI_HANDOFF": "$(rootpath //device/virtual/qemu/workstation:boot_handoff.emulated.bin)",
+        "BOOT_UI_EVIDENCE": "$(rootpath //device/virtual/qemu/workstation:boot_evidence.emulated.bin)",
+        "BOOT_UI_DISK": "$(rootpath //device/virtual/qemu/workstation:qemu_nvme_development_gpt.img)",
+        "BOOT_UI_ARCH": "x86_64",
+        "BOOT_UI_KERNEL": "$(rootpath //device/virtual/qemu/workstation:x86_64_boot_image)",
+    }.items() + TRANSPLANT_ARCHIVE_ENV.items())),
+    data = [":transplant_probe", "boot_ui_test.py", "//testing/performance/scened:guest.py", "input_hotplug.py", "//device/virtual/qemu/workstation:bootfs.emulated.img", "//device/virtual/qemu/workstation:boot_handoff.emulated.bin", "//device/virtual/qemu/workstation:boot_evidence.emulated.bin", "//device/virtual/qemu/workstation:qemu_nvme_development_gpt.img"] + guest_select(["//kernel:kernel"], ["//device/virtual/qemu/workstation:x86_64_boot_image"]) + TRANSPLANT_ARCHIVE_DATA,
+    tags = ["requires-qemu", "local", "exclusive", "no-sandbox"],
+    timeout = "long",
+)
+architecture_test(scened_standalone = True, name = "boot_ui_aarch64", architecture = "aarch64", test = ":boot_ui_test", tags = ["requires-qemu", "local", "exclusive", "no-sandbox"], timeout = "long")
+architecture_test(scened_standalone = True, name = "boot_ui_x86_64", architecture = "x86_64", test = ":boot_ui_test", tags = ["requires-qemu", "local", "exclusive", "no-sandbox"], timeout = "long")
+
+rust_binary(name = "transplant_probe", srcs = ["transplant_probe.rs"], edition = "2024", deps = ["//host/debug_client"])
+
+rust_binary(name = "dioxus_probe", srcs = ["dioxus_probe.rs"], edition = "2024", deps = ["//host/debug_client"])
+
+sh_test(
+    name = "boot_ui_secure_test",
+    srcs = ["test.sh"],
+    env = dict({
+        "BOOT_UI_PROBE": "$(rootpath :transplant_probe)",
+        "BOOT_UI_SCRIPT": "$(rootpath boot_ui_test.py)",
+        "BOOT_UI_ARCH": "aarch64",
+        "BOOT_UI_KERNEL": "$(rootpath //kernel:kernel_bin)",
+        "BOOT_UI_BOOTFS": "$(rootpath //device/virtual/qemu/workstation:bootfs.img)",
+        "BOOT_UI_HANDOFF": "$(rootpath //device/virtual/qemu/workstation:boot_handoff.bin)",
+        "BOOT_UI_EVIDENCE": "$(rootpath //device/virtual/qemu/workstation:boot_evidence.bin)",
+        "BOOT_UI_DISK": "$(rootpath //device/virtual/qemu/workstation:qemu_nvme_gpt.img)",
+        "BOOT_UI_VBMETA": "$(rootpath //device/virtual/qemu/workstation:vbmeta.img)",
+        "BOOT_UI_FIRMWARE": "$(rootpath //third_party/trusty:bl1.bin)",
+    }.items() + TRANSPLANT_ARCHIVE_ENV.items()),
+    data = [":transplant_probe", "boot_ui_test.py", "//testing/performance/scened:guest.py", "input_hotplug.py", "//kernel:kernel_bin", "//device/virtual/qemu/workstation:bootfs.img", "//device/virtual/qemu/workstation:boot_handoff.bin", "//device/virtual/qemu/workstation:boot_evidence.bin", "//device/virtual/qemu/workstation:qemu_nvme_gpt.img", "//device/virtual/qemu/workstation:vbmeta.img", "//third_party/trusty:bl1.bin", "//third_party/trusty:cached_firmware"] + TRANSPLANT_ARCHIVE_DATA,
+    tags = ["requires-qemu", "local", "exclusive", "no-sandbox"],
+    timeout = "long",
+)
+architecture_test(scened_standalone = True, name = "boot_ui_secure_aarch64", architecture = "aarch64", test = ":boot_ui_secure_test", tags = ["requires-qemu", "local", "exclusive", "no-sandbox"], timeout = "long")
+
+sh_test(
+    name = "dioxus_smoke_ui_test",
+    srcs = ["test.sh"],
+    env = guest_select({
+        "BOOT_UI_DIOXUS": "1",
+        "BOOT_UI_DIOXUS_PROBE": "$(rootpath :dioxus_probe)",
+        "BOOT_UI_SCRIPT": "$(rootpath boot_ui_test.py)",
+        "BOOT_UI_BOOTFS": "$(rootpath //device/virtual/qemu/workstation:bootfs.emulated.img)",
+        "BOOT_UI_HANDOFF": "$(rootpath //device/virtual/qemu/workstation:boot_handoff.emulated.bin)",
+        "BOOT_UI_EVIDENCE": "$(rootpath //device/virtual/qemu/workstation:boot_evidence.emulated.bin)",
+        "BOOT_UI_DISK": "$(rootpath //device/virtual/qemu/workstation:qemu_nvme_development_gpt.img)",
+        "BOOT_UI_ARCH": "aarch64",
+        "BOOT_UI_KERNEL": "$(rootpath //kernel:kernel)",
+    }, {
+        "BOOT_UI_DIOXUS": "1",
+        "BOOT_UI_DIOXUS_PROBE": "$(rootpath :dioxus_probe)",
+        "BOOT_UI_SCRIPT": "$(rootpath boot_ui_test.py)",
+        "BOOT_UI_BOOTFS": "$(rootpath //device/virtual/qemu/workstation:bootfs.emulated.img)",
+        "BOOT_UI_HANDOFF": "$(rootpath //device/virtual/qemu/workstation:boot_handoff.emulated.bin)",
+        "BOOT_UI_EVIDENCE": "$(rootpath //device/virtual/qemu/workstation:boot_evidence.emulated.bin)",
+        "BOOT_UI_DISK": "$(rootpath //device/virtual/qemu/workstation:qemu_nvme_development_gpt.img)",
+        "BOOT_UI_ARCH": "x86_64",
+        "BOOT_UI_KERNEL": "$(rootpath //device/virtual/qemu/workstation:x86_64_boot_image)",
+    }),
+    data = [":dioxus_probe", "boot_ui_test.py", "//testing/performance/scened:guest.py", "input_hotplug.py", "//device/virtual/qemu/workstation:bootfs.emulated.img", "//device/virtual/qemu/workstation:boot_handoff.emulated.bin", "//device/virtual/qemu/workstation:boot_evidence.emulated.bin", "//device/virtual/qemu/workstation:qemu_nvme_development_gpt.img"] + guest_select(["//kernel:kernel"], ["//device/virtual/qemu/workstation:x86_64_boot_image"]),
+    tags = ["requires-qemu", "local", "exclusive", "no-sandbox"],
+    timeout = "long",
+)
+architecture_test(name = "dioxus_smoke_aarch64", architecture = "aarch64", test = ":dioxus_smoke_ui_test", tags = ["requires-qemu", "local", "exclusive", "no-sandbox"], timeout = "long")
+architecture_test(name = "dioxus_smoke_x86_64", architecture = "x86_64", test = ":dioxus_smoke_ui_test", tags = ["requires-qemu", "local", "exclusive", "no-sandbox"], timeout = "long")
+
+test_suite(
+    name = "all_architectures",
+    tests = [":aarch64", ":x86_64"],
+)
+
+test_suite(name = "aarch64", tests = [":boot_ui_aarch64", ":boot_ui_secure_aarch64", ":boot_ui_1080_aarch64", ":dioxus_smoke_aarch64", ":input_aarch64", ":input_hotplug_transport", "//testing/e2e/qemu/venus_linux:host", "//testing/e2e/qemu/venus_linux:guest_aarch64"])
+test_suite(name = "x86_64", tests = [":boot_ui_x86_64", ":boot_ui_1080_x86_64", ":dioxus_smoke_x86_64", ":input_x86_64", ":input_hotplug_transport"])
+test_suite(name = "x86_64_development", tests = [":x86_64"])
+filegroup(name = "declared_tests", testonly = True, srcs = [":all_architectures"])
+
+sh_test(
+    name = "input_ui_test",
+    srcs = ["test.sh"],
+    env = guest_select(dict({
+        "BOOT_UI_INPUT": "1",
+        "BOOT_UI_PROBE": "$(rootpath :transplant_probe)",
+        "BOOT_UI_SCRIPT": "$(rootpath boot_ui_test.py)",
+        "BOOT_UI_BOOTFS": "$(rootpath //device/virtual/qemu/input_test:bootfs.emulated.img)",
+        "BOOT_UI_HANDOFF": "$(rootpath //device/virtual/qemu/input_test:boot_handoff.emulated.bin)",
+        "BOOT_UI_EVIDENCE": "$(rootpath //device/virtual/qemu/input_test:boot_evidence.emulated.bin)",
+        "BOOT_UI_DISK": "$(rootpath //device/virtual/qemu/input_test:qemu_nvme_development_gpt.img)",
+        "BOOT_UI_ARCH": "aarch64",
+        "BOOT_UI_KERNEL": "$(rootpath //kernel:kernel)",
+    }.items() + TRANSPLANT_ARCHIVE_ENV.items()), dict({
+        "BOOT_UI_INPUT": "1",
+        "BOOT_UI_PROBE": "$(rootpath :transplant_probe)",
+        "BOOT_UI_SCRIPT": "$(rootpath boot_ui_test.py)",
+        "BOOT_UI_BOOTFS": "$(rootpath //device/virtual/qemu/input_test:bootfs.emulated.img)",
+        "BOOT_UI_HANDOFF": "$(rootpath //device/virtual/qemu/input_test:boot_handoff.emulated.bin)",
+        "BOOT_UI_EVIDENCE": "$(rootpath //device/virtual/qemu/input_test:boot_evidence.emulated.bin)",
+        "BOOT_UI_DISK": "$(rootpath //device/virtual/qemu/input_test:qemu_nvme_development_gpt.img)",
+        "BOOT_UI_ARCH": "x86_64",
+        "BOOT_UI_KERNEL": "$(rootpath //device/virtual/qemu/input_test:x86_64_boot_image)",
+    }.items() + TRANSPLANT_ARCHIVE_ENV.items())),
+    data = [":transplant_probe", "boot_ui_test.py", "//testing/performance/scened:guest.py", "input_hotplug.py", "//device/virtual/qemu/input_test:bootfs.emulated.img", "//device/virtual/qemu/input_test:boot_handoff.emulated.bin", "//device/virtual/qemu/input_test:boot_evidence.emulated.bin", "//device/virtual/qemu/input_test:qemu_nvme_development_gpt.img"] + guest_select(["//kernel:kernel"], ["//device/virtual/qemu/input_test:x86_64_boot_image"]) + TRANSPLANT_ARCHIVE_DATA,
+    tags = ["requires-qemu", "local", "exclusive", "no-sandbox"],
+    timeout = "long",
+)
+
+architecture_test(scened_standalone = True, name="input_aarch64",architecture="aarch64",test=":input_ui_test",tags=["requires-qemu","local","exclusive","no-sandbox"],timeout="long")
+architecture_test(scened_standalone = True, name="input_x86_64",architecture="x86_64",test=":input_ui_test",tags=["requires-qemu","local","exclusive","no-sandbox"],timeout="long")
+
+sh_test(
+    name = "boot_ui_1080_test",
+    srcs = ["test.sh"],
+    env = guest_select(dict({
+        "BOOT_UI_WIDTH": "1920",
+        "BOOT_UI_HEIGHT": "1080",
+        "BOOT_UI_PROBE": "$(rootpath :transplant_probe)",
+        "BOOT_UI_SCRIPT": "$(rootpath boot_ui_test.py)",
+        "BOOT_UI_BOOTFS": "$(rootpath //device/virtual/qemu/workstation:bootfs.emulated.img)",
+        "BOOT_UI_HANDOFF": "$(rootpath //device/virtual/qemu/workstation:boot_handoff.emulated.bin)",
+        "BOOT_UI_EVIDENCE": "$(rootpath //device/virtual/qemu/workstation:boot_evidence.emulated.bin)",
+        "BOOT_UI_DISK": "$(rootpath //device/virtual/qemu/workstation:qemu_nvme_development_gpt.img)",
+        "BOOT_UI_ARCH": "aarch64",
+        "BOOT_UI_KERNEL": "$(rootpath //kernel:kernel)",
+    }.items() + TRANSPLANT_ARCHIVE_ENV.items()), dict({
+        "BOOT_UI_WIDTH": "1920",
+        "BOOT_UI_HEIGHT": "1080",
+        "BOOT_UI_PROBE": "$(rootpath :transplant_probe)",
+        "BOOT_UI_SCRIPT": "$(rootpath boot_ui_test.py)",
+        "BOOT_UI_BOOTFS": "$(rootpath //device/virtual/qemu/workstation:bootfs.emulated.img)",
+        "BOOT_UI_HANDOFF": "$(rootpath //device/virtual/qemu/workstation:boot_handoff.emulated.bin)",
+        "BOOT_UI_EVIDENCE": "$(rootpath //device/virtual/qemu/workstation:boot_evidence.emulated.bin)",
+        "BOOT_UI_DISK": "$(rootpath //device/virtual/qemu/workstation:qemu_nvme_development_gpt.img)",
+        "BOOT_UI_ARCH": "x86_64",
+        "BOOT_UI_KERNEL": "$(rootpath //device/virtual/qemu/workstation:x86_64_boot_image)",
+    }.items() + TRANSPLANT_ARCHIVE_ENV.items())),
+    data = [":transplant_probe", "boot_ui_test.py", "//testing/performance/scened:guest.py", "input_hotplug.py", "//device/virtual/qemu/workstation:bootfs.emulated.img", "//device/virtual/qemu/workstation:boot_handoff.emulated.bin", "//device/virtual/qemu/workstation:boot_evidence.emulated.bin", "//device/virtual/qemu/workstation:qemu_nvme_development_gpt.img"] + guest_select(["//kernel:kernel"], ["//device/virtual/qemu/workstation:x86_64_boot_image"]) + TRANSPLANT_ARCHIVE_DATA,
+    tags = ["requires-qemu", "local", "exclusive", "no-sandbox"],
+    timeout = "long",
+)
+
+architecture_test(scened_standalone = True, name="boot_ui_1080_aarch64", architecture="aarch64", test=":boot_ui_1080_test", tags=["requires-qemu", "local", "exclusive", "no-sandbox"], timeout="long")
+architecture_test(scened_standalone = True, name="boot_ui_1080_x86_64", architecture="x86_64", test=":boot_ui_1080_test", tags=["requires-qemu", "local", "exclusive", "no-sandbox"], timeout="long")
+
+exports_files(["input_hotplug.py"])
+
+sh_test(
+    name = "input_hotplug_transport",
+    srcs = ["input_hotplug_test.sh"],
+    data = ["input_hotplug_test.py", "input_hotplug.py"],
+    tags = ["requires-qemu", "local", "exclusive", "no-sandbox"],
+    timeout = "short",
+)
+
+# Use the production manifests and entry paths: candidates must pass package
+# admission before their receiver rejects initialization or streamed state.
+app_archive(name="scened_reject_archive", manifest="//services/scened:package_manifest", entries={"bin/scened":"//testing/e2e/qemu/update:candidate_incompatible"}, compression="zstd")
+app_archive(name="gpu_reject_archive", manifest="//drivers/d1/display/virtio/gpu:package_manifest", entries={"bin/gpu":"//testing/e2e/qemu/update:candidate_reject"}, compression="zstd")
+
+
+sh_test(
+    name = "performance_ui_test",
+    srcs = ["test.sh"],
+    env = guest_select(dict({
+        "BOOT_UI_INPUT": "1",
+        "SCENED_SUSTAINED": "1",
+        "BOOT_UI_PROBE": "$(rootpath :transplant_probe)",
+        "BOOT_UI_SCRIPT": "$(rootpath boot_ui_test.py)",
+        "BOOT_UI_BOOTFS": "$(rootpath //device/virtual/qemu/input_test:bootfs.emulated.img)",
+        "BOOT_UI_HANDOFF": "$(rootpath //device/virtual/qemu/input_test:boot_handoff.emulated.bin)",
+        "BOOT_UI_EVIDENCE": "$(rootpath //device/virtual/qemu/input_test:boot_evidence.emulated.bin)",
+        "BOOT_UI_DISK": "$(rootpath //device/virtual/qemu/input_test:qemu_nvme_development_gpt.img)",
+        "BOOT_UI_ARCH": "aarch64",
+        "BOOT_UI_KERNEL": "$(rootpath //kernel:kernel)",
+    }.items() + TRANSPLANT_ARCHIVE_ENV.items()), dict({
+        "BOOT_UI_INPUT": "1",
+        "SCENED_SUSTAINED": "1",
+        "BOOT_UI_PROBE": "$(rootpath :transplant_probe)",
+        "BOOT_UI_SCRIPT": "$(rootpath boot_ui_test.py)",
+        "BOOT_UI_BOOTFS": "$(rootpath //device/virtual/qemu/input_test:bootfs.emulated.img)",
+        "BOOT_UI_HANDOFF": "$(rootpath //device/virtual/qemu/input_test:boot_handoff.emulated.bin)",
+        "BOOT_UI_EVIDENCE": "$(rootpath //device/virtual/qemu/input_test:boot_evidence.emulated.bin)",
+        "BOOT_UI_DISK": "$(rootpath //device/virtual/qemu/input_test:qemu_nvme_development_gpt.img)",
+        "BOOT_UI_ARCH": "x86_64",
+        "BOOT_UI_KERNEL": "$(rootpath //device/virtual/qemu/input_test:x86_64_boot_image)",
+    }.items() + TRANSPLANT_ARCHIVE_ENV.items())),
+    data = [":transplant_probe", "boot_ui_test.py", "//testing/performance/scened:guest.py", "input_hotplug.py", "//device/virtual/qemu/input_test:bootfs.emulated.img", "//device/virtual/qemu/input_test:boot_handoff.emulated.bin", "//device/virtual/qemu/input_test:boot_evidence.emulated.bin", "//device/virtual/qemu/input_test:qemu_nvme_development_gpt.img"] + guest_select(["//kernel:kernel"], ["//device/virtual/qemu/input_test:x86_64_boot_image"]) + TRANSPLANT_ARCHIVE_DATA,
+    tags = ["requires-qemu", "local", "exclusive", "no-sandbox"],
+    timeout = "eternal",
+)
+
+architecture_test(scened_standalone = True, name="performance_aarch64",architecture="aarch64",test=":performance_ui_test",tags=["requires-qemu","local","exclusive","no-sandbox"],timeout="eternal")
+architecture_test(scened_standalone = True, name="performance_x86_64",architecture="x86_64",test=":performance_ui_test",tags=["requires-qemu","local","exclusive","no-sandbox"],timeout="eternal")

@@ -1,0 +1,4 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+package(default_visibility=["//visibility:public"])
+rust_library(name="cli_utilities",crate_name="bexos_cli_utilities",srcs=glob(["src/**/*.rs"]),edition="2024",deps=["@brush_crates//:regex"])
+rust_test(name="tests",crate=":cli_utilities")

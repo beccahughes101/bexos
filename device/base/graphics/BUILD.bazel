@@ -1,0 +1,6 @@
+load("//build/rules:assembly.bzl", "assembly_input_bundle")
+
+package(default_visibility = ["//visibility:public"])
+
+assembly_input_bundle(name = "graphics_aib", src = "graphics.aib.prototxt")
+alias(name = "graphics", actual = ":graphics_aib_bin")

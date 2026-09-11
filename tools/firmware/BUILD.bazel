@@ -1,0 +1,10 @@
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["archive.py"])
+
+sh_test(
+    name = "archive_tests",
+    srcs = ["test.sh"],
+    data = ["archive.py", "archive_tests.py"],
+    args = ["$(location archive_tests.py)"],
+)

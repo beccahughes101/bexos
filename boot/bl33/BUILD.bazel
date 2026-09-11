@@ -1,0 +1,82 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+load("//build/rules:optimized_artifact.bzl", "optimized_artifact")
+
+package(default_visibility = ["//visibility:public"])
+
+[rust_binary(
+    name = name + "_binary",
+    srcs = ["main.rs", "trusty.rs", "rpmb.rs", "heap.rs"],
+    crate_name = "bexos_bl33_verifier",
+    edition = "2024",
+    crate_features = ["rollback_fixture"] if name == "rollback_provisioner" else [],
+    linker_script = "linker.ld",
+    platform = "//build/platforms:kernel_aarch64",
+    rustc_flags = [
+        "-C",
+        "panic=abort",
+        "-C",
+        "relocation-model=static",
+    ],
+    deps = [
+        "//kernel/core",
+        "//lib/avb",
+        "//lib/boot",
+        "//lib/trusty_boot",
+        "@crates//:sha2",
+    ],
+) for name in ["verifier", "rollback_provisioner"]]
+
+rust_test(
+    name = "heap_tests",
+    srcs = ["heap.rs"],
+    edition = "2024",
+)
+
+# BL33 hashes the complete kernel and BootFS before debugd can start. Optimize
+# its dependency graph too: optimizing only this crate leaves SHA-256's block
+# compression unoptimized after a default `refresh_image` firmware build.
+[optimized_artifact(
+    name = name,
+    src = ":" + name + "_binary",
+) for name in ["verifier", "rollback_provisioner"]]
+
+genrule(
+    name = "verifier_bin",
+    srcs = [":verifier"],
+    outs = ["bl33-verifier.bin"],
+    cmd = "$(location @llvm//tools:llvm-objcopy) -O binary " +
+          "-j .text -j .rodata -j .data $(location :verifier) $@",
+    tools = ["@llvm//tools:llvm-objcopy"],
+)
+
+sh_test(
+    name = "verification_boot_test",
+    size = "small",
+    srcs = ["verification_boot_test.sh"],
+    args = [
+        "$(location :verification_boot_test.py)",
+        "$(location :verifier)",
+        "$(location //kernel:kernel_bin)",
+        "$(location //device/virtual/qemu/workstation:bootfs.img)",
+        "$(location //device/virtual/qemu/workstation:boot_handoff.bin)",
+        "$(location //device/virtual/qemu/workstation:vbmeta.img)",
+    ],
+    data = [
+        "verification_boot_test.py",
+        ":verifier",
+        "//kernel:kernel_bin",
+        "//device/virtual/qemu/workstation:bootfs.img",
+        "//device/virtual/qemu/workstation:boot_handoff.bin",
+        "//device/virtual/qemu/workstation:vbmeta.img",
+    ],
+    tags = ["requires-qemu"],
+)
+
+genrule(
+    name = "rollback_provisioner_bin",
+    srcs = [":rollback_provisioner"],
+    outs = ["bl33-rollback.bin"],
+    cmd = "$(location @llvm//tools:llvm-objcopy) -O binary " +
+          "-j .text -j .rodata -j .data $(location :rollback_provisioner) $@",
+    tools = ["@llvm//tools:llvm-objcopy"],
+)

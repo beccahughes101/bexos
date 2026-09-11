@@ -1,0 +1,53 @@
+library bexos.storage.diskimage;
+
+using bexos.storage.block;
+
+type Status = strict enum : int32 {
+    OK = 0,
+    ERR_INVALID_HANDLE = -1,
+    ERR_ACCESS_DENIED = -2,
+    ERR_NO_MEMORY = -3,
+    ERR_BUFFER_TOO_SMALL = -4,
+    ERR_PEER_CLOSED = -5,
+    ERR_TIMED_OUT = -6,
+    ERR_ALREADY_EXISTS = -7,
+    ERR_INVALID_ARGS = -8,
+};
+
+resource struct BlockDeviceBinding {
+    endpoint client_end:bexos.storage.block.BlockDevice;
+};
+
+@discoverable
+protocol DiskImageManager {
+    1: Attach(resource struct {
+        file_handle handle:CHANNEL;
+        read_only bool;
+    }) -> (resource struct {
+        status Status;
+        block_device BlockDeviceBinding?;
+    });
+
+    2: CreateEncrypted(resource struct {
+        file_handle handle:CHANNEL;
+        key_vmo handle:VMO;
+        image_uuid array<uint8, 16>;
+        virtual_size_bytes uint64;
+    }) -> (resource struct {
+        status Status;
+        block_device BlockDeviceBinding?;
+        image_uuid array<uint8, 16>;
+        virtual_size_bytes uint64;
+    });
+
+    3: OpenEncrypted(resource struct {
+        file_handle handle:CHANNEL;
+        key_vmo handle:VMO;
+        read_only bool;
+    }) -> (resource struct {
+        status Status;
+        block_device BlockDeviceBinding?;
+        image_uuid array<uint8, 16>;
+        virtual_size_bytes uint64;
+    });
+};

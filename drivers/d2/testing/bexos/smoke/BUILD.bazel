@@ -1,0 +1,10 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "wasm_platform_smoke",
+    srcs = ["src/lib.rs"],
+    crate_name = "d2_platform_smoke",
+    edition = "2024",
+)

@@ -1,0 +1,8 @@
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "workflows",
+    srcs = glob(["workflows/*.yml", "workflows/*.yaml"], allow_empty = True),
+)
+
+exports_files(["actions/setup/action.yml"])

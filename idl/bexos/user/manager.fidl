@@ -1,0 +1,105 @@
+library bexos.user.manager;
+
+type UserStatus = strict enum : int32 {
+    OK = 0;
+    NOT_FOUND = -1;
+    ALREADY_EXISTS = -2;
+    INVALID_ARGS = -3;
+    ACCESS_DENIED = -4;
+    STORAGE = -5;
+    LOCKED = -6;
+    BAD_STATE = -7;
+};
+
+struct UserInfo {
+    uid uint64;
+    name string:64;
+    display_name string:128;
+    disabled bool;
+    home_path string:128;
+    unlocked bool;
+};
+
+type UserEventKind = strict enum : uint8 {
+    CREATED = 1;
+    UPDATED = 2;
+    DELETED = 3;
+    UNLOCKED = 4;
+    LOCKED = 5;
+};
+
+protocol UserManager {
+    1: ListUsers() -> (struct {
+        status UserStatus;
+        users vector<UserInfo>:1024;
+    });
+
+    2: GetUser(struct {
+        uid uint64;
+    }) -> (struct {
+        status UserStatus;
+        user UserInfo;
+    });
+
+    3: CreateUser(struct {
+        uid uint64;
+        name string:64;
+        display_name string:128;
+        password string:256;
+    }) -> (struct {
+        status UserStatus;
+    });
+
+    4: UpdateUser(struct {
+        uid uint64;
+        name string:64;
+        display_name string:128;
+        disabled bool;
+        current_password string:256;
+        new_password string:256;
+    }) -> (struct {
+        status UserStatus;
+    });
+
+    5: DeleteUser(struct {
+        uid uint64;
+    }) -> (struct {
+        status UserStatus;
+    });
+
+    6: UnlockUser(struct {
+        uid uint64;
+        password string:256;
+    }) -> (struct {
+        status UserStatus;
+    });
+
+    7: LockUser(struct {
+        uid uint64;
+    }) -> (struct {
+        status UserStatus;
+    });
+
+    8: WatchUserEvents(resource struct {
+        watcher client_end:UserStateWatcher;
+    }) -> (struct {
+        status UserStatus;
+    });
+
+    9: GetHardwareAuthToken(struct {
+        uid uint64;
+    }) -> (struct {
+        status UserStatus;
+        encoded_token vector<uint8>:512;
+        secure_timestamp_ms uint64;
+        expires_at_ms uint64;
+    });
+};
+
+protocol UserStateWatcher {
+    1: OnUserStateChanged(struct {
+        kind UserEventKind;
+        uid uint64;
+        unlocked bool;
+    });
+};

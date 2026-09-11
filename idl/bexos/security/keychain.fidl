@@ -1,0 +1,110 @@
+library bexos.security.keychain;
+
+type KeychainStatus = strict enum : int32 {
+    OK = 0,
+    ERR_NOT_FOUND = -1,
+    ERR_ALREADY_EXISTS = -2,
+    ERR_INVALID_ARGS = -3,
+    ERR_ACCESS_DENIED = -4,
+    ERR_STORAGE = -5,
+    ERR_LOCKED = -6,
+    ERR_UNSUPPORTED = -7,
+};
+
+type KeychainScope = strict enum : uint8 {
+    SYSTEM = 1,
+    USER = 2,
+};
+
+type KeyAlgorithm = strict enum : uint8 {
+    ED25519 = 1,
+    ECDSA_P256 = 2,
+    AES_256_GCM = 3,
+};
+
+type KeyFlags = strict bits : uint16 {
+    REQUIRE_USER_AUTH = 0x0001,
+    EXPORTABLE = 0x0002,
+    HARDWARE_BACKED = 0x0004,
+};
+
+@discoverable
+protocol Keychain {
+    1: StoreSecret(struct {
+        scope KeychainScope;
+        uid uint64;
+        alias string:128;
+        secret vector<uint8>:4096;
+        flags KeyFlags;
+    }) -> (struct {
+        status KeychainStatus;
+    });
+
+    2: GetSecret(struct {
+        scope KeychainScope;
+        uid uint64;
+        alias string:128;
+    }) -> (struct {
+        status KeychainStatus;
+        secret vector<uint8>:4096;
+    });
+
+    3: DeleteSecret(struct {
+        scope KeychainScope;
+        uid uint64;
+        alias string:128;
+    }) -> (struct {
+        status KeychainStatus;
+    });
+
+    4: GenerateKey(struct {
+        scope KeychainScope;
+        uid uint64;
+        alias string:128;
+        algorithm KeyAlgorithm;
+        flags KeyFlags;
+    }) -> (struct {
+        status KeychainStatus;
+        public_key vector<uint8>:512;
+    });
+
+    5: Sign(struct {
+        scope KeychainScope;
+        uid uint64;
+        alias string:128;
+        digest vector<uint8>:64;
+    }) -> (struct {
+        status KeychainStatus;
+        signature vector<uint8>:512;
+    });
+
+    6: AeadEncrypt(resource struct {
+        scope KeychainScope;
+        uid uint64;
+        alias string:128;
+        plaintext handle:VMO;
+        plaintext_len uint64;
+        aad handle:VMO;
+        aad_len uint64;
+    }) -> (resource struct {
+        status KeychainStatus;
+        nonce vector<uint8>:12;
+        ciphertext handle:VMO;
+        ciphertext_len uint64;
+    });
+
+    7: AeadDecrypt(resource struct {
+        scope KeychainScope;
+        uid uint64;
+        alias string:128;
+        nonce vector<uint8>:12;
+        ciphertext handle:VMO;
+        ciphertext_len uint64;
+        aad handle:VMO;
+        aad_len uint64;
+    }) -> (resource struct {
+        status KeychainStatus;
+        plaintext handle:VMO;
+        plaintext_len uint64;
+    });
+};

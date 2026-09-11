@@ -1,0 +1,12 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -19,7 +19,7 @@
+ use wasmtime_environ::error::Error;
+ 
+ cfg_select! {
+-    not(feature = "std") => {
++    any(not(feature = "std"), all(any(target_arch = "aarch64", target_arch = "x86_64"), target_os = "linux")) => {
+         mod nostd;
+         use nostd as imp;
+         mod stackswitch;

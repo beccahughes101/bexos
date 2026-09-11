@@ -1,0 +1,169 @@
+library bexos.hardware.i2cspi;
+
+using bexos.kernel;
+
+type Status = strict enum : int32 {
+    OK = 0;
+    ERR_INVALID_HANDLE = -1;
+    ERR_ACCESS_DENIED = -2;
+    ERR_NO_MEMORY = -3;
+    ERR_BUFFER_TOO_SMALL = -4;
+    ERR_PEER_CLOSED = -5;
+    ERR_TIMED_OUT = -6;
+    ERR_ALREADY_EXISTS = -7;
+    ERR_INVALID_ARGS = -8;
+    ERR_NOT_FOUND = -9;
+    ERR_BAD_STATE = -10;
+    ERR_UNSUPPORTED = -11;
+    ERR_NACK = -20;
+    ERR_ARBITRATION_LOST = -21;
+    ERR_QUEUE_FULL = -22;
+    ERR_TOO_LARGE = -23;
+    ERR_LOCK_EXPIRED = -24;
+    ERR_INJECTED_FAILURE = -25;
+};
+
+type I2cAddressKind = strict enum : uint8 {
+    SEVEN_BIT = 1;
+    TEN_BIT = 2;
+};
+
+type I2cOpKind = strict enum : uint8 {
+    WRITE = 1;
+    READ = 2;
+};
+
+type SpiOpKind = strict enum : uint8 {
+    WRITE = 1;
+    READ = 2;
+    FULL_DUPLEX = 3;
+};
+
+type SpiMode = strict enum : uint8 {
+    MODE0 = 0;
+    MODE1 = 1;
+    MODE2 = 2;
+    MODE3 = 3;
+};
+
+struct I2cDeviceInfo {
+    controller_node_id uint64;
+    peripheral_node_id uint64;
+    address uint16;
+    address_kind I2cAddressKind;
+    max_operations uint32;
+    max_transfer_bytes uint32;
+};
+
+struct SpiDeviceInfo {
+    controller_node_id uint64;
+    peripheral_node_id uint64;
+    chip_select uint32;
+    min_speed_hz uint32;
+    max_speed_hz uint32;
+    mode_mask uint8;
+    max_operations uint32;
+    max_transfer_bytes uint32;
+};
+
+struct I2cTransaction {
+    kind I2cOpKind;
+    bytes vector<uint8>:4096;
+    read_length uint32;
+};
+
+struct I2cReadData {
+    bytes vector<uint8>:4096;
+};
+
+struct I2cTransferCompletion {
+    status Status;
+    reads vector<I2cReadData>:16;
+    operations_completed uint32;
+};
+
+struct SpiTransaction {
+    kind SpiOpKind;
+    write_bytes vector<uint8>:4096;
+    read_length uint32;
+};
+
+struct SpiReadData {
+    bytes vector<uint8>:4096;
+};
+
+struct SpiTransferCompletion {
+    status Status;
+    reads vector<SpiReadData>:16;
+    operations_completed uint32;
+};
+
+@discoverable
+protocol I2cDevice {
+    1: GetInfo() -> (struct {
+        status Status;
+        info I2cDeviceInfo;
+    });
+
+    2: Transfer(struct {
+        operations vector<I2cTransaction>:16;
+        deadline_ms uint64;
+    }) -> (struct {
+        completion I2cTransferCompletion;
+    });
+
+    3: LockBus(struct {
+        lease_ms uint32;
+    }) -> (resource struct {
+        status Status;
+        locked_device handle:CHANNEL;
+        expires_at_ms uint64;
+    });
+};
+
+@discoverable
+protocol SpiDevice {
+    1: GetInfo() -> (struct {
+        status Status;
+        info SpiDeviceInfo;
+    });
+
+    2: Transfer(struct {
+        operations vector<SpiTransaction>:16;
+        speed_hz uint32;
+        mode SpiMode;
+        deadline_ms uint64;
+    }) -> (struct {
+        completion SpiTransferCompletion;
+    });
+
+    3: LockBus(struct {
+        lease_ms uint32;
+    }) -> (resource struct {
+        status Status;
+        locked_device handle:CHANNEL;
+        expires_at_ms uint64;
+    });
+};
+
+protocol DeterministicFixtureControl {
+    1: InjectFailure(struct {
+        peripheral_node_id uint64;
+        status Status;
+        count uint32;
+    }) -> (struct {
+        status Status;
+    });
+
+    2: DelayCompletions(struct {
+        controller_node_id uint64;
+        delay_ms uint32;
+    }) -> (struct {
+        status Status;
+    });
+
+    3: OperationCount() -> (struct {
+        i2c_operations uint64;
+        spi_operations uint64;
+    });
+};

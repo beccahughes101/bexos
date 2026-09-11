@@ -1,0 +1,11 @@
+package_name: "bexos.test.wasm.network_denied"
+name: "WASM network_denied fixture"
+processes {
+ name: "network_denied"
+ runner: "wasm"
+ service: false
+ lifecycle { update_strategy: RESTART }
+ runner_options {
+  [type.googleapis.com/bexos.app.WasmRunnerOptions] { path: "/pkg/bin/network_denied.wasm" }
+ }
+}

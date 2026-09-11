@@ -1,0 +1,119 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "bexfs",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = [
+            "src/main.rs",
+            "src/guest.rs",
+            "src/guest/**/*.rs",
+            "src/guest_block.rs",
+            "src/guest_block/**/*.rs",
+        ],
+    ),
+    crate_name = "bexos_bexfs",
+    edition = "2024",
+    deps = [
+        "//lib/boot",
+        "//lib/migration",
+        "//lib/package_version",
+        "//lib/userspace",
+        "//idl:kernel_fidl_rust",
+        "@d1_crates__aes-gcm-siv-0.12.1//:aes_gcm_siv",
+        "@d1_crates//:rosefs-core",
+        "//idl:block_fidl_rust",
+        "//idl:fs_fidl_rust",
+    ],
+)
+
+rust_library(
+    name = "bexfs_std",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_features = [
+        "guest",
+        "std",
+    ],
+    crate_name = "bexos_bexfs",
+    edition = "2024",
+    deps = [
+        "//lib/boot",
+        "//lib/migration",
+        "//lib/package_version",
+        "//lib/userspace",
+        "//idl:kernel_fidl_rust",
+        "@crates__aes-gcm-siv-0.12.1//:aes_gcm_siv",
+        "@crates//:rosefs-core",
+        "@crates//:tokio",
+        "//idl:block_fidl_rust",
+        "//idl:fs_fidl_rust",
+    ],
+)
+
+std_service_binary(
+    name = "bexfs_driver",
+    srcs = ["src/main.rs"],
+    crate_name = "bexfs_driver",
+    deps = [
+        ":bexfs_std",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "bexfs_async_tests",
+    srcs = ["tests/bexfs_async_tests.rs"],
+    crate_name = "bexfs_async_tests",
+    edition = "2024",
+    deps = [
+        ":bexfs_std",
+        "//lib/userspace",
+    ],
+)
+
+rust_test(
+    name = "bexfs_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "bexfs_tests",
+    edition = "2024",
+    deps = [
+        "//lib/migration",
+        "//lib/package_version",
+        ":bexfs",
+        "@d1_crates//:rosefs-core",
+        "//idl:fs_fidl_rust",
+    ],
+)
+
+app_manifest(name = "package_manifest", src = "package/bexfs_driver.prototxt")
+
+# User volumes depend on files served by the backing BexFS instance. Keep their
+# synchronous block I/O in a separate process to avoid recursive service waits.
+app_manifest(name = "user_package_manifest", src = "package/user_bexfs_driver.prototxt")
+std_service_binary(
+    name = "user_bexfs_driver",
+    srcs = ["src/main.rs"],
+    crate_name = "user_bexfs_driver",
+    deps = [":bexfs_std", "@crates//:tokio"],
+)
+app_archive(
+    name = "user_replacement_archive",
+    manifest = ":user_package_manifest",
+    entries = {"bin/user_bexfs_driver": ":user_bexfs_driver"},
+    compression = "zstd",
+)
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "replacement_elf_replacement",
+    deps = [
+        ":bexfs_std",
+        "@crates//:tokio",
+    ],
+)
+app_archive(name = "replacement_archive", manifest = ":package_manifest", entries = {"bin/bexfs_driver": ":replacement_elf"}, compression = "zstd")

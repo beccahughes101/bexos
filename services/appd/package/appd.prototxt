@@ -1,0 +1,104 @@
+package_name: "bexos.platform.appd"
+name: "appd"
+config_schema {
+ fields { name: "sysui_package" type: CONFIG_STRING max_size: 128 scope: SCOPE_SYSTEM_ONLY default_value { string_value: "bexos.app.sysui" } description: "System UI package; takes effect after reboot." }
+ fields { name: "userui_package" type: CONFIG_STRING max_size: 128 scope: SCOPE_USER_EDITABLE default_value { string_value: "bexos.app.userui" } description: "User desktop package; takes effect after logout and login." }
+}
+processes {
+ name: "appd"
+ runner: "elf"
+ service: true
+ lifecycle { update_strategy: HEART_TRANSPLANT preparation_timeout_ms: 180000 migration_timeout_ms: 5000 }
+ runner_options {
+  [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/appd" }
+ }
+}
+services_exposed {
+ name: "Opener"
+ protocol: "bexos.app.opener.Opener"
+ lifecycle: SINGLETON
+ visibility: PUBLIC
+ capabilities {
+  capability: "Public"
+  method_ordinals: 1
+  method_ordinals: 2
+  method_ordinals: 3
+  method_ordinals: 4
+  method_ordinals: 5
+  method_ordinals: 6
+ }
+}
+services_exposed {
+ name: "VersionManager"
+ protocol: "bexos.app.version_manager.VersionManager"
+ lifecycle: SINGLETON
+ visibility: PUBLIC
+ capabilities {
+  capability: "Public"
+  method_ordinals: 1
+  method_ordinals: 2
+  method_ordinals: 3
+  method_ordinals: 4
+ }
+}
+services_exposed {
+ name: "AppManager"
+ protocol: "bexos.app.manager.AppManager"
+ lifecycle: SINGLETON
+ visibility: PUBLIC
+ capabilities {
+  capability: "Public"
+  method_ordinals: 1
+  method_ordinals: 2
+  method_ordinals: 3
+ }
+}
+services_exposed {
+ name: "WorkerLauncher"
+ protocol: "bexos.app.worker.WorkerLauncher"
+ lifecycle: SINGLETON
+ visibility: PUBLIC
+ bind_permission: "BEXOS_SYSTEM_PRIVILEGED"
+ capabilities {
+  capability: "Public"
+  method_ordinals: 1
+  method_ordinals: 2
+  method_ordinals: 3
+  method_ordinals: 4
+ }
+}
+services_exposed {
+ name: "bexos.hardware.manager.DeviceRegistry"
+ protocol: "DeviceRegistry"
+ lifecycle: SINGLETON
+ visibility: PUBLIC
+ bind_permission: "BEXOS_SYSTEM_PRIVILEGED"
+ capabilities {
+  capability: "Public"
+  method_ordinals: 1
+  method_ordinals: 2
+ }
+ capabilities {
+  capability: "UsbDescendantRegistrar"
+  method_ordinals: 1
+  method_ordinals: 2
+ }
+ capabilities {
+  capability: "I2cDescendantRegistrar"
+  method_ordinals: 1
+  method_ordinals: 2
+ }
+ capabilities {
+  capability: "SpiDescendantRegistrar"
+  method_ordinals: 1
+  method_ordinals: 2
+ }
+}
+
+services_exposed {
+ name: "ServiceDirectory"
+ protocol: "bexos.app.service_directory.ServiceDirectory"
+ lifecycle: SINGLETON
+ visibility: PUBLIC
+ capabilities { capability: "Public" method_ordinals: 1 method_ordinals: 2 method_ordinals: 3 }
+}

@@ -1,0 +1,13 @@
+syntax = "proto3";
+package bexos.tools.qemu;
+
+// Host launch policy, independent of the guest's secure-world configuration.
+message LaunchConfig {
+  enum Display {
+    HEADLESS = 0;
+    WINDOWED = 1;
+  }
+  Display display = 1;
+  // QEMU device model names, appended after the existing boot devices.
+  repeated string devices = 2;
+}

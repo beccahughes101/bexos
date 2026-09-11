@@ -1,0 +1,180 @@
+library bexos.tee;
+
+type TeeStatus = strict enum : int32 {
+    OK = 0,
+    ERR_INVALID_HANDLE = -1,
+    ERR_ACCESS_DENIED = -2,
+    ERR_NO_MEMORY = -3,
+    ERR_BUFFER_TOO_SMALL = -4,
+    ERR_PEER_CLOSED = -5,
+    ERR_TIMED_OUT = -6,
+    ERR_ALREADY_EXISTS = -7,
+    ERR_INVALID_ARGS = -8,
+    ERR_RESOURCE_EXHAUSTED = -9,
+    ERR_NOT_FOUND = -10,
+    ERR_VERIFY_FAILED = -21,
+    ERR_UNAVAILABLE = -95,
+};
+
+type TeeKind = strict enum : uint8 {
+    AMD_PSP_TEE = 2,
+    INTEL_SGX_TDX = 3,
+    AWS_NITRO = 4,
+    SOFTWARE_EMU = 5,
+    ARM_TRUSTY = 6,
+};
+
+type TeeUpdateStatus = strict enum : uint8 {
+    IDLE = 1,
+    STAGED = 2,
+    APPLYING = 3,
+    COMPLETED = 4,
+    FAILED = 5,
+};
+
+type TeeActivationMode = strict enum : uint8 {
+    LIVE_NOW = 1,
+    ON_REBOOT = 2,
+};
+
+type TeeUpdatePhase = strict enum : uint8 {
+    IDLE = 1,
+    VERIFYING = 2,
+    STAGED = 3,
+    LIVE_SWITCH = 4,
+    REBOOT_PENDING = 5,
+    HEALTH_WINDOW = 6,
+    COMPLETED = 7,
+    ROLLED_BACK = 8,
+    FAILED = 9,
+    RECOVERY_REQUIRED = 10,
+};
+
+struct TaState {
+    uuid array<uint8, 16>;
+    version uint32;
+    active_sessions uint32;
+    entry_point_name string:64;
+    storage_bytes_used uint64;
+    package_id string:128;
+    protected bool;
+    package_managed bool;
+};
+
+@discoverable
+protocol TeeManager {
+    1: GetTeeInfo() -> (struct {
+        status TeeStatus;
+        present bool;
+        kind TeeKind;
+        secure_os_version uint32;
+        anti_rollback_version uint32;
+    });
+
+    2: ListTrustedApps() -> (struct {
+        status TeeStatus;
+        apps vector<TaState>:32;
+    });
+
+    3: InstallTrustedApp(resource struct {
+        ta_payload handle:VMO;
+        ta_payload_len uint64;
+    }) -> (struct {
+        status TeeStatus;
+        uuid array<uint8, 16>;
+    });
+
+    4: UninstallTrustedApp(struct {
+        uuid array<uint8, 16>;
+    }) -> (struct {
+        status TeeStatus;
+    });
+
+    5: OpenSession(struct {
+        uuid array<uint8, 16>;
+    }) -> (struct {
+        status TeeStatus;
+        session_id uint64;
+    });
+
+    6: CloseSession(struct {
+        session_id uint64;
+    }) -> (struct {
+        status TeeStatus;
+    });
+
+    7: InvokeCommand(resource struct {
+        session_id uint64;
+        command_id uint32;
+        payload handle:VMO;
+        payload_len uint64;
+    }) -> (resource struct {
+        status TeeStatus;
+        response handle:VMO;
+        response_len uint64;
+    });
+
+    8: UpdateTeeCore(resource struct {
+        generation uint64;
+        target string:128;
+        activation TeeActivationMode;
+        artifact_hash array<uint8, 32>;
+        tee_image handle:VMO;
+        tee_image_len uint64;
+    }) -> (struct {
+        status TeeStatus;
+        new_version uint32;
+        message string:256;
+    });
+
+    9: GetTeeUpdateStatus() -> (struct {
+        status TeeStatus;
+        update_status TeeUpdateStatus;
+        phase TeeUpdatePhase;
+        active_slot string:16;
+        pending_slot string:16;
+        generation uint64;
+        rollback_available bool;
+        reboot_required bool;
+        message string:256;
+    });
+
+    10: OpenSessionByEndpoint(struct {
+        package_id string:128;
+        service_port string:128;
+    }) -> (struct {
+        status TeeStatus;
+        session_id uint64;
+    });
+
+    11: ActivateTrustedAppPackage(resource struct {
+        package_id string:128;
+        provider string:32;
+        uuid array<uint8, 16>;
+        secure_version uint64;
+        archive_payload handle:VMO;
+        archive_payload_len uint64;
+        service_ports vector<string:128>:16;
+        protected bool;
+        uninstallable bool;
+    }) -> (struct {
+        status TeeStatus;
+        message string:256;
+    });
+
+    12: DeactivateTrustedAppPackage(struct {
+        package_id string:128;
+    }) -> (struct {
+        status TeeStatus;
+        message string:256;
+    });
+
+    13: QueryTrustedAppPackage(struct {
+        package_id string:128;
+    }) -> (struct {
+        status TeeStatus;
+        uuid array<uint8, 16>;
+        secure_version uint64;
+        active_sessions uint32;
+    });
+};

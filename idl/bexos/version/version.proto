@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package bexos.version;
+
+message SemVer {
+  uint32 major = 1;
+  uint32 minor = 2;
+  uint32 patch = 3;
+  uint32 build = 4;
+  string prerelease = 5;
+}
+
+enum MultiVersionPolicy {
+  SINGLE_ACTIVE_ONLY = 0;
+  PARALLEL_EXECUTION = 1;
+  SHARED_STORAGE_MULTI = 2;
+}
+
+enum HealthCheckStatus {
+  HEALTHY = 0;
+  PROBATION = 1;
+  CRASH_LOOP = 2;
+}
+
+message PackageVersionMetadata {
+  string package_id = 1;
+  SemVer version = 2;
+  string content_blake3 = 3;
+  MultiVersionPolicy policy = 4;
+  uint64 installed_timestamp = 5;
+  uint32 min_bexos_abi_version = 6;
+}

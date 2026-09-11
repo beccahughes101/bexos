@@ -1,0 +1,241 @@
+diff -ruN virtio-drivers-0.13.0/src/device/net/dev_raw.rs virtio-drivers-0.13.0.patched/src/device/net/dev_raw.rs
+--- virtio-drivers-0.13.0/src/device/net/dev_raw.rs
++++ virtio-drivers-0.13.0.patched/src/device/net/dev_raw.rs
+@@ -2,6 +2,8 @@
+ use super::{MIN_BUFFER_LEN, QUEUE_RECEIVE, QUEUE_TRANSMIT, SUPPORTED_FEATURES};
+ use crate::config::read_config;
+ use crate::hal::Hal;
++#[cfg(feature = "alloc")]
++use alloc::vec::Vec;
+ use crate::queue::VirtQueue;
+ use crate::transport::{InterruptStatus, Transport};
+ use crate::{Error, Result};
+@@ -60,6 +62,61 @@
+             legacy_header: !negotiated_features.contains(Features::VERSION_1)
+                 && !negotiated_features.contains(Features::MRG_RXBUF),
+         })
++    }
++
++    /// Returns an opaque migration snapshot for the raw device.
++    #[cfg(feature = "alloc")]
++    pub fn migration_snapshot(&self) -> Vec<u8> {
++        let mut out = Vec::new();
++        out.extend_from_slice(&(core::mem::size_of::<Self>() as u64).to_le_bytes());
++        let ptr = self as *const Self as *const u8;
++        // SAFETY: We are copying the byte representation of a live driver into
++        // an opaque snapshot. The original object remains owned by the caller.
++        let bytes = unsafe { core::slice::from_raw_parts(ptr, core::mem::size_of::<Self>()) };
++        out.extend_from_slice(bytes);
++        out
++    }
++
++    /// Adopts a raw device from an opaque migration snapshot.
++    ///
++    /// # Safety
++    ///
++    /// The snapshot must come from the same crate version, target, queue size,
++    /// HAL, transport type and preserved address space mappings.
++    #[cfg(feature = "alloc")]
++    pub unsafe fn adopt_migration_snapshot(bytes: &[u8]) -> Result<Self> {
++        if bytes.len() < 8 {
++            return Err(Error::InvalidParam);
++        }
++        let mut size = [0u8; 8];
++        size.copy_from_slice(&bytes[..8]);
++        if u64::from_le_bytes(size) as usize != core::mem::size_of::<Self>()
++            || bytes.len() != 8 + core::mem::size_of::<Self>()
++        {
++            return Err(Error::InvalidParam);
++        }
++        let mut out = core::mem::MaybeUninit::<Self>::uninit();
++        // SAFETY: The caller guarantees the snapshot matches this exact type.
++        unsafe {
++            core::ptr::copy_nonoverlapping(
++                bytes[8..].as_ptr(),
++                out.as_mut_ptr() as *mut u8,
++                core::mem::size_of::<Self>(),
++            );
++        }
++        // SAFETY: The bytes have just initialized the object.
++        let mut this = unsafe { out.assume_init() };
++        this.transport.disarm_migration_drop();
++        this.recv_queue.disarm_migration_drop();
++        this.send_queue.disarm_migration_drop();
++        Ok(this)
++    }
++
++    /// Marks an adopted migration snapshot as the live owner after commit.
++    pub fn activate_migration_owner(&mut self) {
++        self.transport.activate_migration_owner();
++        self.recv_queue.activate_migration_owner();
++        self.send_queue.activate_migration_owner();
+     }
+ 
+     /// Acknowledge interrupt.
+diff -ruN virtio-drivers-0.13.0/src/device/net/mod.rs virtio-drivers-0.13.0.patched/src/device/net/mod.rs
+--- virtio-drivers-0.13.0/src/device/net/mod.rs
++++ virtio-drivers-0.13.0.patched/src/device/net/mod.rs
+@@ -201,5 +201,4 @@
+ const SUPPORTED_FEATURES: Features = Features::MAC
+     .union(Features::STATUS)
+     .union(Features::RING_EVENT_IDX)
+-    .union(Features::RING_INDIRECT_DESC)
+     .union(Features::VERSION_1);
+diff -ruN virtio-drivers-0.13.0/src/hal.rs virtio-drivers-0.13.0.patched/src/hal.rs
+--- virtio-drivers-0.13.0/src/hal.rs
++++ virtio-drivers-0.13.0.patched/src/hal.rs
+@@ -13,6 +13,7 @@
+     paddr: PhysAddr,
+     vaddr: NonNull<u8>,
+     pages: usize,
++    owned: bool,
+     _hal: PhantomData<H>,
+ }
+ 
+@@ -37,6 +38,7 @@
+             paddr,
+             vaddr,
+             pages,
++            owned: true,
+             _hal: PhantomData,
+         })
+     }
+@@ -58,10 +60,23 @@
+             core::ptr::slice_from_raw_parts_mut(self.vaddr(0).as_ptr(), self.pages * PAGE_SIZE);
+         NonNull::new(raw_slice).unwrap()
+     }
++
++    /// Prevents an adopted migration snapshot from freeing source-owned DMA.
++    pub fn disarm_migration_drop(&mut self) {
++        self.owned = false;
++    }
++
++    /// Marks adopted DMA as owned by the post-commit process.
++    pub fn activate_migration_owner(&mut self) {
++        self.owned = true;
++    }
+ }
+ 
+ impl<H: Hal> Drop for Dma<H> {
+     fn drop(&mut self) {
++        if !self.owned {
++            return;
++        }
+         // SAFETY: The memory was previously allocated by `dma_alloc` in `Dma::new`,
+         // not yet deallocated, and we are passing the values from then.
+         let err = unsafe { H::dma_dealloc(self.paddr, self.vaddr, self.pages) };
+diff -ruN virtio-drivers-0.13.0/src/queue.rs virtio-drivers-0.13.0.patched/src/queue.rs
+--- virtio-drivers-0.13.0/src/queue.rs
++++ virtio-drivers-0.13.0.patched/src/queue.rs
+@@ -148,6 +148,16 @@
+         })
+     }
+ 
++    /// Prevents an adopted migration snapshot from freeing source-owned queue DMA.
++    pub fn disarm_migration_drop(&mut self) {
++        self.layout.disarm_migration_drop();
++    }
++
++    /// Marks adopted queue DMA as owned by the post-commit process.
++    pub fn activate_migration_owner(&mut self) {
++        self.layout.activate_migration_owner();
++    }
++
+     /// Add buffers to the virtqueue, return a token.
+     ///
+     /// The buffers must not be empty.
+@@ -692,6 +702,34 @@
+                 device_to_driver_dma,
+                 ..
+             } => device_to_driver_dma.vaddr(0),
++        }
++    }
++
++    fn disarm_migration_drop(&mut self) {
++        match self {
++            Self::Legacy { dma, .. } => dma.disarm_migration_drop(),
++            Self::Modern {
++                driver_to_device_dma,
++                device_to_driver_dma,
++                ..
++            } => {
++                driver_to_device_dma.disarm_migration_drop();
++                device_to_driver_dma.disarm_migration_drop();
++            }
++        }
++    }
++
++    fn activate_migration_owner(&mut self) {
++        match self {
++            Self::Legacy { dma, .. } => dma.activate_migration_owner(),
++            Self::Modern {
++                driver_to_device_dma,
++                device_to_driver_dma,
++                ..
++            } => {
++                driver_to_device_dma.activate_migration_owner();
++                device_to_driver_dma.activate_migration_owner();
++            }
+         }
+     }
+ }
+diff -ruN virtio-drivers-0.13.0/src/transport/mod.rs virtio-drivers-0.13.0.patched/src/transport/mod.rs
+--- virtio-drivers-0.13.0/src/transport/mod.rs
++++ virtio-drivers-0.13.0.patched/src/transport/mod.rs
+@@ -71,6 +71,12 @@
+     /// Returns true on success.
+     fn ack_interrupt(&mut self) -> InterruptStatus;
+ 
++    /// Prevents an adopted migration snapshot from resetting source-owned hardware.
++    fn disarm_migration_drop(&mut self) {}
++
++    /// Marks adopted transport state as owned by the post-commit process.
++    fn activate_migration_owner(&mut self) {}
++
+     /// Begins initializing the device.
+     ///
+     /// Ref: virtio 3.1.1 Device Initialization
+diff -ruN virtio-drivers-0.13.0/src/transport/pci.rs virtio-drivers-0.13.0.patched/src/transport/pci.rs
+--- virtio-drivers-0.13.0/src/transport/pci.rs
++++ virtio-drivers-0.13.0.patched/src/transport/pci.rs
+@@ -95,6 +95,7 @@
+     isr_status: UniqueMmioPointer<'static, ReadOnly<u8>>,
+     /// The VirtIO device-specific configuration within some BAR.
+     config_space: Option<UniqueMmioPointer<'static, [u32]>>,
++    reset_on_drop: bool,
+ }
+ 
+ impl PciTransport {
+@@ -215,6 +216,7 @@
+             notify_off_multiplier,
+             isr_status,
+             config_space,
++            reset_on_drop: true,
+         })
+     }
+ }
+@@ -304,6 +306,14 @@
+         InterruptStatus::from_bits_retain(isr_status.into())
+     }
+ 
++    fn disarm_migration_drop(&mut self) {
++        self.reset_on_drop = false;
++    }
++
++    fn activate_migration_owner(&mut self) {
++        self.reset_on_drop = true;
++    }
++
+     fn read_config_generation(&self) -> u32 {
+         field_shared!(self.common_cfg, config_generation)
+             .read()
+@@ -378,6 +388,9 @@
+ 
+ impl Drop for PciTransport {
+     fn drop(&mut self) {
++        if !self.reset_on_drop {
++            return;
++        }
+         // Reset the device when the transport is dropped.
+         self.set_status(DeviceStatus::empty());
+         while self.get_status() != DeviceStatus::empty() {}

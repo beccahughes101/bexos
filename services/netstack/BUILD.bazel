@@ -1,0 +1,87 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/platforms:architecture.bzl", "guest_select")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "netstackd",
+    rustc_flags = guest_select([], ["--cfg=bexos_arch_x86_64"]),
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_name = "bexos_netstackd",
+    edition = "2024",
+    deps = [
+        "//idl:ethernet_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//idl:net_fidl_rust",
+        "//lib/migration",
+        "//lib/trace",
+        "//lib/userspace",
+        "@crates//:smoltcp",
+        "@crates//:tokio",
+    ],
+)
+
+std_service_binary(
+    name = "netstackd_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "netstackd_elf",
+    deps = [
+        ":netstackd",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "netstackd_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "netstackd_tests",
+    edition = "2024",
+    deps = [
+        ":netstackd",
+        "//idl:ethernet_fidl_rust",
+        "//idl:net_fidl_rust",
+        "//lib/migration",
+        "//lib/trace",
+        "//lib/userspace",
+    ],
+)
+
+rust_test(
+    name = "internal_tests",
+    crate = ":netstackd",
+)
+
+alias(
+    name = "netstack_tests",
+    actual = ":netstackd_tests",
+)
+
+app_manifest(name = "package_manifest", src = "package/netstack.prototxt")
+
+app_archive(
+    name = "netstackd_archive",
+    manifest = ":package_manifest",
+    entries = {
+        "bin/netstackd": ":netstackd_elf",
+    },
+    compression = "none",
+)
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "netstackd_replacement_elf",
+    deps = [
+        ":netstackd",
+        "@crates//:tokio",
+    ],
+)
+
+app_archive(
+    name = "replacement_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/netstackd": ":replacement_elf"},
+    compression = "zstd",
+)

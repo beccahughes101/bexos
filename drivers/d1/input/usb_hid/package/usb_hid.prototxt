@@ -1,0 +1,22 @@
+package_name: "bexos.driver.input.usb_hid"
+name: "usb_hid"
+library_dependencies { package_name: "bexos.lib.crypto" mount_alias: "bexos.lib.crypto" abi_version: 1 }
+library_dependencies { package_name: "bexos.lib.net" mount_alias: "bexos.lib.net" abi_version: 1 }
+driver_info { name: "usb_boot_hid_d1_driver" package_id: "bexos.driver.input.usb_hid" version: "1.0.0" }
+bind_rules { priority: 30 condition { bus: BUS_USB property { key: "usb.class" value: 0x03 } property { key: "usb.subclass" value: 0x01 } property { key: "usb.protocol" value: 0x01 } } }
+bind_rules { priority: 30 condition { bus: BUS_USB property { key: "usb.class" value: 0x03 } property { key: "usb.subclass" value: 0x01 } property { key: "usb.protocol" value: 0x02 } } }
+processes {
+ name: "usb_hid"
+ runner: "elf"
+ lifecycle { update_strategy: HEART_TRANSPLANT preparation_timeout_ms: 30000 }
+ service: true
+ wave: 3
+ runner_options { [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/usb_hid" } }
+}
+services_exposed {
+ name: "bexos.hardware.input.InputDevice"
+ protocol: "InputDevice"
+ lifecycle: MULTIPLE_INSTANCE
+ visibility: PRIVATE
+ capabilities { capability: "Public" method_ordinals: 1 }
+}

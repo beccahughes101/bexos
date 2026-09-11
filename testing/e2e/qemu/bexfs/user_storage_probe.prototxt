@@ -1,0 +1,11 @@
+package_name: "com.example.user_storage_probe"
+name: "user_storage_probe"
+processes {
+ name: "user_storage_probe"
+ runner: "elf"
+ service: true
+ lifecycle { update_strategy: RESTART }
+ runner_options {
+  [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/user_storage_probe" }
+ }
+}

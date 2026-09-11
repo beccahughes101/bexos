@@ -1,0 +1,42 @@
+controllers {
+  node_id: 4096
+  name: "d1-i2c0"
+  bus: I2C
+  properties { key: "d1.controller" value: 1 }
+  properties { key: "i2c.bus" value: 0 }
+  peripherals {
+    node_id: 4097
+    name: "temp-sensor"
+    properties { key: "compatible" value: 1 }
+    properties { key: "i2c.address" value: 72 }
+    i2c { address: 72 ten_bit: false }
+  }
+  peripherals {
+    node_id: 4098
+    name: "secure-eeprom"
+    properties { key: "compatible" value: 2 }
+    properties { key: "i2c.address" value: 768 }
+    i2c { address: 768 ten_bit: true }
+  }
+}
+controllers {
+  node_id: 8192
+  name: "d1-spi0"
+  bus: SPI
+  properties { key: "d1.controller" value: 2 }
+  properties { key: "spi.bus" value: 0 }
+  peripherals {
+    node_id: 8193
+    name: "display-shift"
+    properties { key: "compatible" value: 3 }
+    properties { key: "spi.chip_select" value: 0 }
+    spi { chip_select: 0 min_speed_hz: 100000 max_speed_hz: 24000000 mode_mask: 5 }
+  }
+  peripherals {
+    node_id: 8194
+    name: "adc"
+    properties { key: "compatible" value: 4 }
+    properties { key: "spi.chip_select" value: 1 }
+    spi { chip_select: 1 min_speed_hz: 50000 max_speed_hz: 12000000 mode_mask: 3 }
+  }
+}

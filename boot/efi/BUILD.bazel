@@ -1,0 +1,258 @@
+load(":monitor.bzl", "authenticated_monitor")
+load(":trusty.bzl", "trusty_execution")
+load(":bundle.bzl", "integrated_firmware_bundle")
+
+package(default_visibility = ["//visibility:public"])
+
+integrated_firmware_bundle()
+
+sh_test(
+    name = "bundle_tests",
+    srcs = ["test.sh"],
+    args = ["$(location bundle_tests.py)"],
+    data = ["bundle_tests.py", "bundle.py"],
+)
+
+sh_test(
+    name = "cached_replacement_authentication_test",
+    srcs = ["replacement_artifacts_test.sh"],
+    args = ["$(location //tools/image:vbmeta)"] + ["$(location :cached/" + name + ")" for name in [
+        "boot_root.avbpubkey", "trusty.replacement.fw", "hypervisor.replacement.fw",
+        "hypervisor.fault.fw", "hypervisor.hang.fw", "hypervisor.successor.fw", "hypervisor.successor_fault.fw",
+    ]],
+    data = ["//tools/image:vbmeta"] + [":cached/" + name for name in [
+        "boot_root.avbpubkey", "trusty.replacement.fw", "hypervisor.replacement.fw",
+        "hypervisor.fault.fw", "hypervisor.hang.fw", "hypervisor.successor.fw", "hypervisor.successor_fault.fw",
+    ]],
+)
+
+genquery(
+    name = "uncached_product_firmware_dependencies",
+    expression = 'filter("^//(secure/monitor:(external_secure_product|external_nucleus_product|rollback_provisioner|monitor_policy_.*|monitor_successor_fault.*|trusty_recovery[.]fw)|boot/efi:authenticated_(external_secure_product|nucleus_product|rollback_provisioner)_unsigned|third_party/trusty:(trusty_x86_64_firmware|x86_64_(acceptance|replacement)_firmware|built_x86_64_replacement/.*))$", deps(set(//device/virtual/qemu/nongui:virtual_x86_64 //testing/e2e/qemu:x86_64)))',
+    scope = ["//device/virtual/qemu/nongui:virtual_x86_64", "//testing/e2e/qemu:x86_64"],
+)
+sh_test(
+    name = "cached_firmware_boundary_test",
+    srcs = ["cache_boundary_test.sh"],
+    args = ["$(location :uncached_product_firmware_dependencies)"],
+    data = [":uncached_product_firmware_dependencies"],
+)
+
+test_suite(
+    name = "acceptance",
+    tests = [
+        ":secure_boot_test", ":authenticated_monitor_test",
+        ":authenticated_boot_approval_test",
+        ":authenticated_secure_product_test",
+        ":authenticated_external_secure_product_test",
+        ":authenticated_nucleus_product_test",
+        ":authenticated_rollback_rejection_test",
+        ":authenticated_product_rejection_test",
+        ":cached_replacement_authentication_test",
+        ":authenticated_trusty_domain_test", ":authenticated_trusty_acceptance_domain_test",
+        ":authenticated_dual_domain_development_test", ":authenticated_dual_domain_acceptance_test",
+    ],
+)
+
+genrule(
+    name = "product_unsigned",
+    srcs = [":cached/loader.efi"],
+    outs = ["product.unsigned.efi"],
+    tools = ["//third_party/osslsigncode"],
+    cmd = "$(location //third_party/osslsigncode) remove-signature -in $(location :cached/loader.efi) -out $@",
+)
+
+genrule(
+    name = "product_wrong_key",
+    srcs = [":product_unsigned", ":untrusted.pem", ":untrusted.key"],
+    outs = ["product.wrong-key.efi"],
+    tools = ["//third_party/osslsigncode"],
+    cmd = "$(location //third_party/osslsigncode) sign -h sha256 -certs $(location :untrusted.pem) " +
+          "-key $(location :untrusted.key) -in $(location :product_unsigned) -out $@",
+)
+
+PRODUCT_REJECTION_ARTIFACTS = [
+    ":cached/OVMF_CODE.fd", ":cached/OVMF_VARS.fd", ":cached/revoked.fd",
+    ":cached/loader.efi", ":product_unsigned", ":product_wrong_key",
+] + ["//secure/monitor:" + part for part in [
+    "product_payload_kernel", "product_payload_bootfs", "product_payload.vbmeta",
+    "product_payload_wrong_policy.vbmeta", "product_payload_zero_generation.vbmeta",
+]] + ["//secure/monitor:product_payload_invalid_" + variant + suffix
+      for variant in ["architecture", "handoff", "bootfs", "evidence", "update"]
+      for suffix in [".elf", ".vbmeta"]]
+
+sh_test(
+    name = "authenticated_product_rejection_test",
+    srcs = ["test.sh"],
+    args = ["$(location product_rejection_test.py)"] + ["$(location " + artifact + ")" for artifact in PRODUCT_REJECTION_ARTIFACTS],
+    data = PRODUCT_REJECTION_ARTIFACTS + ["product_rejection_test.py", "payload_rejection.py", "test.py"],
+    tags = ["requires-qemu", "exclusive", "local", "no-sandbox"],
+    timeout = "long",
+)
+
+authenticated_monitor(
+    name = "authenticated_rollback_provisioner",
+    monitor = "//secure/monitor:rollback_provisioner",
+    domain_banks = [(0x20000000, 0x10000000)],
+)
+
+ROLLBACK_ARTIFACTS = [
+    ":cached/OVMF_CODE.fd", ":cached/OVMF_VARS.fd",
+    ":cached/rollback_loader.efi", ":cached/loader.efi",
+    ":cached/rpmb_dev", ":cached/RPMB_DATA",
+    ":authenticated_external_secure_product_disk",
+    "//secure/monitor:product_payload_kernel", "//secure/monitor:product_payload_bootfs",
+    "//secure/monitor:product_payload.vbmeta",
+]
+sh_test(
+    name = "authenticated_rollback_rejection_test",
+    srcs = ["test.sh"],
+    args = ["$(location rollback_test.py)"] + ["$(location " + artifact + ")" for artifact in ROLLBACK_ARTIFACTS],
+    data = ROLLBACK_ARTIFACTS + ["rollback_test.py", "fixture_trusty_floor.prototxt", "fixture_monitor_floor.prototxt", "fixture_trusty_journal.prototxt", "fixture_monitor_journal.prototxt", "test.py", "qmp.py", "trusty_domain_test.py", "payload_rejection.py", "//third_party/trusty:x86_devices.py"],
+    tags = ["requires-qemu", "exclusive", "local", "no-sandbox"],
+    timeout = "moderate",
+)
+
+genrule(
+    name = "probe_unsigned",
+    srcs = ["probe.c", "efi.h"],
+    outs = ["probe.unsigned.efi"],
+    tools = ["@llvm//tools:clang", "@llvm//tools:lld-link"],
+    cmd = "$(location @llvm//tools:clang) --target=x86_64-pc-windows-msvc -ffreestanding -fno-stack-protector -mno-red-zone -Os -c $(location probe.c) -o $(@D)/probe.obj && " +
+          "$(location @llvm//tools:lld-link) /subsystem:efi_application /entry:efi_main /nodefaultlib /machine:x64 /out:$@ $(@D)/probe.obj",
+)
+
+# Disposable development credentials. The existing AVB development key is
+# public test material; no production enrollment is performed by these rules.
+genrule(
+    name = "development_certificate",
+    srcs = ["//device/virtual/qemu/base:keys/avb_dev_rsa_private.pem"],
+    outs = ["development.pem", "development.der"],
+    cmd = "openssl req -new -x509 -sha256 -days 3650 -set_serial 1 -subj '/CN=BexOS QEMU EFI development/' " +
+          "-key $(location //device/virtual/qemu/base:keys/avb_dev_rsa_private.pem) -out $(location development.pem) && " +
+          "openssl x509 -in $(location development.pem) -outform DER -out $(location development.der)",
+)
+
+genrule(
+    name = "probe_signed",
+    srcs = [":probe_unsigned", ":development.pem", "//device/virtual/qemu/base:keys/avb_dev_rsa_private.pem"],
+    outs = ["probe.signed.efi"],
+    tools = ["//third_party/osslsigncode"],
+    cmd = "$(location //third_party/osslsigncode) sign -h sha256 -certs $(location :development.pem) " +
+          "-key $(location //device/virtual/qemu/base:keys/avb_dev_rsa_private.pem) -in $(location :probe_unsigned) -out $@",
+)
+
+genrule(
+    name = "untrusted_certificate",
+    outs = ["untrusted.pem", "untrusted.key"],
+    cmd = "openssl req -new -x509 -newkey rsa:2048 -nodes -sha256 -days 3650 -set_serial 2 " +
+          "-subj '/CN=BexOS deliberately untrusted EFI test/' " +
+          "-keyout $(location untrusted.key) -out $(location untrusted.pem)",
+)
+
+genrule(
+    name = "probe_wrong_key",
+    srcs = [":probe_unsigned", ":untrusted.pem", ":untrusted.key"],
+    outs = ["probe.wrong-key.efi"],
+    tools = ["//third_party/osslsigncode"],
+    cmd = "$(location //third_party/osslsigncode) sign -h sha256 -certs $(location :untrusted.pem) " +
+          "-key $(location :untrusted.key) -in $(location :probe_unsigned) -out $@",
+)
+
+genrule(
+    name = "enrolled_vars",
+    srcs = ["//third_party/ovmf:OVMF_VARS.fd", ":development.der"],
+    outs = ["enrolled.fd", "revoked.fd"],
+    tools = ["//third_party/ovmf:enroll"],
+    cmd = "$(location //third_party/ovmf:enroll) $(location //third_party/ovmf:OVMF_VARS.fd) $(location :development.der) $(location enrolled.fd) && " +
+          "$(location //third_party/ovmf:enroll) $(location //third_party/ovmf:OVMF_VARS.fd) $(location :development.der) $(location revoked.fd) --revoke",
+)
+
+sh_test(
+    name = "secure_boot_test",
+    srcs = ["test.sh"],
+    args = [
+        "$(location test.py)", "$(location //third_party/ovmf:OVMF_CODE.fd)",
+        "$(location :enrolled.fd)", "$(location :revoked.fd)",
+        "$(location :probe_signed)", "$(location :probe_unsigned)",
+        "$(location //third_party/ovmf:OVMF_VARS.fd)",
+        "$(location :probe_wrong_key)",
+    ],
+    data = ["test.py", "//third_party/ovmf:OVMF_CODE.fd", "//third_party/ovmf:OVMF_VARS.fd", ":enrolled.fd", ":revoked.fd", ":probe_signed", ":probe_unsigned", ":probe_wrong_key"],
+    tags = ["requires-qemu", "exclusive", "local", "no-sandbox"],
+    timeout = "moderate",
+)
+
+authenticated_monitor(name = "authenticated_monitor_probe", monitor = "//secure/monitor:svm_probe")
+
+sh_test(
+    name = "embed_monitor_tests",
+    srcs = ["test.sh"],
+    args = ["$(location embed_monitor_tests.py)", "$(location //boot/multiboot:pack.py)"],
+    data = ["embed_monitor_tests.py", "embed_monitor.py", "//boot/multiboot:pack.py"],
+)
+
+sh_test(
+    name = "authenticated_monitor_test",
+    srcs = ["test.sh"],
+    args = ["$(location monitor_test.py)", "$(location //third_party/ovmf:OVMF_CODE.fd)", "$(location :enrolled.fd)", "$(location :authenticated_monitor_probe)", "$(location //third_party/ovmf:OVMF_VARS.fd)"],
+    data = ["monitor_test.py", "test.py", "//third_party/ovmf:OVMF_CODE.fd", "//third_party/ovmf:OVMF_VARS.fd", ":enrolled.fd", ":authenticated_monitor_probe"],
+    tags = ["requires-qemu", "exclusive", "local", "no-sandbox"],
+    timeout = "moderate",
+)
+
+trusty_execution(
+    name = "authenticated_trusty_domain",
+    variant = "x86_64",
+    monitor = "//secure/monitor:trusty_domain",
+)
+trusty_execution(
+    name = "authenticated_boot_approval",
+    variant = "x86_64",
+    monitor = "//secure/monitor:trusty_authenticated_approval",
+    boot_approval = True,
+)
+trusty_execution(
+    name = "authenticated_secure_product",
+    variant = "x86_64",
+    monitor = "//secure/monitor:secure_product",
+    secure_product = True,
+)
+
+trusty_execution(
+    name = "authenticated_external_secure_product",
+    variant = "x86_64",
+    monitor = "//secure/monitor:external_secure_product",
+    secure_product = True,
+    external_payload = True,
+)
+trusty_execution(
+    name = "authenticated_nucleus_product",
+    variant = "x86_64",
+    monitor = "//secure/monitor:external_nucleus_product",
+    secure_product = True,
+    external_payload = True,
+    resident_nucleus = True,
+)
+trusty_execution(
+    name = "authenticated_trusty_acceptance_domain",
+    variant = "x86_64_acceptance",
+    monitor = "//secure/monitor:trusty_acceptance_domain",
+    acceptance = True,
+)
+
+# Authenticated container for two real guest domains. BexOS still consumes
+# development evidence; this is not the verified product/rollback approval gate.
+trusty_execution(
+    name = "authenticated_dual_domain_development",
+    variant = "x86_64",
+    monitor = "//secure/monitor:dual_domain_development",
+    normal_world = True,
+)
+trusty_execution(
+    name = "authenticated_dual_domain_acceptance",
+    variant = "x86_64_acceptance",
+    monitor = "//secure/monitor:dual_domain_acceptance",
+    normal_world = True,
+    acceptance = True,
+)

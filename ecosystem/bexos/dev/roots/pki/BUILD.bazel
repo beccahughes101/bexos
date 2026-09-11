@@ -1,0 +1,6 @@
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "roots",
+    srcs = glob(["*.der", "*.pem", "*.crt"], allow_empty = True),
+)

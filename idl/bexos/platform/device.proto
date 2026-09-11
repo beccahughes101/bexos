@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package bexos.platform;
+
+import "idl/bexos/platform/config.proto";
+
+message Device {
+  string device_name = 1;
+  Architecture architecture = 2;
+  HardwareFeatures hardware_features = 3;
+  MemoryLayout memory_layout = 4;
+  BootConfiguration boot_configuration = 5;
+  CpuTopology cpu_topology = 6;
+}
+
+message HardwareFeatures {
+  bool has_acpi = 1;
+  bool has_pci = 2;
+  SecureWorld secure_world = 3;
+}
+
+enum SecureWorld {
+  SECURE_WORLD_UNSPECIFIED = 0;
+  // Keep the old OPTEE_EMULATED wire value: it describes the generic
+  // software implementation, not a particular secure OS.
+  EMULATED = 1;
+  reserved 2;
+  reserved "OPTEE_EMULATED", "OPTEE_HARDWARE";
+  NONE = 3;
+  TRUSTY = 4;
+}
+
+message MemoryLayout {
+  uint64 kernel_base_phys = 1;
+  uint32 bootfs_reserved_mb = 2;
+}
+
+message BootConfiguration {
+  string default_cmdline = 1;
+}
+
+message CpuTopology {
+  uint32 max_cpus = 1;
+}
+
+message BootfsManifest {
+  repeated EarlyDriver early_drivers = 1;
+  repeated PackageRef core_bootstrap = 2;
+}
+
+message EarlyDriver {
+  string package = 1;
+  uint32 wave = 2;
+}
+
+message SystemImageManifest {
+  repeated string base_packages = 1;
+  repeated PackageRef autoinstall_packages = 2;
+}
+
+message PackageRef {
+  string package = 1;
+}

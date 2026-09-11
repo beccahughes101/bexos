@@ -1,0 +1,33 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "tuf",
+    srcs = ["src/lib.rs"],
+    crate_name = "bexos_tuf",
+    edition = "2024",
+    deps = [
+        "//lib/update:update",
+        "@crates//:blake3",
+        "@crates//:ed25519-dalek",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+    ],
+)
+
+rust_test(
+    name = "tuf_tests",
+    srcs = ["tests/tuf_tests.rs"],
+    crate_name = "tuf_tests",
+    edition = "2024",
+    deps = [
+        ":tuf",
+        "//lib/update:update",
+        "@crates//:blake3",
+        "@crates//:ed25519-dalek",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+    ],
+)

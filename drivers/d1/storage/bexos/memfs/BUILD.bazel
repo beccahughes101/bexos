@@ -1,0 +1,67 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "memfs",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs", "src/guest.rs", "src/guest/**/*.rs"]),
+    crate_name = "bexos_memfs",
+    edition = "2024",
+    deps = ["//lib/migration"],
+)
+
+rust_library(
+    name = "memfs_std",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_features = ["guest"],
+    crate_name = "bexos_memfs",
+    edition = "2024",
+    deps = [
+        "//idl:fs_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//idl:memfs_fidl_rust",
+        "//lib/boot",
+        "//lib/migration",
+        "//lib/userspace",
+        "@crates//:tokio",
+    ],
+)
+
+std_service_binary(
+    name = "memfs_driver",
+    srcs = ["src/main.rs"],
+    crate_name = "memfs_driver",
+    deps = [":memfs_std", "@crates//:tokio"],
+)
+
+rust_test(
+    name = "memfs_tests",
+    srcs = glob(["tests/**/*_tests.rs"]),
+    crate_name = "memfs_tests",
+    edition = "2024",
+    deps = [
+        ":memfs",
+        "//lib/migration",
+    ],
+)
+
+rust_test(
+    name = "memfs_async_tests",
+    srcs = ["tests/memfs_async_tests.rs"],
+    crate_name = "memfs_async_tests",
+    edition = "2024",
+    deps = [":memfs_std"],
+)
+
+app_manifest(name = "package_manifest", src = "package/memfs_driver.prototxt")
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "replacement_elf_replacement",
+    deps = [":memfs_std", "@crates//:tokio"],
+)
+
+app_archive(name = "replacement_archive", manifest = ":package_manifest", entries = {"bin/memfs_driver": ":replacement_elf"}, compression = "zstd")

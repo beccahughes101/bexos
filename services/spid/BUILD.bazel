@@ -1,0 +1,82 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "spid_lib",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_name = "bexos_spid",
+    edition = "2024",
+    compile_data = ["//services/i2cd:topology_pb"],
+    rustc_env = {"I2C_SPI_TOPOLOGY": "$(execpath //services/i2cd:topology_pb)"},
+    deps = [
+        "//idl:hardware_manager_fidl_rust",
+        "//idl:i2c_spi_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//lib/i2c_spi",
+        "//lib/migration",
+        "//lib/userspace",
+        "//lib/userspace_async",
+        "@crates//:tokio",
+    ],
+)
+
+std_service_binary(
+    name = "spid_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_spid_elf",
+    deps = [
+        ":spid_lib",
+        "@crates//:tokio",
+    ],
+)
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_spid_replacement",
+    deps = [
+        ":spid_lib",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "runtime_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "spid_tests",
+    edition = "2024",
+    compile_data = ["//services/i2cd:topology_pb"],
+    rustc_env = {"I2C_SPI_TOPOLOGY": "$(execpath //services/i2cd:topology_pb)"},
+    deps = [
+        ":spid_lib",
+        "//idl:i2c_spi_fidl_rust",
+        "//lib/i2c_spi",
+        "//lib/migration",
+        "//lib/userspace",
+    ],
+)
+
+app_manifest(name = "package_manifest", src = "package/spid.prototxt")
+
+app_archive(
+    name = "spid",
+    manifest = ":package_manifest",
+    entries = {
+        "bin/spid": ":spid_elf",
+        "config/i2c_spi_topology.pb": "//services/i2cd:topology_pb",
+    },
+    compression = "zstd",
+)
+
+app_archive(
+    name = "replacement_archive",
+    manifest = ":package_manifest",
+    entries = {
+        "bin/spid": ":replacement_elf",
+        "config/i2c_spi_topology.pb": "//services/i2cd:topology_pb",
+    },
+    compression = "zstd",
+)

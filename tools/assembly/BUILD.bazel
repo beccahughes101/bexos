@@ -1,0 +1,27 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "assembly_lib",
+    deps = ["//lib/component_config","//lib/app_manifest"],
+    srcs = ["src/lib.rs"],
+    crate_name = "bexos_assembly",
+    edition = "2024",
+)
+
+rust_binary(
+    name = "bexos_assembly",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_assembly_bin",
+    edition = "2024",
+    deps = [":assembly_lib", "//lib/app_manifest"],
+)
+
+rust_test(
+    name = "assembly_tests",
+    srcs = ["tests/assembly_tests.rs"],
+    crate_name = "assembly_tests",
+    edition = "2024",
+    deps = [":assembly_lib", "//lib/app_manifest"],
+)

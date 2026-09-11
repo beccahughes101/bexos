@@ -1,0 +1,40 @@
+load("//build/rules:optimized_artifact.bzl", "optimized_artifact")
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "std_service_binary", "app_manifest")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+package(default_visibility = ["//visibility:public"])
+# The installed executable needs allocated ELF sections, not the compiler's
+# large static symbol table. Dynamic symbols and unwind data remain available.
+_RUNTIME_LINK_FLAGS = ["-C", "link-arg=--strip-all"]
+rust_library(
+    name = "wasm_runner",
+    crate_name = "bexos_wasm_runner",
+    edition = "2024",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    rustc_flags = select({"//build/platforms:is_bexos_userspace": ["--cfg=bexos_guest"], "//conditions:default": []}),
+    deps = ["//lib/wasm_runtime", "//lib/wasm_abi", "//lib/wasm_embedded", "//lib/dioxus_scene", "//lib/dioxus_render", "//lib/graphics", "//lib/graphics_runtime", "//lib/migration", "//lib/userspace", "//lib/bexos_libc", "//idl:kernel_fidl_rust", "//idl:graphics_fidl_rust", "//idl:fs_fidl_rust", "//idl:net_fidl_rust", "//idl:trust_fidl_rust", "@crates//:wasmtime", "@crates//:sha2", "@crates//:wac-graph"] + select({"//build/platforms:is_bexos_userspace": ["//lib/venus_wgpu"], "//conditions:default": []}),
+)
+std_service_binary(name = "wasm_runner_binary", srcs = ["src/main.rs"], crate_name = "bexos_wasm_runner_elf", deps = [":wasm_runner", "//lib/wasm_runtime"], rustc_flags = _RUNTIME_LINK_FLAGS)
+genrule(name = "runtime_digest", srcs = [":wasm_runner_elf"], outs = ["runtime.sha256"], tools = ["//tools/wasm:digest"], cmd = "$(execpath //tools/wasm:digest) $(location :wasm_runner_elf) $@")
+
+app_manifest(name = "package_manifest", src = "package/wasm_runner.prototxt")
+app_archive(name = "wasm_runner_archive", manifest = ":package_manifest", entries = {"bin/wasm_runner": ":wasm_runner_elf"}, compression = "zstd")
+app_archive(name = "replacement_archive", manifest = ":package_manifest", entries = {"bin/wasm_runner": ":replacement_elf"}, compression = "zstd")
+
+optimized_artifact(name = "wasm_runner_elf", src = ":wasm_runner_binary")
+
+rust_test(
+    name = "wasm_runner_tests",
+    crate = ":wasm_runner",
+    # Core and component execution tests share the runtime's single compiler.
+    args = ["--test-threads=1"],
+    data = ["//apps/dioxus_demo:wasm", "//apps/dioxus_shared:dioxus_component"],
+    rustc_env = {
+        "DIOXUS_DEMO_COMPONENT": "$(rootpath //apps/dioxus_demo:wasm)",
+        "DIOXUS_SHARED_COMPONENT": "$(rootpath //apps/dioxus_shared:dioxus_component)",
+    },
+    deps = ["//services/trustd", "//lib/trust_store:trust_store_bexos_std", "@crates//:ed25519-dalek", "@crates//:wat"],
+)
+
+std_service_binary(name = "replacement_binary", srcs = ["src/main.rs"], crate_name = "bexos_wasm_runner_replacement", deps = [":wasm_runner", "//lib/wasm_runtime"], rustc_flags = ["--cfg=wasm_runner_replacement"] + _RUNTIME_LINK_FLAGS)
+optimized_artifact(name = "replacement_elf", src = ":replacement_binary")

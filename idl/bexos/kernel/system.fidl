@@ -1,0 +1,194 @@
+library bexos.kernel;
+
+/// Privileged capability operations gated strictly to appd and D0/D1 drivers
+protocol SystemPrivileged {
+    /// Create a new isolated process container and address space
+    @permission("BEXOS_SYSTEM_PRIVILEGED")
+    CreateProcess(struct {
+        name string:64,
+        resource_group_id uint32,
+        package_id string:96,
+        hardware_access HardwareAccess,
+        realtime_scheduling bool
+    }) -> (resource struct {
+        status Status,
+        process_handle handle:PROCESS,
+        address_space_handle handle:VM_SPACE,
+        root_vmar_handle handle:VMAR
+    });
+
+    /// Create a CPU-share resource group for process launch assignment.
+    @permission("BEXOS_SYSTEM_PRIVILEGED")
+    CreateResourceGroup(struct {
+        name string:24,
+        cpu_shares uint32,
+        memory_limit_pages uint64
+    }) -> (resource struct {
+        status Status,
+        resource_group_id uint32,
+        group_handle handle:RESOURCE_GROUP
+    });
+
+    /// Update mutable resource group limits. CPU shares must be non-zero.
+    @permission("BEXOS_SYSTEM_PRIVILEGED")
+    SetResourceGroupLimits(resource struct {
+        group_handle handle:RESOURCE_GROUP,
+        cpu_shares uint32,
+        memory_limit_pages uint64
+    }) -> (struct {
+        status Status
+    });
+
+    /// Read a resource group's id, name, and current limits.
+    @permission("BEXOS_SYSTEM_PRIVILEGED")
+    GetResourceGroup(resource struct {
+        group_handle handle:RESOURCE_GROUP
+    }) -> (struct {
+        status Status,
+        resource_group_id uint32,
+        name string:24,
+        cpu_shares uint32,
+        memory_limit_pages uint64
+    });
+
+    /// Open one of the built-in resource groups for use as a v2 parent.
+    @permission("BEXOS_SYSTEM_PRIVILEGED")
+    OpenResourceGroup(struct {
+        resource_group_id uint32
+    }) -> (resource struct {
+        status Status,
+        group_handle handle:RESOURCE_GROUP
+    });
+
+    /// Structured hierarchical resource limits. A zero CPU/GPU maximum adds
+    /// no local cap; parent limits remain in force.
+    @permission("BEXOS_SYSTEM_PRIVILEGED")
+    CreateResourceGroupV2(resource struct {
+        name string:24,
+        parent_group handle:OPTIONAL,
+        cpu_shares uint32,
+        max_cpu_utilization_permille uint16,
+        allow_realtime bool,
+        memory_low_watermark_bytes uint64,
+        memory_high_watermark_bytes uint64,
+        max_render_budget_percent uint8,
+        max_vram_bytes uint64
+    }) -> (resource struct {
+        status Status,
+        resource_group_id uint32,
+        group_handle handle:RESOURCE_GROUP
+    });
+
+    @permission("BEXOS_SYSTEM_PRIVILEGED")
+    SetResourceGroupLimitsV2(resource struct {
+        group_handle handle:RESOURCE_GROUP,
+        cpu_shares uint32,
+        max_cpu_utilization_permille uint16,
+        allow_realtime bool,
+        memory_low_watermark_bytes uint64,
+        memory_high_watermark_bytes uint64,
+        max_render_budget_percent uint8,
+        max_vram_bytes uint64
+    }) -> (struct { status Status });
+
+    @permission("BEXOS_SYSTEM_PRIVILEGED")
+    GetResourceGroupV2(resource struct {
+        group_handle handle:RESOURCE_GROUP
+    }) -> (resource struct {
+        status Status,
+        resource_group_id uint32,
+        parent_resource_group_id uint32,
+        name string:24,
+        cpu_shares uint32,
+        max_cpu_utilization_permille uint16,
+        allow_realtime bool,
+        memory_low_watermark_bytes uint64,
+        memory_high_watermark_bytes uint64,
+        memory_used_bytes uint64,
+        memory_pressure bool,
+        max_render_budget_percent uint8,
+        max_vram_bytes uint64,
+        reserved_render_budget_percent uint8,
+        reserved_vram_bytes uint64
+    });
+
+    @permission("BEXOS_SYSTEM_PRIVILEGED")
+    ReserveGpuResources(resource struct {
+        group_handle handle:RESOURCE_GROUP,
+        render_budget_percent uint8,
+        vram_bytes uint64
+    }) -> (resource struct {
+        status Status,
+        reservation_handle handle:GPU_RESERVATION
+    });
+
+    /// Start a thread inside an explicit process and address space
+    @permission("BEXOS_SYSTEM_PRIVILEGED")
+    StartThreadInProcess(resource struct {
+        process_handle handle:PROCESS,
+        address_space_handle handle:VM_SPACE,
+        entry_vaddr uint64,
+        stack_top_vaddr uint64,
+        thread_pointer_vaddr uint64,
+        arg_handle handle:OPTIONAL
+    }) -> (resource struct {
+        status Status,
+        thread_handle handle:THREAD
+    });
+
+    /// Bind a hardware interrupt vector to an event handle (D0/D1 drivers)
+    @permission("BEXOS_SYSTEM_PRIVILEGED")
+    BindInterrupt(struct {
+        irq_number uint32,
+        flags uint32
+    }) -> (resource struct {
+        status Status,
+        irq_handle handle:INTERRUPT
+    });
+
+    /// Heart Transplant: Freeze address spaces and serialize capability graph
+    @permission("BEXOS_SYSTEM_PRIVILEGED")
+    CheckpointSystemState(resource struct {
+        target_vmo handle:VMO
+    }) -> (struct {
+        status Status,
+        serialized_bytes uint64
+    });
+
+    /// Request a hardware-backed system power transition.
+    @permission("BEXOS_SYSTEM_PRIVILEGED")
+    RequestSystemPowerState(struct {
+        state SystemPowerState
+    }) -> (struct {
+        status Status
+    });
+
+    /// Adjust realtime wall-clock transform. Monotonic and boottime are never
+    /// stepped by this method.
+    @permission("SET_TIME")
+    AdjustClock(struct {
+        clock_type ClockType,
+        offset_delta_ns int64,
+        slew_rate_ppm int32
+    }) -> (struct {
+        status Status
+    });
+
+    /// Forcibly terminate all threads in a process and release owned kernel
+    /// resources. The operation is idempotent for already-exited processes.
+    @permission("BEXOS_SYSTEM_PRIVILEGED")
+    TerminateProcess(resource struct {
+        process_handle handle:PROCESS,
+        exit_code int32
+    }) -> (struct {
+        status Status
+    });
+    @permission("BEXOS_SYSTEM_PRIVILEGED")
+    GetProcessStatus(resource struct { process_handle handle:PROCESS; }) -> (struct {
+        status Status; exited bool; suspended bool; exit_code int32; process_id uint64;
+    });
+    @permission("BEXOS_SYSTEM_PRIVILEGED")
+    SuspendProcess(resource struct { process_handle handle:PROCESS; }) -> (struct { status Status; });
+    @permission("BEXOS_SYSTEM_PRIVILEGED")
+    ResumeProcess(resource struct { process_handle handle:PROCESS; }) -> (struct { status Status; });
+};

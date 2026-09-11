@@ -1,0 +1,110 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+exports_files(["stamp_firmware_policy.py"])
+
+rust_binary(
+    name = "boot_handoff",
+    srcs = ["boot_handoff.rs"],
+    edition = "2024",
+    deps = [
+        "//lib/boot",
+        "//lib/secure_monitor_abi",
+        "//kernel/core",
+        "@crates//:ed25519-dalek",
+        "@crates//:sha2",
+    ],
+)
+
+rust_binary(
+    name = "vbmeta",
+    srcs = ["vbmeta.rs", "firmware.rs"],
+    edition = "2024",
+    deps = [
+        "//lib/avb",
+        "//lib/secure_firmware",
+        "@crates//:rsa",
+        "@crates//:sha2",
+    ],
+)
+
+sh_test(
+    name = "vbmeta_test",
+    srcs = ["vbmeta_test.sh"],
+    args = [
+        "$(location :vbmeta)",
+        "$(location //device/virtual/qemu/base:keys/avb_dev_rsa_private.pem)",
+    ],
+    data = [
+        ":vbmeta",
+        "//device/virtual/qemu/base:keys/avb_dev_rsa_private.pem",
+    ],
+)
+
+sh_test(
+    name = "firmware_test",
+    srcs = ["firmware_test.sh"],
+    args = [
+        "$(location firmware_test.py)", "$(location :vbmeta)",
+        "$(location //device/virtual/qemu/base:keys/avb_dev_rsa_private.pem)",
+    ],
+    data = ["firmware_test.py", ":vbmeta", "//device/virtual/qemu/base:keys/avb_dev_rsa_private.pem"],
+)
+
+rust_binary(
+    name = "bexfs_image",
+    srcs = ["bexfs_image.rs"],
+    crate_name = "bexfs_image",
+    edition = "2024",
+    deps = [
+        "//drivers/d1/storage/bexos/bexfs:bexfs",
+        "@d1_crates//:rosefs-core",
+    ],
+)
+
+sh_binary(
+    name = "assemble_bootfs",
+    srcs = ["assemble_bootfs.py"],
+)
+
+sh_test(
+    name = "assemble_bootfs_test",
+    srcs = ["assemble_bootfs.py"],
+    args = ["--self-test"],
+)
+
+sh_binary(
+    name = "generate_gpt_disk",
+    srcs = ["generate_gpt_disk.py"],
+)
+
+sh_test(
+    name = "generate_gpt_disk_test",
+    srcs = ["generate_gpt_disk.py"],
+    args = ["--self-test"],
+)
+
+sh_test(
+    name = "bexfs_image_e2e_test",
+    srcs = ["bexfs_image_e2e.sh"],
+    args = [
+        "$(location :bexfs_image)",
+        "$(location //device/virtual/qemu/nongui:qemu_nvme_gpt.img)",
+        "$(location //device/virtual/qemu/base:qemu_bexfs_test.key)",
+    ],
+    data = [
+        ":bexfs_image",
+        "//device/virtual/qemu/base:qemu_bexfs_test.key",
+        "//device/virtual/qemu/nongui:qemu_nvme_gpt.img",
+    ],
+)
+
+sh_binary(
+    name = "validate_bootfs_manifest",
+    srcs = ["validate_bootfs_manifest.py"],
+)
+
+rust_test(
+    name = "boot_handoff_tests",
+    crate = ":boot_handoff",
+)

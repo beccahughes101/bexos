@@ -1,0 +1,11 @@
+syntax = "proto3";
+package bexos.ui.scened;
+message InputPolicy {
+  // Parts per thousand; zero disables acceleration. Range 0..4000.
+  uint32 acceleration_milli = 1;
+  uint32 repeat_delay_us = 2;
+  uint32 repeat_interval_us = 3;
+  // Physical evdev codes override the built-in US map. Zero means no text.
+  message Key { uint32 code = 1; uint32 normal = 2; uint32 shifted = 3; }
+  repeated Key keys = 4;
+}

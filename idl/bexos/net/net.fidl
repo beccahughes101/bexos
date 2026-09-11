@@ -1,0 +1,163 @@
+library bexos.net;
+
+type Status = strict enum : int32 {
+    OK = 0,
+    ERR_INVALID_HANDLE = -1,
+    ERR_ACCESS_DENIED = -2,
+    ERR_NO_MEMORY = -3,
+    ERR_BUFFER_TOO_SMALL = -4,
+    ERR_PEER_CLOSED = -5,
+    ERR_TIMED_OUT = -6,
+    ERR_ALREADY_EXISTS = -7,
+    ERR_INVALID_ARGS = -8,
+    ERR_RESOURCE_EXHAUSTED = -9,
+    ERR_NOT_FOUND = -10,
+    ERR_SHOULD_WAIT = -11,
+    ERR_NETWORK_UNREACHABLE = -12,
+};
+
+struct LinkStatus {
+    available bool;
+    metered bool;
+};
+
+struct Ipv4Address {
+    octets array<uint8, 4>;
+};
+
+struct Ipv6Address {
+    octets array<uint8, 16>;
+};
+
+type IpAddress = strict union {
+    1: ipv4 Ipv4Address;
+    2: ipv6 Ipv6Address;
+};
+
+struct SocketAddress {
+    addr IpAddress;
+    port uint16;
+};
+
+table SocketOptions {
+    1: non_blocking bool;
+    2: keep_alive_ms uint32;
+    3: rx_buffer_size uint32;
+    4: tx_buffer_size uint32;
+};
+
+protocol TcpSocket {
+    1: GetStream() -> (resource struct {
+        status Status;
+        socket handle:SOCKET;
+    });
+
+    2: GetPeerAddress() -> (struct {
+        status Status;
+        addr SocketAddress;
+    });
+
+    3: GetLocalAddress() -> (struct {
+        status Status;
+        addr SocketAddress;
+    });
+
+    4: Shutdown(struct {
+        read bool;
+        write bool;
+    }) -> (struct {
+        status Status;
+    });
+
+    5: Close();
+};
+
+protocol TcpListener {
+    1: Accept() -> (resource struct {
+        status Status;
+        client server_end:TcpSocket;
+        peer_addr SocketAddress;
+    });
+
+    2: Close();
+
+    // Read-only readiness: does not consume a pending connection.
+    3: GetInfo() -> (struct { status Status; readable bool; });
+};
+
+protocol UdpSocket {
+    1: SendTo(struct {
+        data vector<uint8>:8192;
+        destination SocketAddress;
+    }) -> (struct {
+        status Status;
+        actual uint64;
+    });
+
+    2: RecvFrom() -> (struct {
+        status Status;
+        data vector<uint8>:8192;
+        source SocketAddress;
+    });
+
+    3: Bind(struct {
+        local_addr SocketAddress;
+    }) -> (struct {
+        status Status;
+    });
+
+    4: Close();
+
+    // Read-only readiness: does not consume a datagram or reserve queue space.
+    5: GetInfo() -> (struct { status Status; readable bool; writable bool; });
+};
+
+@discoverable
+protocol Netstack {
+    1: ConnectTcp(resource struct {
+        remote_addr SocketAddress;
+        options SocketOptions;
+        socket server_end:TcpSocket;
+    }) -> (struct {
+        status Status;
+    });
+
+    2: ListenTcp(resource struct {
+        local_addr SocketAddress;
+        options SocketOptions;
+        listener server_end:TcpListener;
+    }) -> (struct {
+        status Status;
+    });
+
+    3: CreateUdpSocket(resource struct {
+        options SocketOptions;
+        socket server_end:UdpSocket;
+    }) -> (struct {
+        status Status;
+    });
+
+    4: ResolveHost(struct {
+        hostname string:255;
+    }) -> (struct {
+        status Status;
+        addresses vector<IpAddress>:8;
+    });
+
+    5: GetLinkStatus() -> (struct {
+        status Status;
+        link LinkStatus;
+    });
+
+    6: WatchLinkStatus(resource struct {
+        watcher client_end:LinkWatcher;
+    }) -> (struct {
+        status Status;
+    });
+};
+
+protocol LinkWatcher {
+    1: OnLinkStatus(struct {
+        link LinkStatus;
+    });
+};

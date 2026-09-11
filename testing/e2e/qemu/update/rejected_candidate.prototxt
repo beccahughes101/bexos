@@ -1,0 +1,11 @@
+package_name: "bexos.service.updated"
+name: "updated"
+processes {
+ name: "updated"
+ runner: "elf"
+ service: true
+ lifecycle { update_strategy: HEART_TRANSPLANT preparation_timeout_ms: 300 }
+ runner_options {
+  [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/updated" }
+ }
+}

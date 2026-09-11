@@ -1,0 +1,26 @@
+diff --git a/src/vulkan/adapter.rs b/src/vulkan/adapter.rs
+--- a/src/vulkan/adapter.rs
++++ b/src/vulkan/adapter.rs
+@@ -1174,8 +1174,10 @@
+         // Note that quite a few extensions depend on the `VK_KHR_get_physical_device_properties2` instance extension.
+         // We enable `VK_KHR_get_physical_device_properties2` unconditionally (if available).
+ 
+-        // Require `VK_KHR_swapchain`
+-        extensions.push(khr::swapchain::NAME);
++        // Offscreen devices do not require a platform swapchain.
++        if self.supports_extension(khr::swapchain::NAME) {
++            extensions.push(khr::swapchain::NAME);
++        }
+ 
+         if self.device_api_version < vk::API_VERSION_1_1 {
+             // Require `VK_KHR_maintenance1`
+@@ -3041,6 +3043,9 @@
+         &self,
+         surface: &super::Surface,
+     ) -> Option<crate::SurfaceCapabilities> {
++        if !self.phd_capabilities.supports_extension(khr::swapchain::NAME) {
++            return None;
++        }
+         surface.inner.surface_capabilities(self)
+     }
+ 

@@ -1,0 +1,47 @@
+load("//build/platforms:architecture.bzl", "guest_select")
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "userspace_binary")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "pci",
+    rustc_flags = guest_select([], ["--cfg=bexos_arch_x86_64"]),
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs", "src/runtime/**/*.rs"]),
+    crate_name = "bexos_d1_pci",
+    edition = "2024",
+    deps = [
+        "//kernel/core",
+    ],
+)
+
+userspace_binary(
+    name = "pci_root_bus",
+    srcs = ["src/main.rs"] + glob(["src/runtime/**/*.rs"]),
+    crate_name = "bexos_d1_pci_root_bus",
+    deps = [":pci", "//lib/migration", "//idl:power_fidl_rust", "//idl:bootstrap_fidl_rust", "//idl:hardware_manager_fidl_rust"],
+)
+
+rust_test(
+    name = "pci_root_bus_tests",
+    srcs = ["tests/pci_root_bus_tests.rs"],
+    crate_name = "pci_root_bus_tests",
+    edition = "2024",
+    deps = [
+        ":pci",
+        "//kernel/core",
+    ],
+)
+
+app_manifest(name = "package_manifest", src = "package/pci_root_bus.prototxt")
+
+userspace_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"] + glob(["src/runtime/**/*.rs"]),
+    crate_name = "bexos_d1_pci_root_bus_replacement",
+    deps = [":pci", "//lib/migration", "//idl:power_fidl_rust", "//idl:bootstrap_fidl_rust", "//idl:hardware_manager_fidl_rust"],
+)
+app_archive(name = "replacement_archive", manifest = ":package_manifest", entries = {"bin/pci_root_bus": ":replacement_elf"}, compression = "zstd")
+
+rust_test(name="runtime_tests",srcs=["tests/runtime.rs", "src/runtime/state.rs"],crate_root="tests/runtime.rs",edition="2024",deps=[":pci", "//lib/userspace", "//lib/migration"])

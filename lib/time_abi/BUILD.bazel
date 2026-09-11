@@ -1,0 +1,18 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "time_abi",
+    srcs = ["src/lib.rs"],
+    crate_name = "bexos_time_abi",
+    edition = "2024",
+)
+
+rust_test(
+    name = "time_abi_tests",
+    srcs = ["tests/time_abi_tests.rs"],
+    crate_name = "time_abi_tests",
+    edition = "2024",
+    deps = [":time_abi"],
+)

@@ -1,0 +1,43 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "qemu_test_private.key",
+    "qemu_test_public.key",
+])
+
+rust_library(
+    name = "app_archive",
+    srcs = ["src/lib.rs"],
+    crate_features = ["zstd"],
+    crate_name = "bexos_app_archive",
+    edition = "2024",
+    deps = [
+        "@crates//:blake3",
+        "@crates//:ed25519-dalek",
+        "@crates//:ruzstd",
+    ],
+)
+
+rust_library(
+    name = "app_archive_host",
+    srcs = ["src/lib.rs"],
+    crate_features = ["std", "zstd"],
+    crate_name = "bexos_app_archive",
+    edition = "2024",
+    deps = [
+        "@crates//:blake3",
+        "@crates//:ed25519-dalek",
+        "@crates//:ruzstd",
+    ],
+)
+
+rust_test(
+    name = "app_archive_tests",
+    srcs = ["tests/app_archive_tests.rs", "tests/allocations.rs"],
+    crate_root = "tests/app_archive_tests.rs",
+    crate_name = "app_archive_tests",
+    edition = "2024",
+    deps = [":app_archive_host"],
+)

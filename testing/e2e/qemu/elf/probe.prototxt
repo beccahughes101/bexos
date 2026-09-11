@@ -1,0 +1,42 @@
+package_name: "bexos.platform.elf_probe"
+name: "ELF validation application"
+library_dependencies {
+ package_name: "bexos.lib.elf_fixture"
+ abi_version: 1
+ mount_alias: "bexos.lib.elf_fixture"
+}
+processes {
+ name: "elf_probe"
+ runner: "elf"
+ lifecycle { update_strategy: RESTART }
+ runner_options {
+  [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/elf_probe" }
+ }
+}
+
+services_consumed {
+ name: "ServiceDirectory"
+ link_type: REQUIRED
+ capabilities {
+  capability: "Public"
+  methods { ordinal: 1 link_type: REQUIRED }
+  methods { ordinal: 2 link_type: REQUIRED }
+ }
+}
+services_consumed {
+ name: "bexos.security.Keychain"
+ link_type: REQUIRED
+ capabilities {
+  capability: "Public"
+  methods { ordinal: 1 link_type: REQUIRED }
+  methods { ordinal: 2 link_type: REQUIRED }
+ }
+}
+services_consumed {
+ name: "bexos.net.Netstack"
+ link_type: REQUIRED
+ capabilities {
+  capability: "Public"
+  methods { ordinal: 1 link_type: REQUIRED }
+ }
+}

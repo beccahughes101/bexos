@@ -1,0 +1,30 @@
+load("//testing/e2e/qemu:architecture_test.bzl", "qemu_suites")
+load("//testing/e2e/qemu:qemu_e2e.bzl", "QEMU_BOOT_DATA", "qemu_e2e_test")
+
+package(default_visibility = ["//visibility:public"])
+
+USB_QEMU_ARGS = [
+    "-device",
+    "qemu-xhci,id=usb0,msi=off,msix=off",
+    "-device",
+    "usb-kbd,bus=usb0.0",
+    "-device",
+    "usb-mouse,bus=usb0.0",
+    "-device",
+    "usb-hub,bus=usb0.0,port=3",
+]
+
+qemu_e2e_test(
+    name = "usb_host_smoke_test",
+    src = "usb_host_smoke_test.rs",
+    crate_name = "usb_host_smoke_test",
+    architectures = ["aarch64"],
+    boot_data = QEMU_BOOT_DATA,
+    extra_args = USB_QEMU_ARGS,
+    deps = [
+        "//testing/e2e",
+        "//tools/qemu:qemu_test",
+    ],
+)
+
+qemu_suites()

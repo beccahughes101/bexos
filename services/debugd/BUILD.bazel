@@ -1,0 +1,105 @@
+load("//build/platforms:architecture.bzl", "guest_select")
+load("//build/rules:app_archive.bzl", "app_archive")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "debugd",
+    rustc_flags = guest_select([], ["--cfg=bexos_arch_x86_64"]),
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs", "src/live_migration.rs", "src/tee_probe.rs", "src/shell_runtime.rs", "src/runtime/**/*.rs"]),
+    crate_name = "bexos_debugd",
+    edition = "2024",
+    deps = [
+        "//lib/boot",
+        "//idl:serial_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//lib/crypto_client",
+        "//lib/debug_wire",
+        "//idl:tracing_fidl_rust",
+        "//lib/migration",
+        "//lib/trace",
+        "//lib/trusty_client",
+        "//lib/update:update",
+        "//lib/userspace",
+        "@crates//:tokio",
+    ] + guest_select(["//drivers/d1/serial/arm/pl011:uart"], []),
+)
+
+std_service_binary(
+    name = "debugd_elf",
+    srcs = ["src/main.rs", "src/live_migration.rs", "src/tee_probe.rs", "src/shell_runtime.rs"] + glob(["src/runtime/**/*.rs"]),
+    crate_name = "bexos_debugd_elf",
+    deps = [
+        "//lib/boot",
+        "//idl:serial_fidl_rust",
+        ":debugd",
+        "//idl:app_manager_fidl_rust",
+        "//idl:app_opener_fidl_rust",
+        "//idl:shell_fidl_rust",
+        "//lib/tty",
+        "//idl:app_lifecycle_fidl_rust",
+        "//idl:tee_manager_fidl_rust",
+        "//idl:tracing_fidl_rust",
+        "//idl:update_manager_fidl_rust",
+        "//idl:user_manager_fidl_rust",
+        "//lib/crypto_client",
+        "//lib/debug_wire",
+        "//lib/migration",
+        "//lib/trace",
+        "//lib/trusty_client",
+        "//lib/update:update",
+        "@crates//:tokio",
+    ] + guest_select(["//drivers/d1/serial/arm/pl011:uart"], []),
+)
+
+rust_test(
+    name = "debugd_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "debugd_tests",
+    edition = "2024",
+    deps = [
+        "//lib/boot",
+        "//idl:serial_fidl_rust",
+        ":debugd",
+        "//idl:kernel_fidl_rust",
+        "//lib/debug_wire",
+        "//lib/migration",
+        "//lib/trace",
+        "//lib/trusty_client",
+        "//lib/update:update",
+        "@crates//:ed25519-dalek",
+        "@crates//:tokio",
+    ],
+)
+
+app_manifest(name = "package_manifest", src = "package/debugd.prototxt")
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs", "src/live_migration.rs", "src/tee_probe.rs", "src/shell_runtime.rs"] + glob(["src/runtime/**/*.rs"]),
+    crate_name = "bexos_debugd_elf_replacement",
+    deps = [
+        "//lib/boot",
+        "//idl:serial_fidl_rust",
+        ":debugd",
+        "//idl:app_manager_fidl_rust",
+        "//idl:app_opener_fidl_rust",
+        "//idl:shell_fidl_rust",
+        "//lib/tty",
+        "//idl:app_lifecycle_fidl_rust",
+        "//idl:tee_manager_fidl_rust",
+        "//idl:tracing_fidl_rust",
+        "//idl:update_manager_fidl_rust",
+        "//idl:user_manager_fidl_rust",
+        "//lib/crypto_client",
+        "//lib/debug_wire",
+        "//lib/migration",
+        "//lib/trace",
+        "//lib/trusty_client",
+        "//lib/update:update",
+        "@crates//:tokio",
+    ] + guest_select(["//drivers/d1/serial/arm/pl011:uart"], []),
+)
+app_archive(name = "replacement_archive", manifest = ":package_manifest", entries = {"bin/debugd": ":replacement_elf"}, compression = "zstd")

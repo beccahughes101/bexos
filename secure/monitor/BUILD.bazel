@@ -1,0 +1,280 @@
+load(":runtime.bzl", "trusty_domain")
+load(":verified.bzl", "verified_payload")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_binary")
+load("//boot/multiboot:boot_image.bzl", "multiboot_image")
+
+package(default_visibility = ["//visibility:public"])
+
+[
+    genrule(
+        name = kind + "_layout",
+        srcs = ["runtime/" + source, "runtime/resident.ld"],
+        outs = [kind + "_layout.ld"],
+        cmd = "cat $(SRCS) > $@",
+    )
+    for kind, source in [("runtime", "linker.ld"), ("nucleus", "nucleus.ld")]
+]
+
+test_suite(
+    name = "acceptance",
+    tests = [
+        ":svm_probe_test", ":svm_dma_probe_test", ":trusty_domain_boot_test",
+        ":firmware_disk_probe_test", ":boot_selection_domain_boot_test", ":monitor_transfer_domain_boot_test", ":dual_monitor_transfer_domain_boot_test",
+        ":firmware_recovery_domain_boot_test",
+        ":trusty_recovery_domain_boot_test",
+        ":repeated_monitor_transfer_domain_boot_test",
+        ":faulting_monitor_transfer_boot_test", ":hanging_monitor_transfer_boot_test",
+        ":resident_nucleus_boot_test", ":dual_resident_nucleus_boot_test",
+        ":nucleus_layout_test",
+        ":trusty_boot_ipc_boot_test", ":trusty_acceptance_domain_boot_test",
+        ":trusty_checkpoint_domain_boot_test", ":normal_checkpoint_domain_boot_test",
+        ":trusty_boot_approval_boot_test",
+        ":trusty_rpmb_release_boot_test",
+        ":trusty_authenticated_approval_boot_test",
+        ":secure_product_boot_test",
+        ":external_secure_product_boot_test",
+        ":external_nucleus_product_boot_test",
+        ":rollback_provisioner_boot_test",
+        ":dual_domain_development_boot_test", ":dual_domain_acceptance_boot_test",
+    ],
+)
+
+rust_library(
+    name = "monitor",
+    srcs = glob(["src/*.rs"]),
+    compile_data = ["src/entry.S"],
+    crate_name = "bexos_secure_monitor",
+    edition = "2024",
+    deps = [
+        "//drivers/d1/rtc/pc/cmos:rtc",
+        "//kernel/core:bootfs_parser",
+        "//lib/avb",
+        "//lib/secure_monitor_abi",
+        "//lib/secure_firmware",
+        "@crates__sha2-0.11.0//:sha2",
+        "//secure/orchestrator:tee_slots",
+    ],
+)
+
+rust_test(name = "monitor_tests", crate = ":monitor")
+
+[
+    rust_binary(
+        name = "monitor_policy_" + kind,
+        srcs = ["policy/main.rs"],
+        crate_features = features,
+        edition = "2024",
+        platform = "//build/platforms:kernel_x86_64",
+        linker_script = "policy/linker.ld",
+        rustc_flags = ["-C", "panic=abort", "-C", "relocation-model=static", "-C", "no-redzone=yes"],
+        deps = [":monitor"],
+    )
+    for kind, features in [
+        ("baseline", []), ("candidate", ["candidate"]),
+        ("fault", ["candidate", "fault"]), ("hang", ["candidate", "hang"]),
+        ("successor", ["candidate", "successor"]),
+    ]
+]
+[
+    genrule(
+        name = "monitor_policy_" + kind + "_bundle",
+        srcs = [":monitor_policy_" + kind, "//device/virtual/qemu/base:keys/avb_dev_rsa_private.pem"],
+        outs = ["monitor_policy_" + kind + ".fw", "monitor_policy_" + kind + ".avbpubkey"],
+        tools = ["//tools/image:vbmeta"],
+        cmd = "$(location //tools/image:vbmeta) --firmware $(location //device/virtual/qemu/base:keys/avb_dev_rsa_private.pem) " +
+              "$(location monitor_policy_" + kind + ".fw) $(location monitor_policy_" + kind + ".avbpubkey) " + generation +
+              " x86_64 hypervisor $(location :monitor_policy_" + kind + ")",
+    )
+    for kind, generation in [("candidate", "2"), ("fault", "2"), ("hang", "2"), ("successor", "3")]
+]
+trusty_domain(name = "resident_nucleus", variant = "x86_64", nucleus_probe = True)
+genrule(
+    name = "monitor_successor_fault_bundle",
+    srcs = [":monitor_policy_fault", "//device/virtual/qemu/base:keys/avb_dev_rsa_private.pem"],
+    outs = ["monitor_successor_fault.fw", "monitor_successor_fault.avbpubkey"],
+    tools = ["//tools/image:vbmeta"],
+    cmd = "$(location //tools/image:vbmeta) --firmware $(location //device/virtual/qemu/base:keys/avb_dev_rsa_private.pem) " +
+          "$(location monitor_successor_fault.fw) $(location monitor_successor_fault.avbpubkey) 3 " +
+          "x86_64 hypervisor $(location :monitor_policy_fault)",
+)
+trusty_domain(name = "dual_resident_nucleus", variant = "x86_64", normal_world = True, nucleus_probe = True)
+
+sh_test(
+    name = "resident_layout_test",
+    srcs = ["tests/resident_layout.sh"],
+    args = ["$(location tests/resident_layout.py)", "$(location :external_secure_product)", "$(location :normal_checkpoint_domain)"],
+    data = ["tests/resident_layout.py", ":external_secure_product", ":normal_checkpoint_domain"],
+)
+sh_test(
+    name = "nucleus_layout_test",
+    srcs = ["tests/resident_layout.sh"],
+    args = ["$(location tests/resident_layout.py)", "--nucleus", "$(location :dual_resident_nucleus)", "$(location :external_nucleus_product)"],
+    data = ["tests/resident_layout.py", ":dual_resident_nucleus", ":external_nucleus_product"],
+)
+
+verified_payload(name = "product_payload")
+genrule(
+    name = "boot_root",
+    srcs = ["//device/virtual/qemu/base:keys/avb_dev_rsa_private.pem"],
+    outs = ["boot_root.avbpubkey"],
+    tools = ["//tools/image:vbmeta"],
+    cmd = "$(location //tools/image:vbmeta) --public-key $(location //device/virtual/qemu/base:keys/avb_dev_rsa_private.pem) $@",
+)
+
+[
+    genrule(
+        name = "replacement_" + component,
+        srcs = [image, "//device/virtual/qemu/base:keys/avb_dev_rsa_private.pem"],
+        outs = [component + ".replacement.fw", component + ".replacement.avbpubkey"],
+        tools = ["//tools/image:vbmeta"],
+        cmd = "$(location //tools/image:vbmeta) --firmware $(location //device/virtual/qemu/base:keys/avb_dev_rsa_private.pem) " +
+              "$(location " + component + ".replacement.fw) $(location " + component + ".replacement.avbpubkey) 2 x86_64 " + component + " $(location " + image + ")",
+    )
+    for component, image in [
+        ("trusty", "//third_party/trusty:product_x86/lk.elf"),
+        ("hypervisor", ":external_secure_product"),
+    ]
+]
+rust_binary(
+    name = "boot_verify_test_runner",
+    srcs = ["tests/boot_verify.rs"],
+    edition = "2024",
+    deps = [":monitor"],
+)
+sh_test(
+    name = "boot_verify_test",
+    srcs = ["tests/run.sh"],
+    args = ["$(location :boot_verify_test_runner)"] + ["$(location :" + name + ")" for name in [
+        "product_payload_kernel", "product_payload_bootfs", "product_payload.vbmeta", "product_payload.avbpubkey",
+        "product_payload_wrong_policy.vbmeta", "product_payload_zero_generation.vbmeta",
+    ]],
+    data = [":boot_verify_test_runner"] + [":" + name for name in [
+        "product_payload_kernel", "product_payload_bootfs", "product_payload.vbmeta", "product_payload.avbpubkey",
+        "product_payload_wrong_policy.vbmeta", "product_payload_zero_generation.vbmeta",
+    ]],
+)
+
+# This diagnostic exercises the hardware backend before product integration.
+# It is not a secure boot path and never publishes secure boot evidence.
+rust_binary(
+    name = "svm_probe",
+    srcs = ["probe/main.rs", "probe/contexts.rs", "probe/permissions.rs", "probe/interrupts.rs"],
+    crate_root = "probe/main.rs",
+    crate_name = "svm_probe",
+    edition = "2024",
+    platform = "//build/platforms:kernel_x86_64",
+    linker_script = "probe/linker.ld",
+    rustc_flags = ["-C", "panic=abort", "-C", "relocation-model=static", "-C", "no-redzone=yes"],
+    deps = [":monitor", "//lib/secure_monitor_abi"],
+)
+multiboot_image(name = "svm_probe_boot", kernel = ":svm_probe", trusty = True)
+sh_test(
+    name = "svm_probe_test",
+    srcs = ["probe/test.sh"],
+    args = ["$(location probe/test.py)", "$(location :svm_probe_boot)"],
+    data = ["probe/test.py", ":svm_probe_boot"],
+    tags = ["requires-qemu", "exclusive", "local", "no-sandbox"],
+    timeout = "short",
+)
+
+# Compatibility bring-up using actual saved Trusty code in an isolated RAM bank.
+# These targets do not publish product boot evidence.
+trusty_domain(name = "trusty_domain", variant = "x86_64")
+trusty_domain(name = "trusty_boot_ipc", variant = "x86_64", boot_ipc_probe = True)
+trusty_domain(name = "trusty_checkpoint_domain", variant = "x86_64", checkpoint_probe = True)
+trusty_domain(name = "trusty_boot_approval", variant = "x86_64", boot_approval = True)
+trusty_domain(name = "trusty_authenticated_approval", variant = "x86_64", boot_approval = True, require_efi = True)
+trusty_domain(name = "trusty_rpmb_release", variant = "x86_64", boot_release = True)
+trusty_domain(name = "trusty_acceptance_domain", variant = "x86_64_acceptance", acceptance = True)
+
+trusty_domain(name = "normal_checkpoint_domain", variant = "x86_64", normal_world = True, normal_checkpoint_probe = True)
+trusty_domain(name = "dual_domain_development", variant = "x86_64", normal_world = True)
+trusty_domain(name = "secure_product", variant = "x86_64", secure_product = True)
+trusty_domain(name = "external_secure_product", variant = "x86_64", secure_product = True, external_payload = True)
+trusty_domain(name = "external_nucleus_product", variant = "x86_64", secure_product = True, external_payload = True, resident_nucleus = True)
+trusty_domain(name = "rollback_provisioner", variant = "x86_64", boot_approval = True, require_efi = True, rollback_fixture = True, external_payload = True)
+
+trusty_domain(name = "dual_domain_acceptance", variant = "x86_64_acceptance", acceptance = True, normal_world = True)
+
+rust_binary(
+    name = "svm_dma_probe",
+    srcs = ["probe/main.rs", "probe/contexts.rs", "probe/permissions.rs", "probe/interrupts.rs", "probe/dma.rs"],
+    crate_root = "probe/main.rs",
+    crate_name = "svm_dma_probe",
+    crate_features = ["dma_probe"],
+    edition = "2024",
+    platform = "//build/platforms:kernel_x86_64",
+    linker_script = "probe/linker.ld",
+    rustc_flags = ["-C", "panic=abort", "-C", "relocation-model=static", "-C", "no-redzone=yes"],
+    deps = [":monitor", "//lib/secure_monitor_abi"],
+)
+multiboot_image(name = "svm_dma_probe_boot", kernel = ":svm_dma_probe", trusty = True)
+sh_test(
+    name = "svm_dma_probe_test",
+    srcs = ["probe/test.sh"],
+    args = ["$(location probe/test.py)", "$(location :svm_dma_probe_boot)", "--dma"],
+    data = ["probe/test.py", ":svm_dma_probe_boot"],
+    tags = ["requires-qemu", "exclusive", "local", "no-sandbox"],
+    timeout = "short",
+)
+
+rust_binary(
+    name = "firmware_disk_probe",
+    srcs = ["probe/main.rs", "probe/contexts.rs", "probe/permissions.rs", "probe/interrupts.rs", "probe/firmware_disk.rs"],
+    crate_root = "probe/main.rs",
+    edition = "2024",
+    crate_features = ["firmware_disk_probe"],
+    platform = "//build/platforms:kernel_x86_64",
+    linker_script = "probe/linker.ld",
+    rustc_flags = ["-C", "panic=abort", "-C", "relocation-model=static", "-C", "no-redzone=yes"],
+    deps = [":monitor", "//lib/secure_monitor_abi", "//lib/secure_firmware"],
+)
+multiboot_image(name = "firmware_disk_probe_boot", kernel = ":firmware_disk_probe", trusty = True)
+sh_test(
+    name = "firmware_disk_probe_test",
+    srcs = ["probe/test.sh"],
+    args = ["$(location probe/firmware_disk_test.py)", "$(location :firmware_disk_probe_boot)"],
+    data = ["probe/firmware_disk_test.py", ":firmware_disk_probe_boot"],
+    tags = ["requires-qemu", "exclusive", "local", "no-sandbox"],
+    timeout = "moderate",
+)
+
+trusty_domain(name = "boot_selection_domain", variant = "x86_64", selection_probe = True)
+
+trusty_domain(name = "monitor_transfer_candidate", variant = "x86_64", monitor_candidate_image = True)
+trusty_domain(name = "monitor_transfer_domain", variant = "x86_64", monitor_candidate = ":monitor_transfer_candidate")
+
+trusty_domain(name = "dual_monitor_transfer_candidate", variant = "x86_64", normal_world = True, monitor_candidate_image = True)
+trusty_domain(name = "dual_monitor_transfer_domain", variant = "x86_64", normal_world = True, monitor_candidate = ":dual_monitor_transfer_candidate")
+
+trusty_domain(name = "firmware_recovery_candidate", variant = "x86_64", monitor_candidate_image = True, firmware_recovery_probe = True)
+genrule(
+    name = "firmware_recovery_bundle",
+    srcs = [":firmware_recovery_candidate", "//device/virtual/qemu/base:keys/avb_dev_rsa_private.pem"],
+    outs = ["firmware_recovery.fw", "firmware_recovery.avbpubkey"],
+    tools = ["//tools/image:vbmeta"],
+    cmd = "$(location //tools/image:vbmeta) --firmware $(location //device/virtual/qemu/base:keys/avb_dev_rsa_private.pem) $(location firmware_recovery.fw) $(location firmware_recovery.avbpubkey) 2 x86_64 hypervisor $(location :firmware_recovery_candidate)",
+)
+trusty_domain(name = "firmware_recovery_domain", variant = "x86_64", monitor_candidate = ":firmware_recovery.fw", firmware_recovery_probe = True)
+
+genrule(
+    name = "trusty_recovery_bundle",
+    srcs = ["//third_party/trusty:built_x86_64_replacement/lk.elf", "//device/virtual/qemu/base:keys/avb_dev_rsa_private.pem"],
+    outs = ["trusty_recovery.fw", "trusty_recovery.avbpubkey"],
+    tools = ["//tools/image:vbmeta"],
+    cmd = "$(location //tools/image:vbmeta) --firmware $(location //device/virtual/qemu/base:keys/avb_dev_rsa_private.pem) $(location trusty_recovery.fw) $(location trusty_recovery.avbpubkey) 2 x86_64 trusty $(location //third_party/trusty:built_x86_64_replacement/lk.elf)",
+)
+trusty_domain(name = "trusty_recovery_domain", variant = "x86_64", trusty_recovery_candidate = ":trusty_recovery.fw")
+
+trusty_domain(name = "repeated_monitor_final", variant = "x86_64", monitor_candidate_image = True)
+trusty_domain(name = "repeated_monitor_middle", variant = "x86_64", monitor_candidate_image = True, monitor_candidate = ":repeated_monitor_final")
+trusty_domain(name = "repeated_monitor_transfer_domain", variant = "x86_64", monitor_candidate = ":repeated_monitor_middle", repeated_transfer = True)
+
+[
+    trusty_domain(name = name + "_monitor_candidate", variant = "x86_64", monitor_candidate_image = True, monitor_entry_failure = failure)
+    for name, failure in [("faulting", "fault"), ("hanging", "hang")]
+]
+[
+    trusty_domain(name = name + "_monitor_transfer", variant = "x86_64", monitor_candidate = ":" + name + "_monitor_candidate", monitor_rollback_probe = True)
+    for name in ["faulting", "hanging"]
+]

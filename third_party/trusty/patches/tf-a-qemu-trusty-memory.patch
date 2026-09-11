@@ -1,0 +1,14 @@
+diff --git a/external/arm-trusted-firmware/plat/qemu/qemu/platform.mk b/external/arm-trusted-firmware/plat/qemu/qemu/platform.mk
+--- a/external/arm-trusted-firmware/plat/qemu/qemu/platform.mk
++++ b/external/arm-trusted-firmware/plat/qemu/qemu/platform.mk
+@@ -230,6 +230,10 @@ endif
+ 
+ # Process flags
+ $(eval $(call add_define,BL32_RAM_LOCATION_ID))
++ifneq ($(BEXOS_TRUSTY_SEC_MEM_SIZE),)
++$(eval $(call add_define_val,TSP_SEC_MEM_SIZE,$(BEXOS_TRUSTY_SEC_MEM_SIZE)))
++endif
++
+ 
+ # Don't have the Linux kernel as a BL33 image by default
+ ARM_LINUX_KERNEL_AS_BL33	:=	0

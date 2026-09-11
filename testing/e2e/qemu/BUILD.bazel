@@ -1,0 +1,71 @@
+package(default_visibility = ["//visibility:public"])
+
+# Every package publishes both its suites and its complete scenario inventory.
+E2E_PACKAGES = [
+    "bexfs",
+    "elf",
+    "graphics",
+    "jobs",
+    "kernel",
+    "kernel/faults",
+    "nvme",
+    "preferences",
+    "sysui",
+    "trusty",
+    "update",
+    "usb",
+    "wasm",
+]
+
+[ test_suite(
+    name = architecture,
+    tests = ["//testing/e2e/qemu/" + package + ":" + architecture for package in E2E_PACKAGES],
+) for architecture in ["aarch64", "x86_64", "x86_64_development"] ]
+
+test_suite(
+    name = "all_architectures",
+    tests = [":aarch64", ":x86_64"],
+)
+
+test_suite(
+    name = "firmware_acceptance",
+    tests = [
+        "//secure/monitor:acceptance", "//boot/efi:acceptance",
+        "//boot/multiboot:handoff_test",
+        "//boot/bl33:verification_boot_test",
+        "//third_party/trusty:x86_64_boot_test", "//third_party/trusty:x86_64_acceptance_test",
+    ],
+)
+
+# Sustained windows have separate bounded deadlines and are opt-in.
+test_suite(
+    name = "performance",
+    tests = [
+        "//testing/e2e/qemu/graphics:performance_aarch64",
+        "//testing/e2e/qemu/graphics:performance_x86_64",
+        "//testing/e2e/qemu/venus_linux:performance_all_aarch64",
+    ],
+)
+
+filegroup(
+    name = "declared_tests",
+    testonly = True,
+    srcs = ["//testing/e2e/qemu/" + package + ":declared_tests" for package in E2E_PACKAGES] + [":firmware_acceptance", ":performance"],
+)
+
+genquery(
+    name = "uncovered_tests",
+    testonly = True,
+    expression = 'attr("tags", "requires-qemu", kind(".*_test rule", deps(//testing/e2e/qemu:declared_tests))) except tests(set(//testing/e2e/qemu:all_architectures //testing/e2e/qemu:x86_64_development //testing/e2e/qemu:firmware_acceptance //testing/e2e/qemu:performance)) except labels("test", kind("architecture_test rule", deps(//testing/e2e/qemu:declared_tests)))',
+    scope = [":declared_tests", ":all_architectures", ":x86_64_development", ":firmware_acceptance", ":performance"],
+)
+
+sh_test(
+    name = "matrix_coverage_test",
+    srcs = ["matrix_coverage_test.sh"],
+    args = ["$(location :uncovered_tests)"],
+    data = [":uncovered_tests"],
+)
+
+# Unlike genquery, this repository-wide check also discovers new packages.
+sh_binary(name = "check_matrix", srcs = ["check_matrix.sh"])

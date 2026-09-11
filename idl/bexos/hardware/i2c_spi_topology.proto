@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package bexos.hardware.i2c_spi;
+
+message Topology {
+  repeated Controller controllers = 1;
+}
+
+message Controller {
+  uint64 node_id = 1;
+  string name = 2;
+  Bus bus = 3;
+  repeated DeviceProperty properties = 4;
+  repeated Peripheral peripherals = 5;
+}
+
+message Peripheral {
+  uint64 node_id = 1;
+  string name = 2;
+  repeated DeviceProperty properties = 3;
+  I2cPeripheral i2c = 4;
+  SpiPeripheral spi = 5;
+}
+
+message I2cPeripheral {
+  uint32 address = 1;
+  bool ten_bit = 2;
+}
+
+message SpiPeripheral {
+  uint32 chip_select = 1;
+  uint32 min_speed_hz = 2;
+  uint32 max_speed_hz = 3;
+  uint32 mode_mask = 4;
+}
+
+message DeviceProperty {
+  string key = 1;
+  uint32 value = 2;
+}
+
+enum Bus {
+  BUS_UNSPECIFIED = 0;
+  I2C = 1;
+  SPI = 2;
+}

@@ -1,0 +1,18 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "debug_wire",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "bexos_debug_wire",
+    edition = "2024",
+)
+
+rust_test(
+    name = "debug_wire_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "debug_wire_tests",
+    edition = "2024",
+    deps = [":debug_wire"],
+)

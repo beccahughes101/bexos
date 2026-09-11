@@ -1,0 +1,4 @@
+display: WINDOWED
+devices: "virtio-gpu-pci"
+devices: "virtio-keyboard-pci"
+devices: "virtio-mouse-pci"

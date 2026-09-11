@@ -1,0 +1,4 @@
+uuid: "989ea78b-179b-43ef-b27e-e712f144a00d"
+app_name: "bexos.security.acceptance"
+min_heap: 262144
+min_stack: 65536

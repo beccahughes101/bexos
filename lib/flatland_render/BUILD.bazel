@@ -1,0 +1,10 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+package(default_visibility=["//visibility:public"])
+rust_library(name="flatland_render",srcs=glob(["src/**/*.rs"]),compile_data=["src/kawase.wgsl"],crate_name="bexos_flatland_render",edition="2024",deps=["//lib/flatland","//lib/flatland_text","@graphics_crates//:vello","@graphics_crates//:wgpu"])
+
+rust_test(name="shader_tests",srcs=["tests/shaders.rs"],compile_data=["src/kawase.wgsl"],edition="2024",deps=["@graphics_crates//:naga"])
+
+rust_test(name="bounds_tests",srcs=["tests/bounds.rs"],edition="2024",deps=[":flatland_render", "//lib/flatland"])
+rust_test(name="timing_tests",srcs=["tests/timing.rs"],edition="2024",deps=[":flatland_render"])
+rust_test(name="internal_tests",crate=":flatland_render")
+rust_test(name="image_pressure_tests",srcs=["tests/image_pressure.rs"],edition="2024",deps=["@graphics_crates//:vello", "@graphics_crates//:vello_encoding"])

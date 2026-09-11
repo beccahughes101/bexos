@@ -1,0 +1,87 @@
+library bexos.security.trust;
+
+type TrustStatus = strict enum : int32 {
+    OK = 0,
+    ERR_INVALID_ARGS = -1,
+    ERR_ACCESS_DENIED = -2,
+    ERR_STORAGE = -3,
+    ERR_UNSUPPORTED = -4,
+};
+
+type VerificationStatus = strict enum : uint8 {
+    VALID = 1,
+    UNTRUSTED_ROOT = 2,
+    PREFIX_VIOLATION = 3,
+    EXPIRED_CERTIFICATE = 4,
+    REVOKED_CERTIFICATE = 5,
+    INSUFFICIENT_TIER = 6,
+    UNSUPPORTED_CHAIN = 7,
+};
+
+type TlsRootBundleFormat = strict enum : uint8 {
+    REDB_TLS_ROOTS = 1,
+};
+
+type SignatureAlgorithm = strict enum : uint8 {
+    ED25519 = 1,
+    ECDSA_P256_SHA256 = 2,
+};
+
+struct AppValidationResult {
+    status VerificationStatus;
+    granted_tier uint8;
+    root_anchor_id string:64;
+    leaf_certificate_fingerprint array<uint8, 32>;
+    signature_algorithm SignatureAlgorithm;
+};
+
+@discoverable
+protocol AppTrustManager {
+    1: ValidateAppSigner(struct {
+        package_id string:128;
+        signer_cert_chain vector<vector<uint8>:2048>:4;
+        payload_digest array<uint8, 32>;
+        signature vector<uint8>:512;
+        signature_algorithm SignatureAlgorithm;
+        required_tier uint8;
+    }) -> (struct {
+        status TrustStatus;
+        result AppValidationResult;
+    });
+
+    2: InstallEnterpriseRoot(struct {
+        root_cert vector<uint8>:2048;
+        permitted_prefixes vector<string:128>:8;
+    }) -> (struct {
+        status TrustStatus;
+    });
+
+    3: UpdateRevocationList(resource struct {
+        revocation_payload handle:VMO;
+        length uint64;
+    }) -> (struct {
+        status TrustStatus;
+    });
+
+    4: RemoveEnterpriseRoot(struct {
+        anchor_id string:64;
+    }) -> (struct {
+        status TrustStatus;
+    });
+
+    5: ListEnterpriseRoots() -> (struct {
+        status TrustStatus;
+        roots vector<string:64>:64;
+    });
+};
+
+@discoverable
+protocol TlsTrustManager {
+    1: GetTlsRootBundle() -> (resource struct {
+        status TrustStatus;
+        bundle handle:VMO;
+        length uint64;
+        generation uint64;
+        format TlsRootBundleFormat;
+    });
+};

@@ -1,0 +1,38 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "fidlc_lib",
+    srcs = [
+        "src/ast.rs",
+        "src/backends/mod.rs",
+        "src/backends/rust.rs",
+        "src/capability.rs",
+        "src/ir.rs",
+        "src/lexer.rs",
+        "src/lib.rs",
+        "src/parser.rs",
+        "src/validate.rs",
+    ],
+    crate_name = "fidlc",
+    edition = "2024",
+)
+
+rust_binary(
+    name = "fidlc",
+    srcs = ["src/main.rs"],
+    crate_name = "fidlc_bin",
+    edition = "2024",
+    deps = [":fidlc_lib"],
+)
+
+rust_test(
+    name = "fidlc_tests",
+    srcs = [
+        "tests/fidlc_tests.rs",
+    ],
+    crate_name = "fidlc_tests",
+    edition = "2024",
+    deps = [":fidlc_lib"],
+)

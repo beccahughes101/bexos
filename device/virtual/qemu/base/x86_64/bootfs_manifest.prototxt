@@ -1,0 +1,90 @@
+early_drivers {
+  package: "//drivers/d1/bus/generic/pci:pci_root_bus"
+  wave: 0
+}
+
+early_drivers {
+  package: "//drivers/d1/storage/nvmexpress/nvme:nvme_driver"
+  wave: 1
+}
+
+early_drivers {
+  package: "//drivers/d1/storage/bexos/bexfs:bexfs_driver"
+  wave: 2
+}
+
+early_drivers {
+  package: "//drivers/d1/storage/bexos/bexfs:user_bexfs_driver"
+  wave: 2
+}
+
+early_drivers {
+  package: "//drivers/d1/storage/bexos/archivefs:archivefs_driver"
+  wave: 2
+}
+
+early_drivers {
+  package: "//drivers/d1/storage/bexos/memfs:memfs_driver"
+  wave: 2
+}
+
+early_drivers {
+  package: "//drivers/d1/storage/bexos/diskimage:diskimage_driver"
+  wave: 3
+}
+
+early_drivers {
+  package: "//services/vfsd:vfsd_elf"
+  wave: 3
+}
+
+early_drivers {
+  package: "//services/teed:teed_elf"
+  wave: 3
+}
+
+early_drivers {
+  package: "//services/debugd:debugd_elf"
+  wave: 3
+}
+
+early_drivers {
+  package: "//services/traced:traced_elf"
+  wave: 2
+}
+
+early_drivers {
+  package: "//services/updated:updated_elf"
+  wave: 3
+}
+
+early_drivers {
+  package: "//services/trustd:trustd_elf"
+  wave: 3
+}
+
+early_drivers {
+  package: "//services/powerd:powerd_elf"
+  wave: 4
+}
+
+early_drivers {
+  package: "//services/usersd:usersd_elf"
+  wave: 4
+}
+
+early_drivers {
+  package: "//services/keychaind:keychaind_elf"
+  wave: 5
+}
+
+core_bootstrap {
+  package: "//services/appd:appd_elf"
+}
+
+early_drivers {
+  package: "//drivers/d1/serial/virtio/console:virtio_console_driver"
+  wave: 1
+}
+
+early_drivers { package: "//drivers/d1/rtc/pc/cmos:cmos" wave: 0 }

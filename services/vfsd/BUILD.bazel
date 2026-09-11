@@ -1,0 +1,71 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "vfsd",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_name = "bexos_vfsd",
+    edition = "2024",
+    deps = [
+        "//idl:fs_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//idl:diskimage_fidl_rust",
+        "//idl:memfs_fidl_rust",
+        "//idl:vfs_manager_fidl_rust",
+        "//lib/boot",
+        "//lib/migration",
+        "//lib/package_version",
+        "//lib/trace",
+        "//lib/userspace",
+        "//lib/userspace_async",
+        "@crates//:tokio",
+    ],
+)
+
+std_service_binary(
+    name = "vfsd_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "vfsd_elf",
+    deps = [
+        ":vfsd",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "vfsd_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "vfsd_tests",
+    edition = "2024",
+    deps = [
+        ":vfsd",
+        "//idl:fs_fidl_rust",
+        "//idl:memfs_fidl_rust",
+        "//lib/package_version",
+    ],
+)
+
+app_manifest(name = "package_manifest", src = "package/vfsd.prototxt")
+
+app_archive(
+    name = "vfsd_archive",
+    manifest = ":package_manifest",
+    entries = {
+        "bin/vfsd": ":vfsd_elf",
+    },
+    compression = "none",
+)
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "replacement_elf_replacement",
+    deps = [
+        ":vfsd",
+        "@crates//:tokio",
+    ],
+)
+app_archive(name = "replacement_archive", manifest = ":package_manifest", entries = {"bin/vfsd": ":replacement_elf"}, compression = "zstd")

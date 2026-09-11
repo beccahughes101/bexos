@@ -1,0 +1,16 @@
+--- a/src/device/net/mod.rs
++++ b/src/device/net/mod.rs
+@@ -77,5 +77,7 @@
+         const RING_INDIRECT_DESC = 1 << 28;
+         const RING_EVENT_IDX = 1 << 29;
+         const VERSION_1 = 1 << 32; // legacy
++        /// DMA addresses are provided by the HAL's platform mapping API.
++        const ACCESS_PLATFORM = 1 << 33;
+     }
+ }
+@@ -201,4 +203,5 @@
+ const SUPPORTED_FEATURES: Features = Features::MAC
+     .union(Features::STATUS)
+     .union(Features::RING_EVENT_IDX)
++    .union(Features::ACCESS_PLATFORM)
+     .union(Features::VERSION_1);

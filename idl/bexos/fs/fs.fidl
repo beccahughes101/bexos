@@ -1,0 +1,192 @@
+library bexos.fs;
+
+using bexos.storage.block;
+
+type FsStatus = strict enum : int32 {
+    OK = 0;
+    NOT_FOUND = -1;
+    NOT_DIRECTORY = -2;
+    IS_DIRECTORY = -3;
+    NOT_EMPTY = -4;
+    NO_SPACE = -5;
+    IO = -6;
+    CORRUPT = -7;
+    LOCKED = -8;
+    READ_ONLY = -9;
+    ACCESS_DENIED = -10;
+    INVALID_ARGS = -11;
+    ALREADY_EXISTS = -12;
+    BAD_STATE = -13;
+};
+
+type OpenFlags = strict bits : uint32 {
+    RIGHT_READABLE = 0x00000001;
+    RIGHT_WRITABLE = 0x00000002;
+    RIGHT_EXECUTABLE = 0x00000004;
+    CREATE = 0x00000008;
+    TRUNCATE = 0x00000010;
+    DIRECTORY = 0x00000020;
+};
+
+type NodeKind = strict enum : uint8 {
+    FILE = 1;
+    DIRECTORY = 2;
+};
+
+struct FileAttributes {
+    size_bytes uint64;
+    storage_allocated_bytes uint64;
+    creation_time_nanos uint64;
+    modification_time_nanos uint64;
+    mode uint32;
+};
+
+struct DirEntry {
+    name string:256;
+    kind NodeKind;
+    attr FileAttributes;
+};
+
+protocol Node {
+    1: GetAttr() -> (struct {
+        status FsStatus;
+        attr FileAttributes;
+    });
+
+    2: SetAttr(struct {
+        attr FileAttributes;
+    }) -> (struct {
+        status FsStatus;
+    });
+
+    3: Close();
+};
+
+protocol File {
+    compose Node;
+
+    10: Read(struct {
+        count uint64;
+    }) -> (struct {
+        status FsStatus;
+        data vector<uint8>;
+    });
+
+    11: Write(struct {
+        data vector<uint8>;
+    }) -> (struct {
+        status FsStatus;
+        written uint64;
+    });
+
+    12: Seek(struct {
+        offset int64;
+        whence uint8;
+    }) -> (struct {
+        status FsStatus;
+        new_offset uint64;
+    });
+
+    13: GetBackingMemory() -> (resource struct {
+        status FsStatus;
+        vmo handle:VMO;
+    });
+
+    14: Sync() -> (struct {
+        status FsStatus;
+    });
+};
+
+protocol Directory {
+    compose Node;
+
+    20: Open(resource struct {
+        path string:256;
+        flags OpenFlags;
+        object server_end:Node;
+    });
+
+    21: ReadEntries() -> (struct {
+        status FsStatus;
+        entries vector<DirEntry>:256;
+    });
+
+    22: Unlink(struct {
+        name string:256;
+    }) -> (struct {
+        status FsStatus;
+    });
+};
+
+protocol Filesystem {
+    32: Sync() -> (struct { status FsStatus; });
+    30: Mount(resource struct {
+        block client_end:bexos.storage.block.BlockDevice;
+        partition_label string:36;
+        key_vmo handle:VMO;
+        read_only bool;
+    }) -> (resource struct {
+        status FsStatus;
+        root client_end:Directory;
+    });
+
+    31: Unmount() -> (struct {
+        status FsStatus;
+    });
+
+    33: FormatAndMountRaw(resource struct {
+        block client_end:bexos.storage.block.BlockDevice;
+        label string:36;
+        key_vmo handle:VMO;
+        read_only bool;
+    }) -> (resource struct {
+        status FsStatus;
+        root client_end:Directory;
+        control client_end:MountedFilesystem;
+    });
+
+    34: MountRaw(resource struct {
+        block client_end:bexos.storage.block.BlockDevice;
+        label string:36;
+        key_vmo handle:VMO;
+        read_only bool;
+    }) -> (resource struct {
+        status FsStatus;
+        root client_end:Directory;
+        control client_end:MountedFilesystem;
+    });
+};
+
+protocol MountedFilesystem {
+    40: GetCapacity() -> (struct {
+        status FsStatus;
+        virtual_size_bytes uint64;
+        logical_used_bytes uint64;
+        storage_allocated_bytes uint64;
+    });
+
+    41: PrepareResize(resource struct {
+        block client_end:bexos.storage.block.BlockDevice;
+        label string:36;
+        key_vmo handle:VMO;
+    }) -> (struct {
+        status FsStatus;
+        token uint64;
+    });
+
+    42: CommitResize(struct {
+        token uint64;
+    }) -> (struct {
+        status FsStatus;
+    });
+
+    43: AbortResize(struct {
+        token uint64;
+    }) -> (struct {
+        status FsStatus;
+    });
+
+    44: Unmount() -> (struct {
+        status FsStatus;
+    });
+};

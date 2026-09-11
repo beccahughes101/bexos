@@ -1,0 +1,10 @@
+package_name: "com.bexos.lib.dioxus"
+name: "BexOS Dioxus shared WASM UI library"
+package_kind: LIBRARY
+package_version { major: 0 minor: 2 patch: 0 }
+library_exports {
+  name: "bexos:wasm/dioxus@1.0.0"
+  path: "/pkg/lib/dioxus.wasm"
+  abi_version: 1
+  kind: WASM_COMPONENT
+}

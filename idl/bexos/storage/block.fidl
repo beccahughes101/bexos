@@ -1,0 +1,81 @@
+library bexos.storage.block;
+
+using bexos.kernel;
+
+/// Status mirror for the storage block wire ABI.
+type Status = strict enum : int32 {
+    OK = 0,
+    ERR_INVALID_HANDLE = -1,
+    ERR_ACCESS_DENIED = -2,
+    ERR_NO_MEMORY = -3,
+    ERR_BUFFER_TOO_SMALL = -4,
+    ERR_PEER_CLOSED = -5,
+    ERR_TIMED_OUT = -6,
+    ERR_ALREADY_EXISTS = -7,
+    ERR_INVALID_ARGS = -8,
+};
+
+type BlockFlags = strict bits : uint32 {
+    READ_ONLY = 0x00000001,
+    REMOVABLE = 0x00000002,
+    TRIM_SUPPORTED = 0x00000004,
+};
+
+type BlockOpcode = strict enum : uint8 {
+    READ = 1,
+    WRITE = 2,
+    FLUSH = 3,
+    TRIM = 4,
+};
+
+struct BlockInfo {
+    block_size uint32;
+    block_count uint64;
+    max_transfer_blocks uint32;
+    flags BlockFlags;
+};
+
+struct BlockRequest {
+    req_id uint64;
+    opcode BlockOpcode;
+    vmo_id uint32;
+    vmo_offset_blocks uint64;
+    device_block_offset uint64;
+    block_count uint32;
+};
+
+struct BlockResponse {
+    req_id uint64;
+    status Status;
+};
+
+protocol BlockDevice {
+    1: GetInfo() -> (struct {
+        info BlockInfo;
+    });
+
+    2: RegisterBuffer(resource struct {
+        vmo handle:VMO;
+    }) -> (struct {
+        status Status;
+        vmo_id uint32;
+    });
+
+    3: UnregisterBuffer(struct {
+        vmo_id uint32;
+    }) -> (struct {
+        status Status;
+    });
+
+    4: GetFifo() -> (resource struct {
+        status Status;
+        fifo_handle handle:CHANNEL;
+    });
+
+    /// Observable continuity marker for controller-owned DMA queues.
+    5: GetMigrationMarkers() -> (struct {
+        sq_physical uint64;
+        cq_physical uint64;
+        payload_physical uint64;
+    });
+};

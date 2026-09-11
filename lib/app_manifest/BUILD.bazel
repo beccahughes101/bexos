@@ -1,0 +1,5 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//build/platforms:architecture.bzl", "guest_select")
+package(default_visibility = ["//visibility:public"])
+rust_library(name = "app_manifest", srcs = glob(["src/**/*.rs"]), crate_name = "bexos_app_manifest", edition = "2024", rustc_flags = guest_select([], ["--cfg=bexos_arch_x86_64"]))
+rust_test(name = "tests", crate = ":app_manifest")

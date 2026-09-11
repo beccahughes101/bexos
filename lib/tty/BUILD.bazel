@@ -1,0 +1,30 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "tty",
+    crate_name = "bexos_tty",
+    srcs = glob(["src/**/*.rs"]),
+    edition = "2024",
+    deps = [
+        "//idl:kernel_fidl_rust",
+        "//idl:tty_fidl_rust",
+        "//lib/migration",
+        "//lib/userspace",
+    ],
+)
+
+rust_test(
+    name = "tty_tests",
+    crate = ":tty",
+)
+
+rust_library(
+    name = "tty_wasm",
+    target_compatible_with = ["@platforms//cpu:wasm32"],
+    crate_name = "bexos_tty",
+    srcs = glob(["src/**/*.rs"]),
+    edition = "2024",
+    deps = ["//idl:kernel_fidl_rust", "//idl:tty_fidl_rust", "//lib/migration"],
+)

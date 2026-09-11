@@ -1,0 +1,4 @@
+warmup: 32
+samples: 256
+width: 800
+height: 600

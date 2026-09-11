@@ -1,0 +1,9 @@
+package_name: "com.example.shell_fixture"
+name: "Terminal protocol fixture"
+processes {
+ name: "terminal"
+ runner: "elf"
+ lifecycle { update_strategy: HEART_TRANSPLANT }
+ handles { provides_interfaces: "bexos.shell.ShellProvider" }
+ runner_options { [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/terminal" } }
+}

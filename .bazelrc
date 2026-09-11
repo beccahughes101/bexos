@@ -1,0 +1,29 @@
+common --enable_bzlmod
+common --experimental_isolated_extension_usages
+common --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
+# Repository rules must not inherit workstation URL rewrites (for example,
+# rewriting public GitHub HTTPS dependencies to private SSH authentication).
+common --repo_env=GIT_CONFIG_GLOBAL=/dev/null
+
+build --announce_rc
+build --@rules_rust//rust/toolchain/channel=nightly
+build --cxxopt=-std=c++17
+build --host_cxxopt=-std=c++17
+test --test_output=errors
+test --test_tag_filters=-requires-qemu
+test:e2e --test_tag_filters=requires-qemu
+test:e2e --keep_going
+# QEMU regressions use optimized guest binaries, matching the documented matrix.
+build:e2e --compilation_mode=opt
+
+build:aarch64-none --platforms=//build/platforms:kernel_aarch64
+build:aarch64-none --noincompatible_enable_cc_toolchain_resolution
+
+build:wasm32-unknown --platforms=//build/platforms:wasm32_guest
+build:wasm32-unknown --noincompatible_enable_cc_toolchain_resolution
+
+# Select the guest without cross-compiling host tools or test executables.
+build:aarch64 --//build/platforms:guest_arch=aarch64
+build:x86_64 --//build/platforms:guest_arch=x86_64
+build:x86_64-none --config=x86_64
+build:x86_64-none --platforms=//build/platforms:kernel_x86_64

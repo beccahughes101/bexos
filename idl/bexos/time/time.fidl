@@ -1,0 +1,89 @@
+library bexos.time;
+
+type Status = strict enum : int32 {
+    OK = 0,
+    ERR_INVALID_ARGS = -8,
+    ERR_TIMED_OUT = -6,
+    ERR_NOT_FOUND = -10,
+    ERR_NETWORK_UNREACHABLE = -12,
+    ERR_UNSUPPORTED = -13,
+    ERR_IO = -14,
+};
+
+type ClockSource = strict enum : uint8 {
+    RTC_HARDWARE = 1,
+    SNTP_NETWORK = 2,
+    NTS_SECURE = 3,
+    CELLULAR_NITZ = 4,
+    MANUAL_USER = 5,
+};
+
+type SyncState = strict enum : uint8 {
+    UNSYNCED = 1,
+    SYNCED = 2,
+    FAILED = 3,
+    MANUAL = 4,
+};
+
+struct TimeQuality {
+    source ClockSource,
+    state SyncState,
+    stratum uint8,
+    root_dispersion_ns uint64,
+    last_synced_timestamp_ns uint64,
+    utc_offset_ns int64,
+    last_error Status,
+};
+
+@discoverable
+protocol TimeManager {
+    1: GetTimeQuality() -> (struct {
+        status Status,
+        quality TimeQuality,
+    });
+
+    2: ForceSync() -> (struct {
+        status Status,
+        quality TimeQuality,
+    });
+
+    3: SetManualTime(struct {
+        utc_timestamp_ns int64,
+    }) -> (struct {
+        status Status,
+        quality TimeQuality,
+    });
+
+    4: SetTimeServers(struct {
+        servers vector<string:128>:8,
+        use_nts bool,
+    }) -> (struct {
+        status Status,
+    });
+
+    5: WatchTimeQuality(resource struct {
+        watcher client_end:TimeQualityWatcher;
+    }) -> (struct {
+        status Status,
+    });
+};
+
+protocol TimeQualityWatcher {
+    1: OnTimeQuality(struct {
+        quality TimeQuality;
+    });
+};
+
+@discoverable
+protocol RtcHardware {
+    1: ReadUtc() -> (struct {
+        status Status,
+        utc_timestamp_ns int64,
+    });
+
+    2: WriteUtc(struct {
+        utc_timestamp_ns int64,
+    }) -> (struct {
+        status Status,
+    });
+};

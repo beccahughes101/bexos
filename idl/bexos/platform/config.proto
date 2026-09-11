@@ -1,0 +1,137 @@
+syntax = "proto3";
+
+package bexos.platform;
+
+message PlatformConfig {
+  PlatformMetadata metadata = 1;
+  RunnerPolicy runner_policy = 2;
+  TeePolicy tee_policy = 3;
+  DriverPolicy driver_policy = 4;
+  UpdatePolicy update_policy = 5;
+  AppLifecyclePolicy app_lifecycle_policy = 6;
+  repeated InterfaceDefault interface_defaults = 7;
+}
+
+message PlatformMetadata {
+  string target_board = 1;
+  string platform_profile = 2;
+  uint32 min_platform_version = 3;
+  Architecture architecture = 4;
+}
+
+enum Architecture {
+  ARCHITECTURE_UNSPECIFIED = 0;
+  ARCH_AARCH64 = 1;
+  ARCH_RISCV64 = 2;
+  ARCH_X86_64 = 3;
+}
+
+message RunnerPolicy {
+  RunnerTier default_tier = 1;
+  bool allow_microvm_runner = 2;
+  MicrovmConstraints microvm_constraints = 3;
+  bool allow_native_elf_runner = 4;
+  repeated NativeRunnerGrant native_elf_runner_allowlist = 5;
+  repeated RealtimeSchedulingGrant realtime_scheduling_allowlist = 6;
+}
+
+enum RunnerTier {
+  RUNNER_TIER_UNSPECIFIED = 0;
+  TIER_1_WASM = 1;
+  TIER_2_MICROVM = 2;
+  TIER_0_PLATFORM_ELF = 3;
+}
+
+message MicrovmConstraints {
+  uint32 max_vram_allocation_mb = 1;
+  bool allow_network_bridge = 2;
+  bool allow_pci_passthrough = 3;
+}
+
+message NativeRunnerGrant {
+  string package_id = 1;
+  string expected_signer = 2;
+}
+
+message RealtimeSchedulingGrant {
+  string package_id = 1;
+  string expected_signer = 2;
+}
+
+message TeePolicy {
+  bool enforce_secure_boot = 1;
+  bool rpmb_anti_rollback = 2;
+  string orchestrator_verification = 3;
+  repeated string allowed_trusted_apps = 4;
+  SecureStorageBackend secure_storage_backend = 5;
+  bool require_secure_persistent_keys = 6;
+  // Permit the resident x86 recovery owner to authenticate a newer committed
+  // firmware measurement instead of the installation's pinned bootstrap hash.
+  bool allow_authenticated_firmware_selection = 7;
+}
+
+enum SecureStorageBackend {
+  SECURE_STORAGE_BACKEND_UNSPECIFIED = 0;
+  HARDWARE_RPMB = 1;
+  QEMU_EMULATED_RPMB = 2;
+}
+
+message DriverPolicy {
+  DriverUnmatchedAction default_unmatched_action = 1;
+  repeated DriverGrant tier_1_allowlist = 2;
+  Tier2DriverRules tier_2_rules = 3;
+}
+
+enum DriverUnmatchedAction {
+  DRIVER_UNMATCHED_ACTION_UNSPECIFIED = 0;
+  REJECT_AND_ISOLATE = 1;
+}
+
+message DriverGrant {
+  string package_id = 1;
+  string expected_signer = 2;
+}
+
+message Tier2DriverRules {
+  bool enforce_strict_iommu = 1;
+  bool allow_raw_mmio = 2;
+  uint32 max_dma_bandwidth_mbps = 3;
+}
+
+message UpdatePolicy {
+  string metadata_base_url = 1;
+  string targets_base_url = 2;
+  repeated UpdateRootKey trusted_root_keys = 3;
+  bytes trusted_root_metadata = 4;
+  string app_target_prefix = 5;
+  string kernel_target_name = 6;
+  string tee_target_name = 7;
+  uint64 max_metadata_bytes = 8;
+  uint64 max_target_bytes = 9;
+  UpdateApplyPolicy default_apply_policy = 10;
+}
+
+message UpdateRootKey {
+  string key_id = 1;
+  string public_key = 2;
+}
+
+enum UpdateApplyPolicy {
+  UPDATE_APPLY_POLICY_UNSPECIFIED = 0;
+  CHECK_ONLY = 1;
+  STAGE_ONLY = 2;
+  APPLY_IMMEDIATELY = 3;
+}
+
+message AppLifecyclePolicy {
+  uint64 probation_window_seconds = 1;
+  uint64 crash_window_seconds = 2;
+  uint32 crash_threshold = 3;
+  uint64 restart_delay_seconds = 4;
+}
+
+message InterfaceDefault {
+  string interface_name = 1;
+  string package_name = 2;
+  string process_name = 3;
+}

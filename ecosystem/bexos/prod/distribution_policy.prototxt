@@ -1,0 +1,15 @@
+profile: "prod"
+deployable: false
+template_only: true
+direct_web_installs: false
+metadata_base_url: "https://updates.invalid.bexos.example/metadata"
+targets_base_url: "https://updates.invalid.bexos.example/targets"
+allowed_tuf_origins: "https://updates.invalid.bexos.example"
+revocation_target: "trust/revocation.pb"
+well_known_path: "/.well-known/bexos-manifest.json"
+max_metadata_bytes: 1048576
+max_target_bytes: 67108864
+max_redirects: 0
+minimum_trusted_unix_time: 1700000000
+reserved_package_prefixes: "bexos."
+reserved_package_prefixes: "com.bexos."

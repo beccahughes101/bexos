@@ -1,0 +1,19 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "avb",
+    srcs = ["lib.rs"],
+    crate_name = "bexos_avb",
+    edition = "2024",
+    rustc_flags = ["-C", "opt-level=2"],
+    deps = [
+        "@crates__sha2-0.11.0//:sha2",
+    ],
+)
+
+rust_test(
+    name = "avb_tests",
+    crate = ":avb",
+)

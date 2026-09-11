@@ -1,0 +1,32 @@
+library bexos.kernel;
+
+struct FairProfile {
+    priority uint8;
+    weight uint32;
+};
+
+struct DeadlineProfile {
+    capacity_ns uint64;
+    deadline_ns uint64;
+    period_ns uint64;
+};
+
+/// Scheduling profile type.
+type SchedulingProfileInfo = strict union {
+    1: fair FairProfile;
+    2: deadline DeadlineProfile;
+};
+
+struct CpuMask {
+    mask uint64;
+};
+
+/// Capability-gated profile minting.
+protocol ProfileProvider {
+    CreateProfile(struct {
+        info SchedulingProfileInfo
+    }) -> (resource struct {
+        status Status,
+        profile_handle handle:PROFILE
+    });
+};

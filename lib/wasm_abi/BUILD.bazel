@@ -1,0 +1,4 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+package(default_visibility = ["//visibility:public"])
+rust_library(name = "wasm_abi", srcs = glob(["src/*.rs"]), crate_name = "bexos_wasm_abi", edition = "2024")
+rust_test(name = "tests", crate = ":wasm_abi")

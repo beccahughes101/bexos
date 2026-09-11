@@ -1,0 +1,437 @@
+//! Broker-authenticated shell hierarchy. Unattached views never become roots.
+use crate::state::Scene;
+use bexos_graphics_runtime as rt;
+use bexos_migration::{
+    Error,
+    codec::{Decoder, Encoder},
+};
+use bexos_userspace::{Channel, Memory, service_binding::ServiceBinding};
+use graphics_fidl::*;
+use std::collections::BTreeMap;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Owner {
+    pub package: String,
+    pub uid: u64,
+    pub role: u64,
+    pub epoch: u64,
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Composition {
+    pub enabled: bool,
+    pub sysui: String,
+    pub userui: String,
+    pub uid: u64,
+    pub epoch: u64,
+    pub locked: bool,
+    pub hide_reply: u64,
+    pub hide_after_us: u64,
+    pub user_focus: u64,
+    pub owners: BTreeMap<u64, Owner>,
+}
+impl Composition {
+    pub fn role(&self, id: u64) -> u64 {
+        self.owners.get(&id).map_or(0, |o| match o.role {
+            1 if o.uid == 0 && o.package == self.sysui => 1,
+            2 if o.uid != 0
+                && o.uid == self.uid
+                && o.package == self.userui
+                && o.epoch == self.epoch =>
+            {
+                2
+            }
+            _ => 0,
+        })
+    }
+    pub fn root(&self) -> Option<u64> {
+        self.owners.keys().find(|id| self.role(**id) == 1).copied()
+    }
+    pub fn visible(&self, id: u64) -> bool {
+        !self.enabled
+            || self.role(id) == 1
+            || (!self.locked
+                && self.root().is_some()
+                && self.uid != 0
+                && self
+                    .owners
+                    .get(&id)
+                    .is_some_and(|o| o.uid == self.uid && (o.role == 0 || self.role(id) == 2)))
+    }
+    pub fn can_embed(&self, parent: u64, child: u64) -> bool {
+        !self.enabled
+            || match self.role(parent) {
+                1 => self.role(child) == 2,
+                2 => {
+                    self.role(child) == 0
+                        && self
+                            .owners
+                            .get(&child)
+                            .is_some_and(|o| o.uid == self.uid && o.role == 0)
+                }
+                _ => false,
+            }
+    }
+    pub fn encode(&self) -> Vec<u8> {
+        let mut w = Encoder::new();
+        w.word(4);
+        w.word(self.enabled as u64);
+        w.text(&self.sysui);
+        w.text(&self.userui);
+        w.word(self.uid);
+        w.word(self.epoch);
+        w.word(self.locked as u64);
+        w.word(self.hide_reply);
+        w.word(self.hide_after_us);
+        w.word(self.user_focus);
+        w.word(self.owners.len() as u64);
+        for (id, o) in &self.owners {
+            w.word(*id);
+            w.text(&o.package);
+            w.word(o.uid);
+            w.word(o.role);
+            w.word(o.epoch);
+        }
+        w.finish()
+    }
+    pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
+        let mut r = Decoder::new(bytes);
+        let version = r.word()?;
+        if !(1..=4).contains(&version) {
+            return Err(Error::UnsupportedVersion);
+        }
+        let mut s = Self {
+            enabled: r.flag()?,
+            sysui: r.text(128)?.into(),
+            userui: r.text(128)?.into(),
+            uid: r.word()?,
+            epoch: if version >= 4 { r.word()? } else { 0 },
+            locked: r.flag()?,
+            hide_reply: if version >= 2 { r.word()? } else { 0 },
+            hide_after_us: if version >= 2 { r.word()? } else { 0 },
+            user_focus: if version >= 3 { r.word()? } else { 0 },
+            owners: BTreeMap::new(),
+        };
+        for _ in 0..r.count(16)? {
+            let id = r.word()?;
+            let o = Owner {
+                package: r.text(128)?.into(),
+                uid: r.word()?,
+                role: r.word()?,
+                epoch: if version >= 4 { r.word()? } else { 0 },
+            };
+            if id == 0 || o.role > 2 || s.owners.insert(id, o).is_some() {
+                return Err(Error::InvalidData);
+            }
+        }
+        r.finish()?;
+        Ok(s)
+    }
+}
+
+pub fn register(s: &mut Scene, id: u64, b: &ServiceBinding) {
+    let role = b
+        .permission_values
+        .iter()
+        .find_map(|v| v.strip_prefix("shell-role:"))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let epoch = b
+        .permission_values
+        .iter()
+        .find_map(|v| v.strip_prefix("shell-session:"))
+        .and_then(|v| v.parse().ok());
+    s.shell.owners.insert(
+        id,
+        Owner {
+            package: b.caller_package.clone().unwrap_or_default(),
+            uid: b.caller_uid.unwrap_or(u64::MAX),
+            role: if role == 2 && epoch.is_none() {
+                0
+            } else {
+                role
+            },
+            epoch: epoch.unwrap_or(0),
+        },
+    );
+    // References are generated by scened, never guessed from process IDs.
+    if let Ok((token, peer)) = Channel::pair() {
+        let _ = Memory::close(peer.0);
+        if let Ok((identity, _)) = Memory::channel_identity(token.0) {
+            s.controls.views.insert(
+                id,
+                crate::controls::View {
+                    token: token.0,
+                    identity,
+                    generation: 0,
+                },
+            );
+        } else {
+            let _ = Memory::close(token.0);
+        }
+    }
+    s.shell
+        .owners
+        .retain(|owner, _| s.controls.stacking.contains(owner));
+}
+
+// Only appd owns the manager channel on which this message is accepted.
+pub fn configure(s: &mut Scene, bytes: &[u8], handles: &[u64]) {
+    if handles.len() != 1 {
+        rt::close(handles);
+        return;
+    }
+    if s.shell.hide_reply != 0 {
+        rt::reply(
+            Channel(handles[0]),
+            &FlatlandSessionPresentResponse {
+                status: Status::ErrBusy,
+            },
+        );
+        rt::close(handles);
+        return;
+    }
+    // The root-loss path may already have marked the session locked while an
+    // earlier desktop frame is still in flight. It needs the same scanout barrier.
+    let was_exposed = s.shell.enabled && s.shell.uid != 0;
+    let result = (|| {
+        let mut r = Decoder::new(bytes);
+        let sysui = r.text(128)?.to_string();
+        let userui = r.text(128)?.to_string();
+        let uid = r.word()?;
+        let locked = r.flag()?;
+        let epoch = r.word()?;
+        r.finish()?;
+        if uid != s.shell.uid || epoch != s.shell.epoch {
+            s.shell.user_focus = 0;
+        }
+        if locked && !s.shell.locked {
+            if let Some(focus) = s.input.router.focused.filter(|id| {
+                s.shell
+                    .owners
+                    .get(id)
+                    .is_some_and(|o| o.uid == uid && uid != 0)
+            }) {
+                // Clicking Lock focuses the desktop's button first; retain the
+                // previously focused app rather than replacing it with chrome.
+                if s.shell.role(focus) == 0 || s.shell.user_focus == 0 {
+                    s.shell.user_focus = focus;
+                }
+            }
+        }
+        s.shell.sysui = sysui;
+        s.shell.userui = userui;
+        s.shell.uid = uid;
+        s.shell.epoch = epoch;
+        s.shell.locked = locked;
+        for owner in s.sessions.keys().copied().collect::<Vec<_>>() {
+            if !s.shell.visible(owner) {
+                s.input.reset_view(owner);
+            }
+        }
+        let focus = if !locked
+            && s.shell.visible(s.shell.user_focus)
+            && s.sessions.contains_key(&s.shell.user_focus)
+        {
+            Some(s.shell.user_focus)
+        } else {
+            s.shell.root()
+        };
+        if let Some(focus) = focus {
+            s.input.focus(focus);
+        } else {
+            s.input.router.focused = None;
+        }
+        s.controls.changed();
+        s.dirty = true;
+        s.full_damage = true;
+        if let Some(surface) = s.canvas.as_ref().map(|c| c.surface) {
+            crate::world::compile(s, surface).map_err(|_| Error::InvalidData)?;
+        }
+        Ok::<_, Error>(())
+    })();
+    // Acknowledge hiding only after a frame composed after this transition
+    // reaches scanout; usersd must not lock while the old desktop is still shown.
+    if result.is_ok() && was_exposed && (s.shell.locked || s.shell.uid == 0) && s.canvas.is_some() {
+        s.shell.hide_reply = handles[0];
+        s.shell.hide_after_us = rt::now_us();
+        s.frozen = None;
+        return;
+    }
+    rt::reply(
+        Channel(handles[0]),
+        &FlatlandSessionPresentResponse {
+            status: if result.is_ok() {
+                Status::Ok
+            } else {
+                Status::ErrInvalidArgs
+            },
+        },
+    );
+    rt::close(handles);
+}
+
+pub fn request(s: &mut Scene, channel: Channel, ordinal: u64, bytes: &[u8], handles: &[u64]) {
+    let role = s.shell.role(channel.0);
+    if ordinal == 25 {
+        let allowed = role != 0
+            && handles.is_empty()
+            && FlatlandSessionGetShellViewsRequest::decode(bytes, &[]).is_ok();
+        let mut views = Vec::new();
+        if allowed {
+            for (id, view) in &s.controls.views {
+                if !s.sessions.contains_key(id) || !s.shell.can_embed(channel.0, *id) {
+                    continue;
+                }
+                let Some(o) = s.shell.owners.get(id) else {
+                    continue;
+                };
+                // Wait for the initial committed root. Guessing dimensions
+                // before the first frame permanently mis-scales an embedding.
+                let graph = &s.sessions[id].committed;
+                let Some(surface) = graph
+                    .root
+                    .and_then(|root| graph.nodes.get(&root))
+                    .and_then(|n| n.content.map(|(_, surface)| surface))
+                else {
+                    continue;
+                };
+                let Ok(token) = Memory::duplicate(view.token, 1 | 32) else {
+                    continue;
+                };
+                views.push(ShellView {
+                    token: HandleRef { raw: token },
+                    view_id: view.identity,
+                    package_id: &o.package,
+                    width: surface.width,
+                    height: surface.height,
+                    focused: s.input.router.focused == Some(*id),
+                });
+            }
+        }
+        let surface = s.canvas.as_ref().map(|c| c.surface);
+        reply_views(
+            channel,
+            &FlatlandSessionGetShellViewsResponse {
+                status: if allowed {
+                    Status::Ok
+                } else {
+                    Status::ErrAccessDenied
+                },
+                width: surface.map_or(800, |v| v.width),
+                height: surface.map_or(600, |v| v.height),
+                views: WireVector::from_slice(&views),
+            },
+        );
+        // Channel send transfers the returned references.
+    } else {
+        let result = FlatlandSessionFocusShellViewRequest::decode(bytes, &rt::refs(handles))
+            .ok()
+            .and_then(|q| s.controls.lookup(q.token.raw).ok())
+            .filter(|id| {
+                role != 0
+                    && s.shell.visible(*id)
+                    && (*id == channel.0 || s.shell.can_embed(channel.0, *id))
+            });
+        if let Some(id) = result {
+            s.input.focus(id);
+            if s.shell.role(id) == 0 {
+                s.shell.user_focus = id;
+            }
+        }
+        rt::reply(
+            channel,
+            &FlatlandSessionPresentResponse {
+                status: if result.is_some() {
+                    Status::Ok
+                } else {
+                    Status::ErrAccessDenied
+                },
+            },
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn lock_and_cross_user_boundaries_survive_migration() {
+        let mut s = Composition {
+            enabled: true,
+            sysui: "system".into(),
+            userui: "desktop".into(),
+            uid: 1000,
+            ..Default::default()
+        };
+        for (id, package, uid, role) in [
+            (1, "system", 0, 1),
+            (2, "desktop", 1000, 2),
+            (3, "app", 1000, 0),
+            (4, "other", 1001, 0),
+        ] {
+            s.owners.insert(
+                id,
+                Owner {
+                    package: package.into(),
+                    uid,
+                    role,
+                    epoch: 0,
+                },
+            );
+        }
+        assert_eq!(s.root(), Some(1));
+        assert!(s.can_embed(1, 2));
+        assert!(s.can_embed(2, 3));
+        assert!(!s.can_embed(2, 1));
+        assert!(!s.can_embed(2, 4));
+        assert!(!s.can_embed(3, 2));
+        s.epoch = 1;
+        assert!(!s.visible(2));
+        assert!(!s.can_embed(1, 2));
+        assert!(!s.can_embed(2, 3));
+        s.owners.get_mut(&2).unwrap().epoch = 1;
+        assert!(s.visible(2));
+        assert!(s.can_embed(1, 2));
+        s.locked = true;
+        assert!(s.visible(1));
+        assert!(!s.visible(2));
+        assert!(!s.visible(3));
+        assert_eq!(Composition::decode(&s.encode()).unwrap(), s);
+        s.owners.remove(&1);
+        s.locked = false;
+        assert!(!s.visible(3));
+    }
+}
+
+fn reply_views(channel: Channel, value: &impl FidlEncode) {
+    let mut bytes = vec![0; 8192];
+    let mut hs = [HandleRef { raw: 0 }; 16];
+    match value.encode(&mut bytes, &mut hs) {
+        Ok(e) => {
+            let handles = hs[..e.handles].iter().map(|h| h.raw).collect::<Vec<_>>();
+            if channel.send(&bytes[..e.bytes], &handles).is_err() {
+                rt::close(&handles);
+            }
+        }
+        Err(_) => {
+            for h in hs {
+                if h.raw != 0 {
+                    let _ = Memory::close(h.raw);
+                }
+            }
+        }
+    }
+}
+
+pub fn presented(s: &mut Scene, frame_time_us: u64, frozen: bool) {
+    if s.shell.hide_reply != 0 && !frozen && frame_time_us >= s.shell.hide_after_us {
+        let channel = Channel(s.shell.hide_reply);
+        s.shell.hide_reply = 0;
+        s.shell.hide_after_us = 0;
+        rt::reply(
+            channel,
+            &FlatlandSessionPresentResponse { status: Status::Ok },
+        );
+        rt::close(&[channel.0]);
+    }
+}

@@ -1,0 +1,91 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_shared_library")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "net",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/shared.rs"]),
+    crate_name = "bexos_net",
+    edition = "2024",
+    deps = [
+        "//idl:net_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//idl:trust_fidl_rust",
+        "//lib/userspace",
+    ],
+)
+
+rust_library(
+    name = "net_secure",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/shared.rs"]),
+    crate_features = ["std"],
+    crate_name = "bexos_net",
+    edition = "2024",
+    deps = [
+        "//idl:net_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//idl:trust_fidl_rust",
+        "//lib/boot",
+        "//lib/redb:redb_bexos_std",
+        "//lib/trust_store:trust_store_bexos_std",
+        "//lib/userspace",
+        "@crates//:rustls",
+    ],
+)
+
+rust_library(
+    name = "net_std",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/shared.rs"]),
+    crate_features = ["std"],
+    crate_name = "bexos_net",
+    edition = "2024",
+    deps = [
+        "//idl:kernel_fidl_rust",
+        "//idl:net_fidl_rust",
+        "//idl:trust_fidl_rust",
+        "//lib/boot",
+        "//lib/redb:redb_bexos_std",
+        "//lib/trust_store:trust_store_bexos_std",
+        "//lib/userspace",
+        "@crates//:rustls",
+    ],
+)
+
+std_shared_library(
+    name = "net_shared",
+    srcs = ["src/shared.rs"],
+    crate_root = "src/shared.rs",
+    crate_features = ["bexos_libc_runtime"],
+    crate_name = "bexos_net",
+    soname = "libbexos_net.so",
+    deps = [],
+)
+
+rust_test(
+    name = "net_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "net_tests",
+    edition = "2024",
+    deps = [
+        ":net_secure",
+        "//idl:net_fidl_rust",
+    ],
+)
+
+app_manifest(name = "package_manifest", src = "package/net.prototxt")
+
+app_archive(
+    name = "net_archive",
+    manifest = ":package_manifest",
+    entries = {"lib/libbexos_net.so": ":net_shared"},
+    compression = "zstd",
+)
+
+app_archive(
+    name = "replacement_archive",
+    manifest = ":package_manifest",
+    entries = {"lib/libbexos_net.so": ":net_shared"},
+    compression = "zstd",
+)

@@ -1,0 +1,4 @@
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+package(default_visibility = ["//visibility:public"])
+std_service_binary(name = "storage_verify", srcs = ["main.rs", "progress.rs"], crate_name = "storage_verify", deps = ["//idl:fs_fidl_rust", "//idl:block_fidl_rust"])
+app_manifest(name = "manifest", src = "manifest.prototxt")

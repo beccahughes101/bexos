@@ -1,0 +1,10 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+package(default_visibility = ["//visibility:public"])
+rust_binary(name = "wat", srcs = ["main.rs"], edition = "2024", deps = ["@crates//:wat"])
+rust_binary(name = "digest", srcs = ["digest.rs"], edition = "2024", deps = ["@crates//:sha2"])
+rust_binary(name = "child_fixture", srcs = ["child_fixture.rs"], edition = "2024", deps = ["@crates//:wat"])
+
+rust_binary(name = "service_fixture", srcs = ["service_fixture.rs"], edition = "2024", deps = ["@crates//:wat"])
+
+rust_binary(name = "precompile", srcs = ["precompile.rs"], edition = "2024", deps = ["//lib/wasm_engine", "//lib/wasm_abi", "@crates//:wasmtime", "@crates//:sha2", "@crates//:ruzstd"])
+rust_binary(name = "compose_dioxus", srcs = ["compose_dioxus.rs"], edition = "2024", deps = ["@crates//:wac-graph"])

@@ -1,0 +1,48 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "domain_association",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "bexos_domain_association",
+    edition = "2024",
+    deps = [
+        "//lib/redb",
+    ],
+)
+
+rust_library(
+    name = "domain_association_host",
+    srcs = glob(["src/**/*.rs"]),
+    crate_features = ["std", "redb_backend"],
+    crate_name = "bexos_domain_association",
+    edition = "2024",
+    deps = [
+        "//lib/redb:redb_host",
+        "@crates//:redb",
+    ],
+)
+
+rust_library(
+    name = "domain_association_bexos_std",
+    srcs = glob(["src/**/*.rs"]),
+    crate_features = ["std", "redb_backend"],
+    crate_name = "bexos_domain_association",
+    edition = "2024",
+    deps = [
+        "//lib/redb:redb_bexos_std",
+        "@crates//:redb",
+    ],
+)
+
+rust_test(
+    name = "domain_association_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "domain_association_tests",
+    edition = "2024",
+    deps = [
+        ":domain_association_host",
+        "//lib/redb:redb_host",
+    ],
+)

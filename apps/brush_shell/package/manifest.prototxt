@@ -1,0 +1,85 @@
+package_name: "bexos.app.brush_shell"
+name: "Brush shell"
+package_version { major: 0 minor: 0 patch: 0 }
+processes {
+  name: "terminal"
+  runner: "wasm"
+  service: true
+  lifecycle { update_strategy: HEART_TRANSPLANT }
+  handles { provides_interfaces: "bexos.shell.ShellProvider" }
+  runner_options {
+    [type.googleapis.com/bexos.app.WasmRunnerOptions] {
+      path: "/pkg/bin/brush.wasm"
+      arguments: "brush"
+      limits {
+        max_module_bytes: 33554432
+        max_memory_pages: 2048
+        max_stack_bytes: 1048576
+        max_handles: 512
+      }
+    }
+  }
+}
+
+commands { command_name: "ls" process_name: "ls" }
+processes {
+  name: "ls"
+  runner: "wasm"
+  runner_options {
+    [type.googleapis.com/bexos.app.WasmRunnerOptions] {
+      path: "/pkg/bin/utilities.wasm"
+      arguments: "ls"
+    }
+  }
+}
+
+commands { command_name: "cat" process_name: "cat" }
+processes {
+  name: "cat"
+  runner: "wasm"
+  runner_options {
+    [type.googleapis.com/bexos.app.WasmRunnerOptions] {
+      path: "/pkg/bin/utilities.wasm"
+      arguments: "cat"
+    }
+  }
+}
+
+commands { command_name: "grep" process_name: "grep" }
+processes {
+  name: "grep"
+  runner: "wasm"
+  runner_options {
+    [type.googleapis.com/bexos.app.WasmRunnerOptions] {
+      path: "/pkg/bin/utilities.wasm"
+      arguments: "grep"
+    }
+  }
+}
+
+commands { command_name: "mkdir" process_name: "mkdir" }
+processes {
+  name: "mkdir"
+  runner: "wasm"
+  runner_options {
+    [type.googleapis.com/bexos.app.WasmRunnerOptions] {
+      path: "/pkg/bin/utilities.wasm"
+      arguments: "mkdir"
+    }
+  }
+}
+
+services_consumed {
+  name: "Opener"
+  link_type: REQUIRED
+  capabilities {
+    capability: "Public"
+    methods { ordinal: 6 link_type: REQUIRED }
+  }
+}
+
+commands { command_name: "ps" process_name: "ps" }
+processes { name: "ps" runner: "wasm" runner_options { [type.googleapis.com/bexos.app.WasmRunnerOptions] { path: "/pkg/bin/utilities.wasm" arguments: "ps" } } }
+
+commands { command_name: "kill" process_name: "kill" }
+processes { name: "kill" runner: "wasm" runner_options { [type.googleapis.com/bexos.app.WasmRunnerOptions] { path: "/pkg/bin/utilities.wasm" arguments: "kill" } } }

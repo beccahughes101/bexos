@@ -1,0 +1,48 @@
+library bexos.tty;
+using bexos.kernel;
+
+struct WindowSize {
+    rows uint16;
+    cols uint16;
+    pixel_width uint32;
+    pixel_height uint32;
+};
+type TerminalMode = strict bits : uint32 {
+    ECHO = 1;
+    CANONICAL = 2;
+    ISIG = 4;
+};
+type Signal = strict enum : uint32 {
+    INTERRUPT = 1;
+    TERMINATE = 2;
+    SUSPEND = 3;
+    KILL = 4;
+};
+
+// The provider implements this protocol and retains the guest stream ends.
+protocol PtySession {
+    // Transfer stdin-writer, stdout-reader, and stderr-reader exactly once.
+    // Success requires three socket handles; errors carry absent handles.
+    1: TakeIoStreams() -> (resource struct {
+        status bexos.kernel.Status;
+        stdin_stream handle:OPTIONAL;
+        stdout_stream handle:OPTIONAL;
+        stderr_stream handle:OPTIONAL;
+    });
+    2: SetWindowSize(struct { size WindowSize; }) -> (struct {
+        status bexos.kernel.Status;
+    });
+    3: SetTerminalMode(struct { flags TerminalMode; }) -> (struct {
+        status bexos.kernel.Status;
+    });
+    4: SendSignal(struct { signal Signal; }) -> (struct {
+        status bexos.kernel.Status;
+    });
+    // Exit is distinct from Close: the frontend drains output before closing.
+    5: GetStatus() -> (struct {
+        status bexos.kernel.Status;
+        exited bool;
+        exit_code int32;
+    });
+    6: Close() -> (struct { status bexos.kernel.Status; });
+};

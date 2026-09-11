@@ -1,0 +1,71 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "usbd_lib",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_name = "bexos_usbd",
+    edition = "2024",
+    deps = [
+        "//idl:hardware_manager_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//idl:usb_host_fidl_rust",
+        "//lib/migration",
+        "//lib/usb_host",
+        "//lib/userspace",
+        "//lib/userspace_async",
+        "@crates//:tokio",
+    ],
+)
+
+std_service_binary(
+    name = "usbd_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_usbd_elf",
+    deps = [
+        ":usbd_lib",
+        "@crates//:tokio",
+    ],
+)
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_usbd_replacement",
+    deps = [
+        ":usbd_lib",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "usbd_tests",
+    edition = "2024",
+    deps = [
+        ":usbd_lib",
+        "//idl:usb_host_fidl_rust",
+        "//lib/usb_host",
+        "//lib/userspace",
+    ],
+)
+
+app_manifest(name = "package_manifest", src = "package/usbd.prototxt")
+
+app_archive(
+    name = "usbd",
+    manifest = ":package_manifest",
+    entries = {"bin/usbd": ":usbd_elf"},
+    compression = "zstd",
+)
+
+app_archive(
+    name = "replacement_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/usbd": ":replacement_elf"},
+    compression = "zstd",
+)

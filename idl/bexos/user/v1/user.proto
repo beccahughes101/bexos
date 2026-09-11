@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package bexos.user.v1;
+
+enum UserStatus {
+  USER_STATUS_UNSPECIFIED = 0;
+  USER_STATUS_OK = 1;
+  USER_STATUS_DISABLED = 2;
+}
+
+enum AuthenticatorKind {
+  AUTHENTICATOR_KIND_UNSPECIFIED = 0;
+  AUTHENTICATOR_KIND_PASSWORD = 1;
+}
+
+message User {
+  UserRecord record = 1;
+  repeated Authenticator authenticators = 2;
+  UserFilesystem filesystem = 3;
+}
+
+message UserRecord {
+  uint32 uid = 1;
+  string name = 2;
+  string display_name = 3;
+  UserStatus status = 4;
+  uint64 created_generation = 5;
+  uint64 updated_generation = 6;
+}
+
+message UserFilesystem {
+  string root_path = 1;
+  bool encrypted = 2;
+  bool unlocked = 3;
+}
+
+message Authenticator {
+  uint64 authenticator_id = 1;
+  AuthenticatorKind kind = 2;
+  string label = 3;
+  PasswordAuthenticator password = 4;
+}
+
+message PasswordAuthenticator {
+  uint64 secure_user_id = 1;
+  bytes gatekeeper_password_handle = 2;
+  bytes auth_bound_hmac_key_blob = 3;
+}

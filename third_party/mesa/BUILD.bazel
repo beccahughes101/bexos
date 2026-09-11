@@ -1,0 +1,70 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+exports_files(["sources.BUILD.bazel", "headers.bzl", "extract_headers.py"])
+genrule(
+    name = "transport_constants",
+    srcs = ["@mesa//:sources", "@mesa//:root"],
+    tools = ["transport_constants.py"],
+    outs = ["transport_constants.rs"],
+    cmd = "python3 $(location transport_constants.py) $(location @mesa//:root) $@",
+)
+rust_library(
+    name = "transport_protocol",
+    srcs = [":transport_constants"],
+    crate_name = "mesa_venus_protocol",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+)
+genrule(
+    name="vulkan_generated",
+    srcs=["@mesa//:sources","@mesa//:root","@mesa_mako//:sources","@mesa_mako//:root","@mesa_markupsafe//:sources","@mesa_markupsafe//:root", "@mesa_pyyaml//:sources", "@mesa_pyyaml//:root"],
+    tools=["generate.py"],
+    outs=["generated/u_format_table.c", "generated/format_srgb.c", "generated/vn_entrypoints.c", "generated/vk_dispatch_trampolines.c", "generated/vk_format_info.c", "generated/vk_cmd_enqueue_entrypoints.c", "generated/vk_physical_device_spirv_caps.c", "generated/vk_synchronization_helpers.c","generated/vn_entrypoints.h", "generated/vk_dispatch_trampolines.h", "generated/vk_format_info.h", "generated/vk_cmd_enqueue_entrypoints.h", "generated/git_sha1.h", "generated/driconf_static.h", "generated/util/format/u_format_gen.h", "generated/util/format/u_format_pack.h", "generated/vk_struct_type_cast.h","generated/vk_dispatch_table.c","generated/vk_dispatch_table.h","generated/vk_extensions.c","generated/vk_extensions.h","generated/vk_enum_to_str.c","generated/vk_enum_to_str.h","generated/vk_enum_defines.h",
+          "generated/vk_common_entrypoints.c", "generated/vk_common_entrypoints.h",
+          "generated/vk_cmd_queue.c", "generated/vk_cmd_queue.h",
+          "generated/vk_physical_device_features.c", "generated/vk_physical_device_features.h",
+          "generated/vk_physical_device_properties.c", "generated/vk_physical_device_properties.h",
+          "generated/compiler/spirv/spirv_info.h", "generated/spirv_info.c"],
+    cmd="python3 $(location generate.py) --mesa $(location @mesa//:root) --mako $(location @mesa_mako//:root) --markupsafe $(location @mesa_markupsafe//:root) --pyyaml $(location @mesa_pyyaml//:root) --output $(RULEDIR)/generated",
+    visibility=["//visibility:public"],
+)
+cc_library(
+    name = "generated_headers",
+    hdrs = ["generated/vn_entrypoints.h", "generated/vk_dispatch_trampolines.h", "generated/vk_format_info.h", "generated/vk_cmd_enqueue_entrypoints.h", "generated/git_sha1.h", "generated/driconf_static.h", "generated/util/format/u_format_gen.h", "generated/util/format/u_format_pack.h", "generated/vk_struct_type_cast.h", "generated/vk_dispatch_table.h", "generated/vk_extensions.h", "generated/vk_enum_to_str.h", "generated/vk_enum_defines.h", "generated/vk_common_entrypoints.h", "generated/vk_cmd_queue.h", "generated/vk_physical_device_features.h", "generated/vk_physical_device_properties.h", "generated/compiler/spirv/spirv_info.h"],
+    includes = ["generated", "generated/compiler/spirv", "generated/util/format"],
+    visibility = ["//visibility:public"],
+)
+cc_library(
+    name = "bexos_platform_objects",
+    srcs = ["platform/renderer.c", "platform/memory.c", "platform/sync.c"],
+    hdrs = ["platform/internal.h", "platform/transport.h"],
+    copts = ["-std=c11", "-ffunction-sections", "-fdata-sections", "-fvisibility=hidden", "-Wall", "-Wextra", "-Wno-unused-parameter"],
+    deps = ["@mesa//:headers"],
+    visibility = ["//visibility:public"],
+)
+cc_library(
+    name = "generated_objects",
+    srcs = ["generated/" + name + ".c" for name in [
+        "vn_entrypoints", "vk_dispatch_trampolines", "vk_format_info", "vk_cmd_enqueue_entrypoints",
+        "vk_physical_device_spirv_caps", "vk_synchronization_helpers", "vk_dispatch_table",
+        "vk_extensions", "vk_enum_to_str", "vk_common_entrypoints", "vk_cmd_queue",
+        "vk_physical_device_features", "vk_physical_device_properties", "spirv_info", "u_format_table", "format_srgb",
+    ]],
+    deps = ["@mesa//:headers"],
+    copts = ["-std=c11", "-ffunction-sections", "-fdata-sections", "-fvisibility=hidden"],
+    alwayslink = True,
+)
+cc_library(
+    name = "venus",
+    deps = [":bexos_platform_objects", ":generated_objects", "@mesa//:venus_objects", "@mesa//:runtime_objects", "@mesa//:util_objects", "@mesa//:format_objects", "//lib/bexos_c:stdio"],
+    visibility = ["//visibility:public"],
+)
+
+genrule(
+    name = "notices",
+    srcs = ["@mesa//:root", "@mesa//:sources", "@mesa//:licenses"],
+    tools = ["notices.py"],
+    outs = ["MESA-NOTICES.txt"],
+    cmd = "python3 $(location notices.py) $(location @mesa//:root) $@",
+    visibility = ["//visibility:public"],
+)

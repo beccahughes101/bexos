@@ -1,0 +1,33 @@
+package_name: "bexos.platform.storage_verify"
+name: "storage_verify"
+processes {
+ name: "storage_verify"
+ runner: "elf"
+ service: true
+ lifecycle { update_strategy: RESTART }
+ runner_options {
+  [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/storage_verify" }
+ }
+}
+
+config_schema {
+ fields {
+  name: "enable_persistence"
+  type: CONFIG_BOOL
+  required: true
+  default_value { bool_value: true }
+ }
+ fields {
+  name: "retry_limit"
+  type: CONFIG_UINT32
+  required: true
+  default_value { uint32_value: 1 }
+ }
+ fields {
+  name: "channel"
+  type: CONFIG_STRING
+  required: true
+  max_size: 16
+  default_value { string_value: "stable" }
+ }
+}

@@ -1,0 +1,11 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+package(default_visibility = ["//visibility:public"])
+rust_library(
+    name = "wasm_guest",
+    crate_name = "bexos_wasm_guest",
+    srcs = glob(["src/**/*.rs"]),
+    edition = "2024",
+    compile_data = ["@wasmtime_wasi_wit//:wit", "//lib/wasm_runtime:guest_wit"],
+    rustc_env = {"CARGO_MANIFEST_DIR": "."},
+    deps = ["//idl:app_opener_fidl_rust", "@brush_crates//:tokio", "@brush_crates//:wit-bindgen", "//lib/tty:tty_wasm", "//idl:kernel_fidl_rust"],
+)

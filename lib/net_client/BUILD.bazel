@@ -1,0 +1,27 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "net_client",
+    srcs = ["src/lib.rs"],
+    crate_name = "bexos_net_client",
+    edition = "2024",
+    deps = [
+        "//idl:net_fidl_rust",
+        "//idl:trust_fidl_rust",
+        "//lib/boot",
+        "//lib/userspace",
+    ],
+)
+
+rust_test(
+    name = "net_client_tests",
+    srcs = ["tests/net_client_tests.rs"],
+    crate_name = "net_client_tests",
+    edition = "2024",
+    deps = [
+        ":net_client",
+        "//lib/userspace",
+    ],
+)

@@ -1,0 +1,34 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "update",
+    srcs = ["src/lib.rs"],
+    crate_name = "bexos_update",
+    edition = "2024",
+    deps = [
+        "@crates//:blake3",
+        "@crates//:ed25519-dalek",
+    ],
+)
+
+rust_library(
+    name = "update_host",
+    srcs = ["src/lib.rs"],
+    crate_features = ["std"],
+    crate_name = "bexos_update",
+    edition = "2024",
+    deps = [
+        "@crates//:blake3",
+        "@crates//:ed25519-dalek",
+    ],
+)
+
+rust_test(
+    name = "update_tests",
+    srcs = ["tests/update_tests.rs"],
+    crate_name = "update_tests",
+    edition = "2024",
+    deps = [":update_host"],
+)

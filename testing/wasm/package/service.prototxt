@@ -1,0 +1,18 @@
+package_name: "bexos.test.wasm.service"
+name: "WASM service fixture"
+processes {
+ name: "service"
+ runner: "wasm"
+ service: true
+ lifecycle { update_strategy: HEART_TRANSPLANT }
+ runner_options {
+  [type.googleapis.com/bexos.app.WasmRunnerOptions] { path: "/pkg/bin/service.wasm" }
+ }
+}
+services_exposed {
+ name: "bexos.test.wasm.Counter"
+ protocol: "Counter"
+ lifecycle: SINGLETON
+ visibility: PUBLIC
+ capabilities { capability: "Public" method_ordinals: 1 }
+}

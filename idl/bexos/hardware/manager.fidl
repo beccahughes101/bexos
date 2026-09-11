@@ -1,0 +1,88 @@
+library bexos.hardware.manager;
+
+using bexos.kernel;
+
+enum Status : int32 {
+    OK = 0,
+    ERR_INVALID_HANDLE = -1,
+    ERR_ACCESS_DENIED = -2,
+    ERR_NO_MEMORY = -3,
+    ERR_BUFFER_TOO_SMALL = -4,
+    ERR_PEER_CLOSED = -5,
+    ERR_TIMED_OUT = -6,
+    ERR_ALREADY_EXISTS = -7,
+    ERR_INVALID_ARGS = -8,
+    ERR_NOT_FOUND = -9,
+    ERR_BAD_STATE = -10,
+    ERR_UNSUPPORTED = -11,
+};
+
+enum BusType : uint8 {
+    PCI = 1;
+    USB = 2;
+    PLATFORM_DT = 3;
+    I2C = 4;
+    SPI = 5;
+};
+
+struct DeviceProperty {
+    key string:32;
+    value uint32;
+};
+
+struct DeviceNodeInfo {
+    node_id uint64;
+    bus BusType;
+    has_parent bool;
+    parent_node_id uint64;
+    properties vector<DeviceProperty>:32;
+};
+
+enum HardwareResourceKind : uint8 {
+    MMIO = 1;
+    INTERRUPT = 2;
+    DMA_POOL = 3;
+    IOMMU_DOMAIN = 4;
+    REGISTER_PROXY = 5;
+    BUS_CONTROL = 6;
+};
+
+resource struct HardwareResource {
+    kind HardwareResourceKind;
+    resource_id uint64;
+    base uint64;
+    length uint64;
+    flags uint64;
+    resource handle;
+};
+
+enum StopReason : uint8 {
+    PHYSICAL_REMOVE = 1;
+    DRIVER_UNINSTALL = 2;
+    DRIVER_RESTART = 3;
+    APPD_REPLACEMENT = 4;
+};
+
+@discoverable
+protocol DeviceRegistry {
+    RegisterDeviceNode(resource struct {
+        info DeviceNodeInfo;
+        resources vector<HardwareResource>:16;
+    }) -> (struct {
+        status Status;
+    });
+
+    UnregisterDeviceNode(struct {
+        node_id uint64;
+    }) -> (struct {
+        status Status;
+    });
+};
+
+protocol DriverLifecycle {
+    PrepareStop(struct {
+        reason StopReason;
+    }) -> (struct {
+        status Status;
+    });
+};

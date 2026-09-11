@@ -1,0 +1,23 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest")
+load("//build/rules:wasm.bzl", "wasi_component")
+
+package(default_visibility = ["//visibility:public"])
+
+wasi_component(
+    name = "dioxus_component",
+    crate_name = "bexos_dioxus_shared_component",
+    srcs = ["src/main.rs"],
+    compile_data = ["@wasmtime_wasi_wit//:wit", "//lib/wasm_runtime:guest_wit"],
+    rustc_env = {"CARGO_MANIFEST_DIR": "."},
+    deps = ["//lib/dioxus_dom", "//lib/dioxus_scene", "@brush_crates//:wit-bindgen"],
+)
+
+app_manifest(name = "manifest", src = "package/manifest.prototxt")
+
+app_archive(
+    name = "dioxus_shared",
+    manifest = ":manifest",
+    entries = {"lib/dioxus.wasm": ":dioxus_component"},
+    compression = "zstd",
+)

@@ -1,0 +1,26 @@
+library bexos.app.debug;
+
+type AppDebugStatus = strict enum : int32 {
+    OK = 0,
+    ERR_INVALID_ARGS = -8,
+};
+
+type AppProcessState = strict enum : uint8 {
+    CREATED = 1,
+    RUNNING = 2,
+    STOPPED = 3,
+};
+
+struct AppProcessDebugInfo {
+    pid uint64;
+    process_name string:64;
+    package_id string:96;
+    state AppProcessState;
+};
+
+protocol AppDebugControl {
+    ListProcesses() -> (struct {
+        status AppDebugStatus,
+        processes vector<AppProcessDebugInfo>:256
+    });
+};

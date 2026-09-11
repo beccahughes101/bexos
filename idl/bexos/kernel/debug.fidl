@@ -1,0 +1,83 @@
+library bexos.kernel;
+
+type DebugProcessState = strict enum : uint8 {
+    CREATED = 1,
+    RUNNING = 2,
+    SUSPENDED = 3,
+    EXITED = 4,
+};
+
+type KernelUpdateKind = strict enum : uint8 {
+    MICROKERNEL = 1,
+    TEE_IMAGE = 2,
+    HYPERVISOR = 3,
+};
+
+type KernelUpdateStatus = strict enum : uint8 {
+    IDLE = 1,
+    STAGED = 2,
+    APPLYING_TRANSPLANT = 3,
+    COMPLETED = 4,
+    FAILED = 5,
+};
+
+struct KernelProcessDebugInfo {
+    pid uint64;
+    main_thread_id uint64;
+    resource_group_id uint32;
+    resource_group_name_len uint32;
+    resource_group_name array<uint8, 24>;
+    parent_resource_group_id uint32;
+    state DebugProcessState;
+    name_len uint32;
+    name array<uint8, 64>;
+    package_id_len uint32;
+    package_id array<uint8, 96>;
+};
+
+protocol KernelDebugControl {
+    ListProcesses() -> (struct {
+        status Status,
+        processes vector<KernelProcessDebugInfo>:256
+    });
+    ApplyPlatformUpdate(resource struct {
+        kind KernelUpdateKind,
+        generation uint64,
+        target string:128,
+        artifact_hash vector<uint8>:32,
+        artifact_len uint64,
+        artifact handle:VMO
+    }) -> (struct {
+        status Status,
+        message string:256
+    });
+    GetUpdateStatus() -> (struct {
+        status Status,
+        update_status KernelUpdateStatus,
+        generation uint64,
+        message string:256
+    });
+};
+
+protocol SecureMonitor {
+    Call(resource struct {
+        x0 uint64,
+        x1 uint64,
+        x2 uint64,
+        x3 uint64,
+        x4 uint64,
+        x5 uint64,
+        x6 uint64,
+        x7 uint64
+    }) -> (struct {
+        status Status,
+        x0 uint64,
+        x1 uint64,
+        x2 uint64,
+        x3 uint64,
+        x4 uint64,
+        x5 uint64,
+        x6 uint64,
+        x7 uint64
+    });
+};

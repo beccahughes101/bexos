@@ -1,0 +1,5 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+package(default_visibility=["//visibility:public"])
+rust_library(name="flatland_text", srcs=glob(["src/**/*.rs"]), crate_name="bexos_flatland_text", edition="2024", deps=["@graphics_crates//:parley", "@graphics_crates//:skrifa"])
+filegroup(name="fonts", srcs=["@noto_sans//file", "@noto_arabic//file", "@noto_devanagari//file", "@noto_license//file", "@noto_arabic_license//file", "@noto_devanagari_license//file"])
+rust_test(name="tests", srcs=["tests/text.rs"], edition="2024", deps=[":flatland_text"], compile_data=["@noto_sans//file", "@noto_arabic//file", "@noto_devanagari//file"], rustc_env={"NOTO_SANS":"$(execpath @noto_sans//file)","NOTO_ARABIC":"$(execpath @noto_arabic//file)","NOTO_DEVANAGARI":"$(execpath @noto_devanagari//file)"})

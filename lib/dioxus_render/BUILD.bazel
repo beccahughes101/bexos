@@ -1,0 +1,16 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "dioxus_render",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "bexos_dioxus_render",
+    edition = "2024",
+    deps = ["//lib/dioxus_scene", "//lib/flatland", "//lib/flatland_render", "@graphics_crates//:vello"],
+)
+
+rust_test(
+    name = "tests",
+    crate = ":dioxus_render",
+)

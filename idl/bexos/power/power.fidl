@@ -1,0 +1,118 @@
+library bexos.power;
+
+/// Status mirror for the power-management wire ABI.
+type Status = strict enum : int32 {
+    OK = 0,
+    ERR_INVALID_HANDLE = -1,
+    ERR_ACCESS_DENIED = -2,
+    ERR_NO_MEMORY = -3,
+    ERR_BUFFER_TOO_SMALL = -4,
+    ERR_PEER_CLOSED = -5,
+    ERR_TIMED_OUT = -6,
+    ERR_ALREADY_EXISTS = -7,
+    ERR_INVALID_ARGS = -8,
+    ERR_RESOURCE_EXHAUSTED = -9,
+    ERR_UNSUPPORTED = -13,
+    ERR_IO = -14,
+};
+
+type SystemPowerState = strict enum : uint8 {
+    ACTIVE = 1,
+    SUSPEND_TO_RAM = 2,
+    SUSPEND_TO_DISK = 3,
+    REBOOT = 4,
+    POWEROFF = 5,
+};
+
+type DevicePowerState = strict enum : uint8 {
+    D0_FULL_POWER = 0,
+    D1_STANDBY = 1,
+    D2_LOW_POWER = 2,
+    D3_OFF = 3,
+};
+
+type PerformanceLevel = strict enum : uint8 {
+    NOMINAL = 1,
+    REDUCED = 2,
+    MINIMUM = 3,
+};
+
+struct PowerSnapshot {
+    charging bool;
+    device_idle bool;
+    battery_low bool;
+    thermal_throttled bool;
+    active_wake_leases uint32;
+    battery_available bool;
+    thermal_available bool;
+    battery_percent uint8;
+    temperature_celsius int32;
+    telemetry_stale bool;
+    dvfs_available bool;
+    applied_performance_level PerformanceLevel;
+};
+
+/// Implemented by D1 device drivers to handle power transitions.
+@discoverable
+protocol DevicePowerControl {
+    1: SetPowerState(struct {
+        state DevicePowerState;
+    }) -> (struct {
+        status Status;
+    });
+};
+
+@discoverable
+protocol PowerTelemetry {
+    1: GetTelemetry() -> (struct {
+        status Status,
+        battery_available bool,
+        charging bool,
+        battery_percent uint8,
+        thermal_available bool,
+        temperature_celsius int32,
+    });
+};
+
+@discoverable
+protocol PerformanceControl {
+    1: SetPerformanceLevel(struct {
+        level PerformanceLevel,
+    }) -> (struct {
+        status Status,
+    });
+};
+
+/// Public service exposed by powerd to applications and daemons.
+@discoverable
+protocol PowerManager {
+    1: AcquireWakeLease(struct {
+        reason string:64;
+    }) -> (resource struct {
+        status Status,
+        lease_handle handle:EVENT
+    });
+
+    2: RequestSystemState(struct {
+        state SystemPowerState;
+    }) -> (struct {
+        status Status;
+    });
+
+    3: GetPowerSnapshot() -> (struct {
+        status Status;
+        snapshot PowerSnapshot;
+    });
+
+    4: WatchPowerSnapshots(resource struct {
+        watcher client_end:PowerWatcher;
+    }) -> (struct {
+        status Status;
+    });
+};
+
+protocol PowerWatcher {
+    1: OnPowerSnapshot(struct {
+        snapshot PowerSnapshot;
+    });
+};

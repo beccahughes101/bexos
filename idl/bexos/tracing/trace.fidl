@@ -1,0 +1,95 @@
+library bexos.tracing;
+
+using bexos.kernel;
+
+type BufferMode = strict enum : uint8 {
+    ONESHOT_STOP_ON_FULL = 1,
+    CIRCULAR_RING = 2,
+};
+
+type TraceCategory = strict bits : uint32 {
+    KERNEL_SCHED = 0x0001,
+    IPC_MESSAGES = 0x0002,
+    VFS_IO = 0x0004,
+    NETWORK_STACK = 0x0008,
+    UI_FRAMES = 0x0010,
+    APP_CUSTOM = 0x0020,
+    DEBUG_SERVICE = 0x0040,
+};
+
+type TraceSessionState = strict enum : uint8 {
+    IDLE = 1,
+    RECORDING = 2,
+    STOPPED = 3,
+};
+
+type TraceOutputFormat = strict enum : uint8 {
+    PERFETTO = 1,
+    LEGACY_BEXOS_FXT = 2,
+};
+
+@discoverable
+protocol TraceController {
+    1: StartSession(struct {
+        categories TraceCategory,
+        buffer_mode BufferMode,
+        buffer_size_kb uint32,
+        output_format TraceOutputFormat
+    }) -> (struct {
+        status bexos.kernel.Status
+    });
+
+    2: StopSession() -> (resource struct {
+        status bexos.kernel.Status,
+        trace_len uint64,
+        trace_file handle:VMO
+    });
+
+    3: GetStatus() -> (struct {
+        status bexos.kernel.Status,
+        state TraceSessionState,
+        categories TraceCategory,
+        buffer_mode BufferMode,
+        buffer_size_kb uint32,
+        output_format TraceOutputFormat,
+        producer_count uint32,
+        event_count uint64,
+        dropped_count uint64
+    });
+};
+
+@discoverable
+protocol TraceRegistry {
+    @permission("SYSTEM_PRIVILEGED")
+    1: RegisterProducer(resource struct {
+        producer_id uint64,
+        pid uint64,
+        main_tid uint64,
+        process_name string:64,
+        categories TraceCategory,
+        mapped_len uint64,
+        buffer handle:VMO
+    }) -> (struct {
+        status bexos.kernel.Status
+    });
+
+    @permission("SYSTEM_PRIVILEGED")
+    2: ReplaceProducer(resource struct {
+        producer_id uint64,
+        pid uint64,
+        main_tid uint64,
+        process_name string:64,
+        categories TraceCategory,
+        mapped_len uint64,
+        buffer handle:VMO
+    }) -> (struct {
+        status bexos.kernel.Status
+    });
+
+    @permission("SYSTEM_PRIVILEGED")
+    3: UnregisterProducer(struct {
+        producer_id uint64
+    }) -> (struct {
+        status bexos.kernel.Status
+    });
+};

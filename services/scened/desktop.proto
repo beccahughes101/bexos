@@ -1,0 +1,24 @@
+syntax = "proto3";
+package bexos.ui.scened;
+// Compositor-owned content. Application widgets retain their own rendering.
+message Desktop {
+  // Only standalone compositor fixtures may enable independent roots.
+  bool legacy_standalone = 12;
+  string text = 1;
+  uint32 font_size = 2;
+  fixed32 rgba = 3;
+  uint32 inset_left = 4;
+  uint32 inset_top = 5;
+  uint32 inset_right = 6;
+  uint32 inset_bottom = 7;
+  // CSS is compiled into this bounded configuration; no file/network imports.
+  string theme_css = 8;
+  // Timer fallback; supported values are 60 and 120 (zero selects 120).
+  uint32 refresh_hz = 9;
+  // Optional diagnostics. Adds timestamp submissions only on supported devices.
+  bool profile_gpu = 10;
+  // CPU Vulkan adapters only: bounded functional-test recovery time. Zero
+  // selects 2000 ms; accepted explicit values are 2000..30000. Hardware GPU
+  // recovery stays at 2000 ms and frame scheduling is unchanged.
+  uint32 software_vulkan_timeout_ms = 11;
+}

@@ -1,0 +1,273 @@
+diff --git a/src/socket/tcp.rs b/src/socket/tcp.rs
+--- a/src/socket/tcp.rs	2026-09-02 16:11:16
++++ b/src/socket/tcp.rs	2026-09-02 16:11:16
+@@ -3,6 +3,8 @@
+ // Consult RFC 7414 when implementing a new feature.
+ 
+ use core::fmt::Display;
++#[cfg(feature = "alloc")]
++use alloc::{vec, vec::Vec};
+ #[cfg(feature = "async")]
+ use core::task::Waker;
+ use core::{fmt, mem};
+@@ -138,6 +140,55 @@
+     }
+ }
+ 
++/// Version-pinned TCP checkpoint exported for BexOS live migration.
++#[cfg(feature = "alloc")]
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct MigrationRttEstimator {
++    pub have_measurement: bool,
++    pub srtt_millis: u32,
++    pub rttvar_millis: u32,
++    pub rto_millis: u32,
++    pub timestamp_delta_millis: Option<(i64, i32)>,
++    pub max_seq_sent: Option<i32>,
++    pub rto_count: u8,
++}
++
++/// Version-pinned TCP checkpoint exported for BexOS live migration.
++#[cfg(feature = "alloc")]
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct MigrationState {
++    pub state: State,
++    pub listen_endpoint: IpListenEndpoint,
++    pub local_endpoint: Option<IpEndpoint>,
++    pub remote_endpoint: Option<IpEndpoint>,
++    pub local_seq_no: i32,
++    pub remote_seq_no: i32,
++    pub remote_last_seq: i32,
++    pub remote_last_ack: Option<i32>,
++    pub remote_last_win: u16,
++    pub remote_win_shift: u8,
++    pub remote_win_len: usize,
++    pub remote_win_scale: Option<u8>,
++    pub remote_has_sack: bool,
++    pub remote_mss: usize,
++    pub remote_last_ts_delta_millis: Option<i64>,
++    pub local_rx_last_seq: Option<i32>,
++    pub local_rx_last_ack: Option<i32>,
++    pub local_rx_dup_acks: u8,
++    pub pending_fast_retransmit: bool,
++    pub rx_fin_received: bool,
++    pub timeout_millis: Option<u64>,
++    pub keep_alive_millis: Option<u64>,
++    pub hop_limit: Option<u8>,
++    pub ack_delay_millis: Option<u64>,
++    pub nagle: bool,
++    pub last_remote_tsval: u32,
++    pub rtte: MigrationRttEstimator,
++    pub assembler_ranges: Vec<(usize, usize)>,
++    pub rx_bytes: Vec<u8>,
++    pub tx_bytes: Vec<u8>,
++}
++
+ /// RFC 6298: (2.1) Until a round-trip time (RTT) measurement has been made for a
+ /// segment sent between the sender and receiver, the sender SHOULD
+ /// set RTO <- 1 second,
+@@ -632,6 +683,129 @@
+         }
+     }
+ 
++    /// Capture enough established TCP state for BexOS to recreate the socket
++    /// in-place during a live migration without initiating a new SYN.
++    #[cfg(feature = "alloc")]
++    pub fn checkpoint(&self, now: Instant) -> MigrationState {
++        let mut rx_bytes = Vec::with_capacity(self.rx_buffer.len());
++        copy_buffer(&self.rx_buffer, &mut rx_bytes);
++        let mut tx_bytes = Vec::with_capacity(self.tx_buffer.len());
++        copy_buffer(&self.tx_buffer, &mut tx_bytes);
++        let (local_endpoint, remote_endpoint) = match self.tuple {
++            Some(tuple) => (Some(tuple.local), Some(tuple.remote)),
++            None => (None, None),
++        };
++        MigrationState {
++            state: self.state,
++            listen_endpoint: self.listen_endpoint,
++            local_endpoint,
++            remote_endpoint,
++            local_seq_no: self.local_seq_no.0,
++            remote_seq_no: self.remote_seq_no.0,
++            remote_last_seq: self.remote_last_seq.0,
++            remote_last_ack: self.remote_last_ack.map(|seq| seq.0),
++            remote_last_win: self.remote_last_win,
++            remote_win_shift: self.remote_win_shift,
++            remote_win_len: self.remote_win_len,
++            remote_win_scale: self.remote_win_scale,
++            remote_has_sack: self.remote_has_sack,
++            remote_mss: self.remote_mss,
++            remote_last_ts_delta_millis: self.remote_last_ts.map(|instant| instant_delta(now, instant)),
++            local_rx_last_seq: self.local_rx_last_seq.map(|seq| seq.0),
++            local_rx_last_ack: self.local_rx_last_ack.map(|seq| seq.0),
++            local_rx_dup_acks: self.local_rx_dup_acks,
++            pending_fast_retransmit: self.pending_fast_retransmit,
++            rx_fin_received: self.rx_fin_received,
++            timeout_millis: self.timeout.map(|duration| duration.total_millis()),
++            keep_alive_millis: self.keep_alive.map(|duration| duration.total_millis()),
++            hop_limit: self.hop_limit,
++            ack_delay_millis: self.ack_delay.map(|duration| duration.total_millis()),
++            nagle: self.nagle,
++            last_remote_tsval: self.last_remote_tsval,
++            rtte: MigrationRttEstimator {
++                have_measurement: self.rtte.have_measurement,
++                srtt_millis: self.rtte.srtt,
++                rttvar_millis: self.rtte.rttvar,
++                rto_millis: self.rtte.rto,
++                timestamp_delta_millis: self
++                    .rtte
++                    .timestamp
++                    .map(|(instant, seq)| (instant_delta(now, instant), seq.0)),
++                max_seq_sent: self.rtte.max_seq_sent.map(|seq| seq.0),
++                rto_count: self.rtte.rto_count,
++            },
++            assembler_ranges: self.assembler.migration_ranges(),
++            rx_bytes,
++            tx_bytes,
++        }
++    }
++
++    /// Restore a BexOS TCP checkpoint into a fresh socket. Buffer capacities
++    /// must be large enough for the captured RX/TX data.
++    #[cfg(feature = "alloc")]
++    pub fn restore(&mut self, checkpoint: MigrationState, now: Instant) -> Result<(), ()> {
++        if checkpoint.rx_bytes.len() > self.rx_buffer.capacity()
++            || checkpoint.tx_bytes.len() > self.tx_buffer.capacity()
++        {
++            return Err(());
++        }
++        self.reset();
++        self.state = checkpoint.state;
++        self.listen_endpoint = checkpoint.listen_endpoint;
++        self.tuple = match (checkpoint.local_endpoint, checkpoint.remote_endpoint) {
++            (Some(local), Some(remote)) => Some(Tuple { local, remote }),
++            _ => None,
++        };
++        self.local_seq_no = TcpSeqNumber(checkpoint.local_seq_no);
++        self.remote_seq_no = TcpSeqNumber(checkpoint.remote_seq_no);
++        self.remote_last_seq = TcpSeqNumber(checkpoint.remote_last_seq);
++        self.remote_last_ack = checkpoint.remote_last_ack.map(TcpSeqNumber);
++        self.remote_last_win = checkpoint.remote_last_win;
++        self.remote_win_shift = checkpoint.remote_win_shift;
++        self.remote_win_len = checkpoint.remote_win_len;
++        self.remote_win_scale = checkpoint.remote_win_scale;
++        self.remote_has_sack = checkpoint.remote_has_sack;
++        self.remote_mss = checkpoint.remote_mss.max(MIN_REMOTE_MSS);
++        self.remote_last_ts = checkpoint
++            .remote_last_ts_delta_millis
++            .map(|delta| instant_from_delta(now, delta));
++        self.local_rx_last_seq = checkpoint.local_rx_last_seq.map(TcpSeqNumber);
++        self.local_rx_last_ack = checkpoint.local_rx_last_ack.map(TcpSeqNumber);
++        self.local_rx_dup_acks = checkpoint.local_rx_dup_acks;
++        self.pending_fast_retransmit = checkpoint.pending_fast_retransmit;
++        self.rx_fin_received = checkpoint.rx_fin_received;
++        self.timeout = checkpoint.timeout_millis.map(Duration::from_millis);
++        self.keep_alive = checkpoint.keep_alive_millis.map(Duration::from_millis);
++        self.hop_limit = checkpoint.hop_limit;
++        self.ack_delay = checkpoint.ack_delay_millis.map(Duration::from_millis);
++        self.nagle = checkpoint.nagle;
++        self.last_remote_tsval = checkpoint.last_remote_tsval;
++        self.rtte = RttEstimator {
++            have_measurement: checkpoint.rtte.have_measurement,
++            srtt: checkpoint.rtte.srtt_millis,
++            rttvar: checkpoint.rtte.rttvar_millis,
++            rto: checkpoint.rtte.rto_millis,
++            timestamp: checkpoint
++                .rtte
++                .timestamp_delta_millis
++                .map(|(delta, seq)| (instant_from_delta(now, delta), TcpSeqNumber(seq))),
++            max_seq_sent: checkpoint.rtte.max_seq_sent.map(TcpSeqNumber),
++            rto_count: checkpoint.rtte.rto_count,
++        };
++        self.rx_buffer.enqueue_slice(&checkpoint.rx_bytes);
++        self.tx_buffer.enqueue_slice(&checkpoint.tx_bytes);
++        self.assembler = Assembler::new();
++        if !checkpoint.assembler_ranges.is_empty() {
++            self.assembler
++                .restore_migration_ranges(&checkpoint.assembler_ranges)
++                .map_err(|_| ())?;
++        } else if !checkpoint.rx_bytes.is_empty() {
++            let _ = self.assembler.add(0, checkpoint.rx_bytes.len());
++        }
++        self.timer.set_for_idle(now, self.keep_alive);
++        Ok(())
++    }
++
+     /// Enable or disable TCP Timestamp.
+     pub fn set_tsval_generator(&mut self, generator: Option<TcpTimestampGenerator>) {
+         self.tsval_generator = generator;
+@@ -9871,5 +10045,28 @@
+         s.send_slice(b"def").unwrap();
+         recv_nothing!(s);
+         assert_eq!(s.state, State::Closed);
++    }
++}
++
++#[cfg(feature = "alloc")]
++fn instant_delta(now: Instant, instant: Instant) -> i64 {
++    instant.total_millis() - now.total_millis()
++}
++
++#[cfg(feature = "alloc")]
++fn instant_from_delta(now: Instant, delta_millis: i64) -> Instant {
++    Instant::from_millis(now.total_millis() + delta_millis)
++}
++
++#[cfg(feature = "alloc")]
++fn copy_buffer(buffer: &SocketBuffer<'_>, out: &mut Vec<u8>) {
++    let mut offset = 0usize;
++    while offset < buffer.len() {
++        let bytes = buffer.get_allocated(offset, buffer.len() - offset);
++        if bytes.is_empty() {
++            break;
++        }
++        out.extend_from_slice(bytes);
++        offset += bytes.len();
+     }
+ }
+diff --git a/src/storage/assembler.rs b/src/storage/assembler.rs
+--- a/src/storage/assembler.rs	2026-09-02 16:11:16
++++ b/src/storage/assembler.rs	2026-09-02 16:11:16
+@@ -1,4 +1,6 @@
+ use core::fmt;
++#[cfg(feature = "alloc")]
++use alloc::vec::Vec;
+ 
+ use crate::config::ASSEMBLER_MAX_SEGMENT_COUNT;
+ 
+@@ -137,6 +139,35 @@
+         Assembler {
+             contigs: [EMPTY; ASSEMBLER_MAX_SEGMENT_COUNT],
+         }
++    }
++
++    /// Export sparse receive assembler ranges for BexOS TCP migration.
++    #[cfg(feature = "alloc")]
++    pub fn migration_ranges(&self) -> Vec<(usize, usize)> {
++        let mut ranges = Vec::new();
++        for contig in self.contigs.iter() {
++            if !contig.has_data() {
++                break;
++            }
++            ranges.push((contig.hole_size, contig.data_size));
++        }
++        ranges
++    }
++
++    /// Restore sparse receive assembler ranges captured by BexOS TCP migration.
++    #[cfg(feature = "alloc")]
++    pub fn restore_migration_ranges(
++        &mut self,
++        ranges: &[(usize, usize)],
++    ) -> Result<(), TooManyHolesError> {
++        self.clear();
++        if ranges.len() > self.contigs.len() {
++            return Err(TooManyHolesError);
++        }
++        for (slot, (hole_size, data_size)) in self.contigs.iter_mut().zip(ranges.iter().copied()) {
++            *slot = Contig::hole_and_data(hole_size, data_size);
++        }
++        Ok(())
+     }
+ 
+     pub fn clear(&mut self) {

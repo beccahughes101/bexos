@@ -1,0 +1,7 @@
+load(":smoke.bzl", "boot_smoke_targets")
+package(default_visibility = ["//visibility:public"])
+exports_files(["pack.py", "loader.c", "entry.S", "loader.ld"])
+
+sh_test(name = "pack_tests", srcs = ["pack_tests.sh"], data = ["pack.py", "pack_tests.py"])
+
+boot_smoke_targets()

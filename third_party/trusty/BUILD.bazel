@@ -1,0 +1,245 @@
+load("//boot/multiboot:boot_image.bzl", "multiboot_image")
+load(":x86_bundle.bzl", "x86_firmware_bundle")
+load(":firmware.bzl", "trusty_firmware")
+load(":host_tools.bzl", "trusty_host_tools")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_proc_macro", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+exports_files(["firmware_recovery_test.py", "patch_rpmb_host.py"])
+
+trusty_host_tools()
+
+alias(name = "host_aidl", actual = "@trusty_src//:host_aidl")
+alias(name = "host_rpmb_dev", actual = "@trusty_src//:host_rpmb_dev")
+
+# A product's monitor, signed policy and RPMB transport must select the same
+# saved bundle. Architecture transitions preserve this product selection.
+[alias(
+    name = "product_x86/" + artifact,
+    actual = select({
+        "//build/platforms:trusty_acceptance": ":cached_x86_64_acceptance/" + artifact,
+        "//conditions:default": ":cached_x86_64/" + artifact,
+    }),
+) for artifact in ["lk.elf", "rpmb_dev", "RPMB_DATA"]]
+
+sh_test(
+    name = "image_bundle_tests",
+    srcs = ["image_bundle_tests.sh"],
+    data = ["image_bundle.py", "image_bundle_tests.py"],
+)
+
+filegroup(
+    name = "firmware_overlays",
+    srcs = glob(["overlays/**"]),
+)
+
+rust_library(
+    name = "authmgr_storage_format",
+    srcs = ["authmgr_storage_format.rs"],
+    crate_name = "authmgr_storage_format",
+    edition = "2021",
+)
+
+rust_test(
+    name = "authmgr_storage_format_tests",
+    srcs = ["authmgr_storage_format_tests.rs"],
+    edition = "2021",
+    deps = [":authmgr_storage_format"],
+)
+
+rust_proc_macro(
+    name = "kmr_derive",
+    srcs = ["@trusty_src//:system/keymint/derive/src/lib.rs"],
+    crate_name = "kmr_derive",
+    edition = "2021",
+    deps = [
+        "@crates//:proc-macro2",
+        "@crates//:quote",
+        "@crates//:syn",
+    ],
+)
+
+rust_library(
+    name = "kmr_wire",
+    srcs = [
+        "@trusty_src//:system/keymint/wire/src/keymint.rs",
+        "@trusty_src//:system/keymint/wire/src/legacy.rs",
+        "@trusty_src//:system/keymint/wire/src/lib.rs",
+        "@trusty_src//:system/keymint/wire/src/rpc.rs",
+        "@trusty_src//:system/keymint/wire/src/secureclock.rs",
+        "@trusty_src//:system/keymint/wire/src/sharedsecret.rs",
+        "@trusty_src//:system/keymint/wire/src/types.rs",
+    ],
+    crate_features = [
+        "hal_v2",
+        "hal_v3",
+        "hal_v4",
+    ],
+    crate_name = "kmr_wire",
+    edition = "2021",
+    deps = [
+        "@crates//:ciborium",
+        "@crates//:ciborium-io",
+        "@crates//:coset",
+        "@crates//:log",
+        "@crates//:zeroize",
+    ],
+    proc_macro_deps = [
+        ":kmr_derive",
+        "@crates//:enumn",
+    ],
+)
+
+rust_binary(
+    name = "trusty_bindgen",
+    srcs = [
+        "@trusty_src//:external/rust/android-crates-io/crates/bindgen-cli/main.rs",
+        "@trusty_src//:external/rust/android-crates-io/crates/bindgen-cli/options.rs",
+    ],
+    crate_root = "@trusty_src//:external/rust/android-crates-io/crates/bindgen-cli/main.rs",
+    edition = "2018",
+    deps = [
+        "@crates//:bindgen",
+        "@crates//:clap",
+        "@crates//:clap_complete",
+        "@crates//:shlex",
+    ],
+)
+
+trusty_firmware(name = "trusty_qemu_firmware")
+trusty_firmware(name = "authmgr_acceptance_firmware", output_dir = "built_acceptance", acceptance = True)
+
+filegroup(name = "acceptance_sources", srcs = glob(["acceptance/**"]))
+exports_files(["acceptance/main.rs"])
+
+filegroup(
+    name = "qemu_firmware",
+    tags = ["manual"],
+    srcs = [":trusty_qemu_firmware"],
+)
+
+filegroup(
+    name = "trusted_boot_certificates",
+    srcs = [
+        ":nt_fw_content.crt",
+        ":nt_fw_key.crt",
+        ":soc_fw_content.crt",
+        ":soc_fw_key.crt",
+        ":tb_fw.crt",
+        ":tos_fw_content.crt",
+        ":tos_fw_key.crt",
+        ":trusted_key.crt",
+    ],
+)
+
+sh_binary(
+    name = "image_bundle_tool",
+    srcs = ["image_bundle.sh"],
+    data = ["image_bundle.py"],
+)
+
+genrule(
+    name = "built_image",
+    tags = ["manual"],
+    srcs = [":trusty_qemu_firmware"],
+    outs = ["built/image.bin"],
+    tools = [":image_bundle_tool"],
+    cmd = "$(location :image_bundle_tool) pack $@ $(locations :trusty_qemu_firmware)",
+)
+
+sh_binary(
+    name = "refresh_image",
+    tags = ["manual"],
+    srcs = ["image_bundle.sh"],
+    data = ["image_bundle.py", ":built_image"],
+    args = ["refresh", "third_party/trusty/image.bin", "$(location :built_image)"],
+)
+
+filegroup(
+    name = "saved_image",
+    srcs = glob(["image.bin"], allow_empty = True),
+)
+
+genrule(
+    name = "cached_firmware",
+    srcs = [":saved_image"],
+    outs = [
+        "bl1.bin", "bl2.bin", "bl31.bin", "lk.bin", "lk.elf", "bl33.bin",
+        "bl33-rollback.bin", "rollback_nt_fw_content.crt",
+        "nt_fw_content.crt", "nt_fw_key.crt", "rpmb_dev", "RPMB_DATA",
+        "soc_fw_content.crt", "soc_fw_key.crt", "tb_fw.crt",
+        "tos_fw_content.crt", "tos_fw_key.crt", "trusted_key.crt", "build.prototxt",
+    ],
+    tools = [":image_bundle_tool"],
+    cmd = "$(location :image_bundle_tool) extract $(@D) $(SRCS)",
+)
+
+genrule(
+    name = "built_authmgr_acceptance_image",
+    tags = ["manual"],
+    srcs = [":authmgr_acceptance_firmware"],
+    outs = ["built_acceptance/image.bin"],
+    tools = [":image_bundle_tool"],
+    cmd = "$(location :image_bundle_tool) --variant authmgr_acceptance pack $@ $(locations :authmgr_acceptance_firmware)",
+)
+sh_binary(
+    name = "refresh_authmgr_acceptance_image",
+    tags = ["manual"],
+    srcs = ["image_bundle.sh"],
+    data = ["image_bundle.py", ":built_authmgr_acceptance_image"],
+    args = ["--variant", "authmgr_acceptance", "refresh", "third_party/trusty/authmgr_acceptance_image.bin", "$(location :built_authmgr_acceptance_image)"],
+)
+filegroup(name = "saved_authmgr_acceptance_image", srcs = glob(["authmgr_acceptance_image.bin"], allow_empty = True))
+genrule(
+    name = "cached_authmgr_acceptance_firmware",
+    srcs = [":saved_authmgr_acceptance_image"],
+    outs = ["acceptance_cached/" + name for name in [
+        "bl1.bin", "bl2.bin", "bl31.bin", "lk.bin", "lk.elf", "bl33.bin",
+        "bl33-rollback.bin", "rollback_nt_fw_content.crt",
+        "nt_fw_content.crt", "nt_fw_key.crt", "rpmb_dev", "RPMB_DATA",
+        "soc_fw_content.crt", "soc_fw_key.crt", "tb_fw.crt",
+        "tos_fw_content.crt", "tos_fw_key.crt", "trusted_key.crt", "build.prototxt",
+    ]],
+    tools = [":image_bundle_tool"],
+    cmd = "$(location :image_bundle_tool) --variant authmgr_acceptance extract $(@D)/acceptance_cached $(SRCS)",
+)
+filegroup(name = "acceptance_certificates", srcs = [":acceptance_cached/" + name for name in [
+    "nt_fw_content.crt", "nt_fw_key.crt", "soc_fw_content.crt", "soc_fw_key.crt", "tb_fw.crt", "tos_fw_content.crt", "tos_fw_key.crt", "trusted_key.crt",
+]])
+
+trusty_firmware(name = "trusty_x86_64_firmware", output_dir = "built_x86_64", architecture = "x86_64")
+trusty_firmware(name = "x86_64_acceptance_firmware", output_dir = "built_x86_64_acceptance", acceptance = True, architecture = "x86_64")
+trusty_firmware(name = "x86_64_replacement_firmware", output_dir = "built_x86_64_replacement", architecture = "x86_64", generation_config = "x86/replacement.prototxt")
+
+multiboot_image(name = "x86_64_boot", kernel = ":built_x86_64/lk.elf", trusty = True, output = "x86_64/boot.elf")
+multiboot_image(name = "x86_64_acceptance_boot", kernel = ":built_x86_64_acceptance/lk.elf", trusty = True, output = "x86_64_acceptance/boot.elf")
+x86_firmware_bundle(name = "x86_64", firmware = ":trusty_x86_64_firmware", boot = ":x86_64_boot")
+x86_firmware_bundle(name = "x86_64_acceptance", firmware = ":x86_64_acceptance_firmware", boot = ":x86_64_acceptance_boot", acceptance = True)
+
+filegroup(name = "x86_runtime_sources", srcs = glob(["x86/rpmb/**", "x86/monitor/**"]))
+filegroup(name = "x86_acceptance_sources", srcs = glob(["x86/acceptance/**"]))
+
+sh_test(
+    name = "run_x86_tests",
+    srcs = ["run_x86_tests.sh"],
+    data = ["run_x86.py", "run_x86_tests.py"],
+)
+
+exports_files(["x86_devices.py"])
+
+sh_test(
+    name = "host_tools_tests",
+    srcs = ["host_tools_tests.sh"],
+    data = [
+        "host_tools_tests.py", "target_compatibility.sh", "host_prerequisites.sh", "reverse_lines.py", ":host_environment",
+        ":host_aidl", ":host_rpmb_dev", ":host_rustfmt", ":host_rust_std",
+        "@trusty_host_libclang//:libclang",
+        "@trusty_rust_1_80_1//:rustc", "@trusty_rust_1_80_1//:rustc_lib",
+        "@trusty_src//:BUILD.bazel", "@trusty_src//:target_compatibility_sources",
+    ],
+    args = ["$(location " + label + ")" for label in [
+        "host_tools_tests.py", "@trusty_rust_1_80_1//:rustc", ":host_rustfmt",
+        "@trusty_host_libclang//:libclang", ":host_aidl", ":host_rpmb_dev",
+        ":host_environment", "target_compatibility.sh", "@trusty_src//:BUILD.bazel", "host_prerequisites.sh", "reverse_lines.py",
+    ]],
+)

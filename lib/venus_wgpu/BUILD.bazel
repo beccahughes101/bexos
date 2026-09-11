@@ -1,0 +1,15 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+load("//lib/flatland_text:BUILD.fonts.bzl", "FONT_DATA", "FONT_ENV")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "venus_wgpu",
+    srcs = glob(["src/*.rs"]),
+    crate_name = "bexos_venus_wgpu",
+    edition = "2024",
+    compile_data = FONT_DATA,
+    rustc_env = FONT_ENV,
+    deps = ["//lib/flatland_text", "//lib/flatland_cpu", "//lib/graphics_runtime", "//lib/virtio_gpu_protocol", "//lib/flatland", "//lib/flatland:kawase_reference", "//lib/flatland:reference_scene", "//lib/userspace", "//lib/venus_transport", "//lib/flatland_render", "@graphics_crates//:ash", "@graphics_crates//:wgpu"],
+    target_compatible_with = ["//build/platforms/constraints:bexos_userspace_abi"],
+)

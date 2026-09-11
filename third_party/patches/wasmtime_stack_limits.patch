@@ -1,0 +1,112 @@
+diff --git a/src/runtime/store.rs b/src/runtime/store.rs
+--- a/src/runtime/store.rs
++++ b/src/runtime/store.rs
+@@ -576,17 +576,17 @@
+ }
+ 
+ impl Executor {
+-    pub(crate) fn new(engine: &Engine) -> Result<Self, OutOfMemory> {
++    pub(crate) fn new(engine: &Engine, stack_size: usize) -> Result<Self, OutOfMemory> {
+         #[cfg(has_host_compiler_backend)]
+         if cfg!(feature = "pulley") && engine.target().is_pulley() {
+-            Ok(Executor::Interpreter(Interpreter::new(engine)?))
++            Ok(Executor::Interpreter(Interpreter::new(engine, stack_size)?))
+         } else {
+             Ok(Executor::Native)
+         }
+         #[cfg(not(has_host_compiler_backend))]
+         {
+             debug_assert!(engine.target().is_pulley());
+-            Ok(Executor::Interpreter(Interpreter::new(engine)?))
++            Ok(Executor::Interpreter(Interpreter::new(engine, stack_size)?))
+         }
+     }
+ }
+@@ -719,6 +719,19 @@
+     /// memory allocation fails. See the `OutOfMemory` type's documentation for
+     /// details on Wasmtime's out-of-memory handling.
+     pub fn try_new(engine: &Engine, data: T) -> Result<Self> {
++        Self::try_new_with_stack(engine, data, engine.config().max_wasm_stack)
++    }
++
++    /// Construct a Pulley store with a stack no larger than the engine limit.
++    /// The limit is fixed before any instance or execution can reference it.
++    pub fn try_new_with_pulley_stack(engine: &Engine, data: T, stack_size: usize) -> Result<Self> {
++        if !engine.target().is_pulley() || stack_size == 0 || stack_size > engine.config().max_wasm_stack {
++            bail!("invalid per-store Pulley stack limit");
++        }
++        Self::try_new_with_stack(engine, data, stack_size)
++    }
++
++    fn try_new_with_stack(engine: &Engine, data: T, stack_size: usize) -> Result<Self> {
+         let store_data = StoreData::new(engine);
+         log::trace!("creating new store {:?}", store_data.id());
+ 
+@@ -754,7 +767,7 @@
+             hostcall_val_storage: Vec::new(),
+             wasm_val_raw_storage: TryVec::new(),
+             pkey,
+-            executor: Executor::new(engine)?,
++            executor: Executor::new(engine, stack_size)?,
+             #[cfg(feature = "debug")]
+             breakpoints: Default::default(),
+             #[cfg(feature = "debug")]
+diff --git a/src/runtime/vm/interpreter.rs b/src/runtime/vm/interpreter.rs
+--- a/src/runtime/vm/interpreter.rs
++++ b/src/runtime/vm/interpreter.rs
+@@ -58,10 +58,10 @@
+ 
+ impl Interpreter {
+     /// Creates a new interpreter ready to interpret code.
+-    pub fn new(engine: &Engine) -> Result<Interpreter, OutOfMemory> {
++    pub fn new(engine: &Engine, stack_size: usize) -> Result<Interpreter, OutOfMemory> {
+         let ret = Interpreter {
+             pulley: StoreBox::new(VmState {
+-                vm: Vm::with_stack(engine.config().max_wasm_stack)?,
++                vm: Vm::with_stack(stack_size)?,
+                 resume_at_pc: None,
+             })?,
+         };
+diff --git a/src/runtime/vm/interpreter_disabled.rs b/src/runtime/vm/interpreter_disabled.rs
+--- a/src/runtime/vm/interpreter_disabled.rs
++++ b/src/runtime/vm/interpreter_disabled.rs
+@@ -20,7 +20,7 @@
+ const _: () = assert!(mem::size_of::<Option<Interpreter>>() == 0);
+ 
+ impl Interpreter {
+-    pub fn new(_engine: &Engine) -> Result<Interpreter, OutOfMemory> {
++    pub fn new(_engine: &Engine, _stack_size: usize) -> Result<Interpreter, OutOfMemory> {
+         unreachable!()
+     }
+ 
+diff --git a/src/runtime/store.rs b/src/runtime/store.rs
+--- a/src/runtime/store.rs
++++ b/src/runtime/store.rs
+@@ -437,6 +437,7 @@
+ /// necessary, allowing code to be monomorphic and compiled into the `wasmtime`
+ /// crate itself.
+ pub struct StoreOpaque {
++    pub(crate) pulley_stack_size: usize,
+     // This `StoreOpaque` structure has references to itself. These aren't
+     // immediately evident, however, so we need to tell the compiler that it
+     // contains self-references. This notably suppresses `noalias` annotations
+@@ -738,6 +739,7 @@
+         let pkey = engine.allocator().next_available_pkey();
+ 
+         let inner = StoreOpaque {
++            pulley_stack_size: stack_size,
+             _marker: marker::PhantomPinned,
+             engine: engine.clone(),
+             vm_store_context: Default::default(),
+diff --git a/src/runtime/fiber.rs b/src/runtime/fiber.rs
+--- a/src/runtime/fiber.rs
++++ b/src/runtime/fiber.rs
+@@ -805,7 +805,7 @@
+ {
+     let opaque = store.as_store_opaque();
+     let engine = opaque.engine().clone();
+-    let executor = Executor::new(&engine)?;
++    let executor = Executor::new(&engine, opaque.pulley_stack_size)?;
+     let id = opaque.id();
+     let stack = opaque.allocate_fiber_stack()?;
+     let track_pkey_context_switch = opaque.has_pkey();

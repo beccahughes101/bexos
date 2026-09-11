@@ -1,0 +1,89 @@
+load("//testing/e2e/qemu:architecture_test.bzl", "architecture_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+package(default_visibility = ["//visibility:public"])
+constraint_setting(name = "fixture_abi")
+constraint_value(name = "musl_abi", constraint_setting = ":fixture_abi")
+config_setting(name = "is_musl_fixture", constraint_values = [":musl_abi"])
+platform(
+    name = "linux_musl",
+    constraint_values = ["@platforms//cpu:aarch64", "@platforms//os:linux", ":musl_abi"],
+    flags = ["--@rules_rust//rust/settings:toolchain_linker_preference=rust"],
+)
+rust_binary(
+    name = "transplant_probe",
+    srcs = ["//testing/e2e/qemu/graphics:transplant_probe.rs"],
+    edition = "2024",
+    platform = ":linux_musl",
+    rustc_flags = ["--cfg=fixture_linux", "-C", "linker=rust-lld", "-C", "target-feature=+crt-static", "-C", "panic=abort"],
+    deps = ["//host/debug_client"],
+)
+exports_files(["repositories.bzl", "packages.prototxt"])
+genrule(
+    name = "image",
+    srcs = ["@scened_linux_packages//:archives", "init.sh", "check.py", "framebuffer.py", "renderer_stack.py", "renderer_monitor.py", "window.py", "input_transplant.py", "//testing/performance/scened:guest.py", "//testing/e2e/qemu/graphics:input_hotplug.py", "vulkan_probe.py", "packages.prototxt"],
+    tools = ["image.py", "elf_stack.py"],
+    outs = ["vmlinuz", "initramfs.cpio.gz"],
+    cmd = "python3 $(location image.py) --kernel $(location vmlinuz) --initramfs $(location initramfs.cpio.gz) --init $(location init.sh) --check $(location check.py) --probe $(location vulkan_probe.py) --payload renderer_stack.py=$(location renderer_stack.py) --payload renderer_monitor.py=$(location renderer_monitor.py) --executable renderer_monitor.py --payload framebuffer.py=$(location framebuffer.py) --payload window.py=$(location window.py) --payload input_transplant.py=$(location input_transplant.py) --payload scened_guest.py=$(location //testing/performance/scened:guest.py) --payload input_hotplug.py=$(location //testing/e2e/qemu/graphics:input_hotplug.py) --lock $(location packages.prototxt) $(locations @scened_linux_packages//:archives)",
+)
+sh_test(
+    name = "host",
+    srcs = ["test.sh"],
+    data = ["run.py", ":vmlinuz", ":initramfs.cpio.gz"],
+    env = {
+        "VENUS_LINUX_RUN": "$(rootpath run.py)",
+        "VENUS_LINUX_KERNEL": "$(rootpath :vmlinuz)",
+        "VENUS_LINUX_INITRAMFS": "$(rootpath :initramfs.cpio.gz)",
+    },
+    tags = ["requires-qemu", "exclusive", "local", "no-sandbox"],
+    timeout = "long",
+)
+genrule(
+    name = "guest_image",
+    srcs = [":transplant_probe", "@scened_linux_packages//:archives", "init.sh", "check.py", "framebuffer.py", "renderer_stack.py", "renderer_monitor.py", "window.py", "input_transplant.py", "//testing/performance/scened:guest.py", "//testing/e2e/qemu/graphics:input_hotplug.py", "vulkan_probe.py", "packages.prototxt",
+        "//kernel:kernel", "//device/virtual/qemu/input_test:bootfs.emulated.img",
+        "//device/virtual/qemu/input_test:boot_handoff.emulated.bin", "//device/virtual/qemu/input_test:boot_evidence.emulated.bin"],
+    tools = ["image.py", "elf_stack.py"],
+    outs = ["guest_vmlinuz", "guest_initramfs.cpio.gz"],
+    cmd = "python3 $(location image.py) --kernel $(location guest_vmlinuz) --initramfs $(location guest_initramfs.cpio.gz) --init $(location init.sh) --check $(location check.py) --probe $(location vulkan_probe.py) --payload renderer_stack.py=$(location renderer_stack.py) --payload renderer_monitor.py=$(location renderer_monitor.py) --executable renderer_monitor.py --payload framebuffer.py=$(location framebuffer.py) --payload window.py=$(location window.py) --payload input_transplant.py=$(location input_transplant.py) --payload scened_guest.py=$(location //testing/performance/scened:guest.py) --payload input_hotplug.py=$(location //testing/e2e/qemu/graphics:input_hotplug.py) --lock $(location packages.prototxt) --payload transplant_probe=$(location :transplant_probe) --executable transplant_probe --payload kernel=$(location //kernel:kernel) --payload bootfs=$(location //device/virtual/qemu/input_test:bootfs.emulated.img) --payload handoff=$(location //device/virtual/qemu/input_test:boot_handoff.emulated.bin) --payload evidence=$(location //device/virtual/qemu/input_test:boot_evidence.emulated.bin) $(locations @scened_linux_packages//:archives)",
+)
+sh_test(
+    name = "guest_test",
+    srcs = ["test.sh"],
+    data = ["run.py", ":guest_vmlinuz", ":guest_initramfs.cpio.gz", "//device/virtual/qemu/input_test:qemu_nvme_development_gpt.img"],
+    env = {
+        "VENUS_LINUX_RUN": "$(rootpath run.py)",
+        "VENUS_LINUX_KERNEL": "$(rootpath :guest_vmlinuz)",
+        "VENUS_LINUX_INITRAMFS": "$(rootpath :guest_initramfs.cpio.gz)",
+        "VENUS_LINUX_DISK": "$(rootpath //device/virtual/qemu/input_test:qemu_nvme_development_gpt.img)",
+    },
+    tags = ["requires-qemu", "exclusive", "local", "no-sandbox"],
+    timeout = "eternal",
+)
+architecture_test(name="guest_aarch64",architecture="aarch64",test=":guest_test",tags=["requires-qemu","exclusive","local","no-sandbox"],timeout="eternal")
+sh_test(
+    name = "framebuffer_tests",
+    srcs = ["framebuffer_test.sh"],
+    data = ["framebuffer_test.py", "framebuffer.py"],
+)
+
+sh_test(
+    name = "elf_stack_tests",
+    srcs = ["elf_stack_test.sh"],
+    data = ["elf_stack_test.py", "elf_stack.py"],
+)
+
+sh_test(
+    name = "performance_all_test",
+    srcs = ["test.sh"],
+    data = ["run.py", ":guest_vmlinuz", ":guest_initramfs.cpio.gz", "//device/virtual/qemu/input_test:qemu_nvme_development_gpt.img"],
+    env = {
+        "SCENED_WORKLOAD": "6",
+        "VENUS_LINUX_RUN": "$(rootpath run.py)",
+        "VENUS_LINUX_KERNEL": "$(rootpath :guest_vmlinuz)",
+        "VENUS_LINUX_INITRAMFS": "$(rootpath :guest_initramfs.cpio.gz)",
+        "VENUS_LINUX_DISK": "$(rootpath //device/virtual/qemu/input_test:qemu_nvme_development_gpt.img)",
+    },
+    tags = ["requires-qemu", "exclusive", "local", "no-sandbox"],
+    timeout = "eternal",
+)
+architecture_test(name="performance_all_aarch64",architecture="aarch64",test=":performance_all_test",tags=["requires-qemu","exclusive","local","no-sandbox"],timeout="eternal")

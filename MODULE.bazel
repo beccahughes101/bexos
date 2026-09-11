@@ -1,0 +1,735 @@
+module(
+    name = "bexos",
+    version = "0.1.0",
+)
+
+bazel_dep(name = "rules_rust", version = "0.73.0")
+bazel_dep(name = "rules_cc", version = "0.2.18")
+bazel_dep(name = "llvm", version = "0.8.19")
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "rules_proto", version = "7.1.0")
+bazel_dep(name = "protobuf", version = "36.0")
+
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
+
+# QEMU's published OVMF build enables Secure Boot and SMM. Keep the code and
+# matching variable-store template pinned independently of host installations.
+http_file(
+    name = "ovmf_x86_secure_code",
+    urls = ["https://raw.githubusercontent.com/qemu/qemu/v11.1.0/pc-bios/edk2-x86_64-secure-code.fd.bz2"],
+    sha256 = "90a20d858b35c29ff7e0a1d2002a3ec886665935eb4d0dbf70fe6b12ae500993",
+)
+http_file(
+    name = "ovmf_x86_vars",
+    urls = ["https://raw.githubusercontent.com/qemu/qemu/v11.1.0/pc-bios/edk2-i386-vars.fd.bz2"],
+    sha256 = "83470f393b9a200838b2292a65ca5708a109005d65a6422f3fa23cb21c8179b9",
+)
+
+host_openssl = use_repo_rule("//third_party/osslsigncode:host_openssl.bzl", "host_openssl")
+host_openssl(name = "secure_boot_host_openssl")
+http_archive(
+    name = "osslsigncode_src",
+    type = "tar.gz",
+    urls = ["https://codeload.github.com/mtrojnar/osslsigncode/tar.gz/refs/tags/2.12"],
+    sha256 = "6c0a2ac937d4c5a49afcba107a8d97622aa84b6ac1508df913fe6e3d4831d82e",
+    strip_prefix = "osslsigncode-2.12",
+    build_file = "//third_party/osslsigncode:upstream.BUILD.bazel",
+)
+
+gnu_headers = use_repo_rule("//third_party/mesa:headers.bzl", "gnu_headers")
+gnu_headers(
+    name = "mesa_linux_uapi",
+    url = "https://security.debian.org/debian-security/pool/updates/main/l/linux/linux-libc-dev_6.12.107-1_all.deb",
+    sha256 = "dc68dd53c7356598d005866da0d19d7bd33af2a62971aced624cdf04492902b4",
+)
+gnu_headers(
+    name = "mesa_gnu_headers_aarch64",
+    url = "https://deb.debian.org/debian/pool/main/g/glibc/libc6-dev_2.41-12+deb13u4_arm64.deb",
+    sha256 = "71e373cb5e9da975b02fb4af555929cb1977560e2dd8245de4eb8a7b03677a08",
+    triple = "aarch64-linux-gnu",
+)
+gnu_headers(
+    name = "mesa_gnu_headers_x86_64",
+    url = "https://deb.debian.org/debian/pool/main/g/glibc/libc6-dev_2.41-12+deb13u4_amd64.deb",
+    sha256 = "1fda734dabcd80b77266a09ab62b0f1e3e16d8091db62899890b2200745632a2",
+    triple = "x86_64-linux-gnu",
+)
+linux_packages = use_repo_rule("//testing/e2e/qemu/venus_linux:repositories.bzl", "linux_packages")
+linux_packages(name = "scened_linux_packages", lock = "//testing/e2e/qemu/venus_linux:packages.prototxt")
+http_archive(
+    name = "mesa_mako",
+    urls = ["https://files.pythonhosted.org/packages/00/62/791b31e69ae182791ec67f04850f2f062716bbd205483d63a215f3e062d3/mako-1.3.12.tar.gz"],
+    sha256 = "9f778e93289bd410bb35daadeb4fc66d95a746f0b75777b942088b7fd7af550a",
+    strip_prefix = "mako-1.3.12",
+    build_file_content = "package(default_visibility=[\"//visibility:public\"])\nfilegroup(name=\"sources\",srcs=glob([\"**\"]))\nfilegroup(name=\"root\",srcs=[\"pyproject.toml\"])\n",
+)
+http_archive(
+    name = "mesa_pyyaml",
+    urls = ["https://files.pythonhosted.org/packages/05/8e/961c0007c59b8dd7729d542c61a4d537767a59645b82a0b521206e1e25c2/pyyaml-6.0.3.tar.gz"],
+    sha256 = "d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f",
+    strip_prefix = "pyyaml-6.0.3",
+    build_file_content = "package(default_visibility=[\"//visibility:public\"])\nfilegroup(name=\"sources\",srcs=glob([\"lib/**\"]))\nfilegroup(name=\"root\",srcs=[\"pyproject.toml\"])\n",
+)
+http_archive(
+    name = "mesa_markupsafe",
+    urls = ["https://files.pythonhosted.org/packages/7e/99/7690b6d4034fffd95959cbe0c02de8deb3098cc577c67bb6a24fe5d7caa7/markupsafe-3.0.3.tar.gz"],
+    sha256 = "722695808f4b6457b320fdc131280796bdceb04ab50fe1795cd540799ebe1698",
+    strip_prefix = "markupsafe-3.0.3",
+    build_file_content = "package(default_visibility=[\"//visibility:public\"])\nfilegroup(name=\"sources\",srcs=glob([\"**\"]))\nfilegroup(name=\"root\",srcs=[\"pyproject.toml\"])\n",
+)
+http_archive(
+    name = "mesa_meson",
+    urls = ["https://files.pythonhosted.org/packages/48/d8/6c1dd1c740b7d5fd73a6ad67900a09e3dd6642013f58fa9e22ae6faaffc7/meson-1.9.1.tar.gz"],
+    sha256 = "4e076606f2afff7881d195574bddcd8d89286f35a17b4977a216f535dc0c74ac",
+    strip_prefix = "meson-1.9.1",
+    build_file_content = "package(default_visibility=[\"//visibility:public\"])\nfilegroup(name=\"sources\",srcs=glob([\"**\"]))\nfilegroup(name=\"root\",srcs=[\"meson.py\"])\n",
+)
+http_archive(
+    name = "mesa",
+    urls = ["https://archive.mesa3d.org/mesa-25.3.0.tar.xz"],
+    sha256 = "0fd54fea7dbbddb154df05ac752b18621f26d97e27863db3be951417c6abe8ae",
+    strip_prefix = "mesa-25.3.0",
+    build_file = "//third_party/mesa:sources.BUILD.bazel",
+    patches = ["//third_party/patches:mesa_bexos.patch"],
+    patch_args = ["-p1"],
+)
+http_archive(
+    name = "nanoprintf",
+    type = "tar.gz",
+    urls = ["https://codeload.github.com/charlesnicholson/nanoprintf/tar.gz/432afe35dfd24b3f9af3ab72cfdae667c1e7dfba"],
+    sha256 = "4ca5da5f24647fc566004e094ca31e7b8e57d6d5f67b6a1c7c23644651d28b60",
+    strip_prefix = "nanoprintf-432afe35dfd24b3f9af3ab72cfdae667c1e7dfba",
+    build_file_content = "load(\"@rules_cc//cc:cc_library.bzl\", \"cc_library\")\npackage(default_visibility=[\"//visibility:public\"])\ncc_library(name=\"headers\",hdrs=[\"nanoprintf.h\"],includes=[\".\"])\nexports_files([\"LICENSE\"])\n",
+)
+http_file(name = "noto_sans", urls = ["https://raw.githubusercontent.com/google/fonts/5e35378e6bda803962ee6fd257e444a7d459660d/ofl/notosans/NotoSans%5Bwdth%2Cwght%5D.ttf"], sha256 = "bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d", downloaded_file_path = "NotoSans.ttf")
+http_file(name = "noto_arabic", urls = ["https://raw.githubusercontent.com/google/fonts/5e35378e6bda803962ee6fd257e444a7d459660d/ofl/notosansarabic/NotoSansArabic%5Bwdth%2Cwght%5D.ttf"], sha256 = "63111b5b2e074dd48cc67692e0a2726d86ee94c1c37fe8598257b7b4e87e869e", downloaded_file_path = "NotoSansArabic.ttf")
+http_file(name = "noto_devanagari", urls = ["https://raw.githubusercontent.com/google/fonts/5e35378e6bda803962ee6fd257e444a7d459660d/ofl/notosansdevanagari/NotoSansDevanagari%5Bwdth%2Cwght%5D.ttf"], sha256 = "9ce7b04f60e363d8870e5997744cf85cf69d38a4d7d129d364d92a3b14b461d7", downloaded_file_path = "NotoSansDevanagari.ttf")
+http_file(name = "noto_license", urls = ["https://raw.githubusercontent.com/google/fonts/5e35378e6bda803962ee6fd257e444a7d459660d/ofl/notosans/OFL.txt"], sha256 = "cee9892f9f0cc8fe882c9e9537ee6a89621d86ee7ceaf70b02e2b2b1c25c061a", downloaded_file_path = "OFL.txt")
+http_file(name = "noto_arabic_license", urls = ["https://raw.githubusercontent.com/google/fonts/5e35378e6bda803962ee6fd257e444a7d459660d/ofl/notosansarabic/OFL.txt"], sha256 = "07fc70bfeb985cc1a87a8587d0a0c80bab11c86c9dc3fd95b6f0cb332f983e96", downloaded_file_path = "OFL-Arabic.txt")
+http_file(name = "noto_devanagari_license", urls = ["https://raw.githubusercontent.com/google/fonts/5e35378e6bda803962ee6fd257e444a7d459660d/ofl/notosansdevanagari/OFL.txt"], sha256 = "a216f6f8d85c7228093e0ee5e258d9d377e6671f68acb4db1930b29583d0f331", downloaded_file_path = "OFL-Devanagari.txt")
+
+http_archive(
+    name = "wasmtime_wasi_wit",
+    integrity = "sha256-hd2B7pV5JoLqWyecntNS9riiy6CEwvir2yJeaTMyP+0=",
+    urls = ["https://static.crates.io/crates/wasmtime-wasi/wasmtime-wasi-48.0.1.crate"],
+    type = "tar.gz",
+    strip_prefix = "wasmtime-wasi-48.0.1",
+    build_file_content = "package(default_visibility = [\"//visibility:public\"])\nfilegroup(name = \"wit\", srcs = glob([\"src/p2/wit/**/*.wit\"]))\n",
+)
+
+http_archive(
+    name = "trusty_rust_compiler_builtins",
+    build_file_content = "package(default_visibility = [\"//visibility:public\"])\nfilegroup(name = \"srcs\", srcs = glob([\"**\"]))\n",
+    sha256 = "f11973008a8cf741fe6d22f339eba21fd0ca81e2760a769ba8243ed6c21edd7e",
+    strip_prefix = "compiler_builtins-0.1.109",
+    type = "tar.gz",
+    urls = ["https://static.crates.io/crates/compiler_builtins/compiler_builtins-0.1.109.crate"],
+)
+http_archive(
+    name = "trusty_rust_hashbrown",
+    build_file_content = "package(default_visibility = [\"//visibility:public\"])\nfilegroup(name = \"srcs\", srcs = glob([\"**\"]))\n",
+    sha256 = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1",
+    strip_prefix = "hashbrown-0.14.5",
+    type = "tar.gz",
+    urls = ["https://static.crates.io/crates/hashbrown/hashbrown-0.14.5.crate"],
+)
+http_archive(
+    name = "trusty_rust_rustc_demangle",
+    build_file_content = "package(default_visibility = [\"//visibility:public\"])\nfilegroup(name = \"srcs\", srcs = glob([\"**\"]))\n",
+    sha256 = "719b953e2095829ee67db738b3bfa9fa368c94900df327b3f07fe6e794d2fe1f",
+    strip_prefix = "rustc-demangle-0.1.24",
+    type = "tar.gz",
+    urls = ["https://static.crates.io/crates/rustc-demangle/rustc-demangle-0.1.24.crate"],
+)
+http_archive(
+    name = "trusty_compiler_rt_sources",
+    build_file_content = """
+package(default_visibility = ["//visibility:public"])
+filegroup(name = "builtins_sources", srcs = glob(["lib/builtins/**"]))
+filegroup(name = "tf_marker", srcs = ["lib/builtins/multf3.c"])
+""",
+    sha256 = "de64b4e86c02aee33237a24ca3383495db0104734f6e715a761eb1ba496e0a31",
+    strip_prefix = "llvm-project-23.1.0.src/compiler-rt",
+    type = "tar.zst",
+    urls = ["https://github.com/hermeticbuild/llvm-redist/releases/download/llvmorg-23.1.0-r1/llvm-project-23.1.0.src.tar.zst"],
+)
+http_archive(
+    name = "trusty_mbedtls_sources",
+    build_file_content = """
+package(default_visibility = ["//visibility:public"])
+filegroup(name = "all_sources", srcs = glob(["include/**", "library/**"]))
+filegroup(name = "version_marker", srcs = ["include/mbedtls/version.h"])
+""",
+    sha256 = "db75d2f7f35e29cf09f7bd6734d8ee3325f29c298ef071350c5e70a40dd4f0f9",
+    strip_prefix = "mbedtls-mbedtls-3.6.1",
+    type = "tar.gz",
+    urls = ["https://github.com/Mbed-TLS/mbedtls/archive/refs/tags/mbedtls-3.6.1.tar.gz"],
+)
+
+trusty = use_repo_rule("//third_party/trusty:repository.bzl", "trusty_repository")
+trusty(
+    name = "trusty_src",
+    commit = "ca93893635956b9605ee7897b09ecc8370e25c26",
+)
+# AIDL's native host libbase requires liblog, absent from the Trusty source
+# closure. Pin Android 16's implementation independently of the firmware tree.
+new_git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "new_git_repository")
+new_git_repository(
+    name = "trusty_host_logging",
+    remote = "https://android.googlesource.com/platform/system/logging",
+    commit = "82b435118fbd3cd29f5412dfa97e8eec262d4652",
+    build_file = "//third_party/trusty:logging.BUILD.bazel",
+)
+host_parser_tools = use_repo_rule("//third_party/trusty:repository.bzl", "host_parser_tools")
+host_parser_tools(name = "trusty_parser_tools")
+
+host_libclang = use_repo_rule("//third_party/trusty:repository.bzl", "host_libclang_repository")
+host_libclang(name = "trusty_host_libclang")
+host_macos_sdk = use_repo_rule("//third_party/trusty:repository.bzl", "host_macos_sdk_repository")
+host_macos_sdk(name = "trusty_macos_sdk")
+
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.repository_set(
+    name = "scened_fixture_macos_arm64",
+    exec_triple = "aarch64-apple-darwin",
+    target_triple = "aarch64-unknown-linux-musl",
+    target_compatible_with = ["@platforms//cpu:aarch64", "@platforms//os:linux", "//testing/e2e/qemu/venus_linux:musl_abi"],
+    target_settings = ["//testing/e2e/qemu/venus_linux:is_musl_fixture"],
+    versions = ["nightly/2026-07-16"],
+    edition = "2024",
+)
+rust.repository_set(
+    name = "scened_fixture_linux_arm64",
+    exec_triple = "aarch64-unknown-linux-gnu",
+    target_triple = "aarch64-unknown-linux-musl",
+    target_compatible_with = ["@platforms//cpu:aarch64", "@platforms//os:linux", "//testing/e2e/qemu/venus_linux:musl_abi"],
+    target_settings = ["//testing/e2e/qemu/venus_linux:is_musl_fixture"],
+    versions = ["nightly/2026-07-16"],
+    edition = "2024",
+)
+rust.repository_set(
+    name = "scened_fixture_linux_x86_64",
+    exec_triple = "x86_64-unknown-linux-gnu",
+    target_triple = "aarch64-unknown-linux-musl",
+    target_compatible_with = ["@platforms//cpu:aarch64", "@platforms//os:linux", "//testing/e2e/qemu/venus_linux:musl_abi"],
+    target_settings = ["//testing/e2e/qemu/venus_linux:is_musl_fixture"],
+    versions = ["nightly/2026-07-16"],
+    edition = "2024",
+)
+rust.toolchain(
+    edition = "2024",
+    extra_rustc_flags_triples = {
+        "aarch64-unknown-linux-gnu": [
+            "-Z",
+            "branch-protection=bti,pac-ret,leaf",
+            "-C",
+            "unsafe-allow-abi-mismatch=branch-protection",
+        ],
+        "aarch64-unknown-none": [
+            "-Z",
+            "branch-protection=bti,pac-ret,b-key,leaf",
+            "-C",
+            "unsafe-allow-abi-mismatch=branch-protection",
+        ],
+    },
+    extra_target_triples = [
+        "aarch64-unknown-linux-gnu",
+        "aarch64-unknown-none",
+        "x86_64-unknown-none",
+        "x86_64-unknown-linux-gnu",
+        "wasm32-unknown-unknown",
+        "wasm32-wasip2",
+    ],
+    rust_analyzer_version = "1.80.1",
+    rustfmt_version = "nightly/2026-07-16",
+    versions = ["1.80.1", "nightly/2026-07-16"],
+)
+use_repo(
+    rust,
+    "rust_analyzer_1.80.1_tools",
+    "rustfmt_nightly-2026-07-16__aarch64-apple-darwin_tools",
+    "rustfmt_nightly-2026-07-16__aarch64-unknown-linux-gnu_tools",
+    "rustfmt_nightly-2026-07-16__x86_64-unknown-linux-gnu_tools",
+    "rust_toolchains",
+)
+
+trusty_rust = use_extension("@rules_rust//rust:extensions.bzl", "rust_host_tools")
+trusty_rust.host_tools(
+    name = "trusty_rust_1_80_1",
+    version = "1.80.1",
+)
+use_repo(trusty_rust, "trusty_rust_1_80_1")
+
+use_repo(rust,
+    "scened_fixture_macos_arm64__aarch64-unknown-linux-musl__nightly",
+    "scened_fixture_linux_arm64__aarch64-unknown-linux-musl__nightly",
+    "scened_fixture_linux_x86_64__aarch64-unknown-linux-musl__nightly",
+)
+register_toolchains(
+    "@scened_fixture_macos_arm64__aarch64-unknown-linux-musl__nightly//:toolchain",
+    "@scened_fixture_linux_arm64__aarch64-unknown-linux-musl__nightly//:toolchain",
+    "@scened_fixture_linux_x86_64__aarch64-unknown-linux-musl__nightly//:toolchain",
+    "@rust_toolchains//:all",
+)
+register_toolchains("//build/toolchains/cc:aarch64_musl_toolchain")
+register_toolchains("//build/toolchains/cc:aarch64_linux_toolchain", "//build/toolchains/cc:x86_64_linux_toolchain", "//build/toolchains/cc:aarch64_none_toolchain", "//build/toolchains/cc:x86_64_none_toolchain")
+
+register_execution_platforms("//build/platforms:native_host")
+
+register_toolchains(
+    "//build/toolchains/cc:native_linux_x86_64_toolchain",
+    "//build/toolchains/cc:native_linux_aarch64_toolchain",
+    "//build/toolchains/cc:native_osx_aarch64_toolchain",
+)
+
+crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+
+# Early boot hashes the complete BootFS in BL33 and again in the kernel. Keep
+# block compression optimized in default builds as well as opt builds so these
+# mandatory authentication checks fit within the developer readiness timeout.
+crate.annotation_select(
+    crate = "sha2",
+    version = "0.10.9",
+    triples = ["aarch64-unknown-none"],
+    rustc_flags = ["-C", "opt-level=3"],
+)
+
+# The bare-metal x86 ABI disables SIMD; select scalar crypto implementations.
+crate.annotation_select(
+    crate = "sha2",
+    version = "0.10.9",
+    triples = ["x86_64-unknown-none"],
+    crate_features = ["force-soft"],
+)
+crate.annotation_select(
+    crate = "sha2",
+    version = "0.11.0",
+    triples = ["x86_64-unknown-none"],
+    rustc_flags = ["--cfg", "sha2_backend=\"soft\""],
+)
+crate.annotation_select(
+    crate = "curve25519-dalek",
+    triples = ["x86_64-unknown-none"],
+    rustc_flags = ["--cfg", "curve25519_dalek_backend=\"serial\""],
+    build_script_env = {"CARGO_CFG_CURVE25519_DALEK_BACKEND": "serial"},
+)
+
+crate.spec(
+    package = "bindgen",
+    version = "0.69.5",
+    default_features = False,
+    features = ["__cli", "experimental", "runtime"],
+)
+crate.spec(package = "libc", version = "0.2.177")
+crate.spec(package = "libm", version = "=0.2.16", default_features = False)
+crate.spec(
+    package = "vello_cpu",
+    version = "=0.2.0",
+    default_features = False,
+    features = ["libm", "u8_pipeline"],
+)
+crate.spec(
+    package = "clap",
+    version = "4.5.23",
+    features = ["derive"],
+)
+crate.spec(
+    package = "clap_complete",
+    version = "4.5.38",
+)
+crate.spec(
+    package = "shlex",
+    version = "1.3.0",
+)
+crate.spec(package = "ciborium", version = "0.2.2", default_features = False)
+crate.spec(
+    package = "ciborium-io",
+    version = "0.2.2",
+    default_features = False,
+    features = ["alloc"],
+)
+crate.spec(package = "coset", version = "0.3.8", default_features = False)
+crate.spec(package = "enumn", version = "0.1.14")
+crate.spec(package = "log", version = "0.4.26", default_features = False)
+crate.spec(package = "proc-macro2", version = "1.0.94")
+crate.spec(package = "quote", version = "1.0.40")
+crate.spec(
+    package = "syn",
+    version = "2.0.100",
+    features = ["extra-traits", "full"],
+)
+crate.spec(
+    package = "zeroize",
+    version = "1.8.1",
+    default_features = False,
+    features = ["alloc", "zeroize_derive"],
+)
+crate.spec(
+    package = "rosefs-core",
+    git = "https://github.com/rovelstars/roseFS",
+    rev = "0cb025fed13db2cd681698bb47f5a77ff6946cbd",
+)
+crate.spec(
+    package = "aes",
+    version = "0.8.4",
+    default_features = False,
+)
+crate.spec(
+    package = "blake3",
+    version = "1.8.2",
+    default_features = False,
+    features = ["pure"],
+)
+crate.annotation(
+    crate = "blake3",
+    additive_build_file_content = """
+rust_library(
+    name = "blake3_no_std",
+    deps = [
+        ":build_script_build",
+        "@crates__arrayref-0.3.9//:arrayref",
+        "@crates__arrayvec-0.7.8//:arrayvec",
+        "@crates__cfg-if-1.0.4//:cfg_if",
+        "@crates__constant_time_eq-0.3.1//:constant_time_eq",
+    ],
+    compile_data = glob(
+        allow_empty = True,
+        include = ["**"],
+        exclude = [
+            "**/* *",
+            ".tmp_git_root/**/*",
+            "BUILD",
+            "BUILD.bazel",
+            "WORKSPACE",
+            "WORKSPACE.bazel",
+        ],
+    ),
+    crate_name = "blake3",
+    crate_features = ["pure"],
+    crate_root = "src/lib.rs",
+    edition = "2021",
+    rustc_env_files = [":cargo_toml_env_vars"],
+    rustc_flags = ["--cap-lints=allow"],
+    srcs = glob(
+        allow_empty = True,
+        include = ["**/*.rs"],
+    ),
+    tags = [
+        "cargo-bazel",
+        "crate-name=blake3",
+        "manual",
+        "noclippy",
+        "norustfmt",
+    ],
+    target_compatible_with = select({
+        "@rules_rust//rust/platform:aarch64-apple-darwin": [],
+        "@rules_rust//rust/platform:aarch64-unknown-linux-gnu": [],
+        "@rules_rust//rust/platform:aarch64-unknown-none": [],
+        "@rules_rust//rust/platform:x86_64-unknown-none": [],
+        "@rules_rust//rust/platform:wasm32-unknown-unknown": [],
+        "@rules_rust//rust/platform:x86_64-unknown-linux-gnu": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)
+""",
+)
+crate.spec(
+    package = "ed25519-dalek",
+    version = "3.0.0",
+    default_features = False,
+    features = ["fast"],
+)
+crate.spec(
+    package = "ruzstd",
+    version = "0.9.0",
+    default_features = False,
+)
+crate.spec(
+    package = "virtio-drivers",
+    version = "0.13.0",
+    default_features = False,
+    features = ["alloc"],
+)
+crate.annotation(
+    crate = "virtio-drivers",
+    patches = ["//third_party/patches:virtio_drivers_migration.patch", "//third_party/patches:virtio_drivers_platform_dma.patch"],
+    patch_args = ["-p1"],
+)
+crate.spec(
+    package = "smoltcp",
+    version = "0.14.0",
+    default_features = False,
+    features = [
+        "alloc",
+        "medium-ethernet",
+        "proto-dhcpv4",
+        "proto-dns",
+        "proto-ipv4",
+        "proto-ipv6",
+        "socket-dhcpv4",
+        "socket-dns",
+        "socket-raw",
+        "socket-tcp",
+        "socket-udp",
+    ],
+)
+crate.annotation(
+    crate = "smoltcp",
+    patches = ["//third_party/patches:smoltcp_tcp_migration.patch"],
+    patch_args = ["-p1"],
+)
+crate.spec(
+    package = "sntpc",
+    version = "0.10.1",
+    default_features = False,
+    features = ["sync"],
+)
+crate.spec(
+    package = "rustls",
+    version = "0.23.43",
+    default_features = False,
+    features = ["ring", "std", "tls12"],
+)
+crate.spec(
+    package = "p256",
+    version = "0.13.2",
+    default_features = False,
+    features = ["ecdsa"],
+)
+crate.spec(
+    package = "rsa",
+    version = "0.9.8",
+    default_features = False,
+    features = ["sha2"],
+)
+crate.spec(
+    package = "quinn-proto",
+    version = "0.11.17",
+    default_features = False,
+)
+crate.spec(
+    package = "hickory-proto",
+    version = "0.26.1",
+    default_features = False,
+)
+crate.spec(
+    package = "http",
+    version = "1.4.1",
+    default_features = False,
+)
+crate.spec(
+    package = "httparse",
+    version = "1.10.1",
+    default_features = False,
+)
+crate.spec(
+    package = "h2",
+    version = "0.4.19",
+    default_features = False,
+)
+crate.spec(
+    package = "h3",
+    version = "0.0.8",
+    default_features = False,
+)
+crate.spec(
+    package = "tokio",
+    version = "1.53.1",
+    default_features = False,
+    features = [
+        "fs",
+        "io-util",
+        "macros",
+        "net",
+        "rt-multi-thread",
+        "sync",
+        "time",
+    ],
+)
+crate.spec(
+    package = "ntp_usg-proto",
+    version = "4.10.1",
+    default_features = False,
+)
+crate.spec(
+    package = "aes-siv",
+    version = "0.7.0",
+    default_features = False,
+    features = ["alloc"],
+)
+crate.spec(
+    package = "redb",
+    version = "4.2.0",
+)
+crate.spec(
+    package = "anyhow",
+    version = "1.0.100",
+)
+crate.spec(
+    package = "argon2",
+    version = "0.5.3",
+    default_features = False,
+    features = ["alloc", "password-hash"],
+)
+crate.spec(
+    package = "aes-gcm",
+    version = "0.10.3",
+    default_features = False,
+    features = ["aes", "alloc"],
+)
+crate.spec(
+    package = "serde",
+    version = "1.0.228",
+    default_features = False,
+    features = ["alloc", "derive"],
+)
+crate.spec(
+    package = "serde_json",
+    version = "1.0.145",
+    default_features = False,
+    features = ["alloc"],
+)
+crate.spec(
+    package = "starlark",
+    version = "0.14.2",
+)
+crate.spec(
+    package = "sha2",
+    version = "0.10.9",
+    default_features = False,
+)
+crate.spec(package = "rand_chacha", version = "=0.3.1", default_features = False)
+crate.spec(
+    package = "wasmtime",
+    version = "=48.0.1",
+    default_features = False,
+    features = ["std", "runtime", "cranelift", "pulley", "component-model", "async"],
+)
+crate.spec(package = "wac-graph", version = "=0.10.1")
+crate.annotation(
+    crate = "wasmtime",
+    patches = ["//third_party/patches:wasmtime_bexos.patch", "//third_party/patches:wasmtime_stack_limits.patch"],
+    patch_args = ["-p1"],
+)
+crate.annotation(crate = "wasmtime-internal-fiber", patches = ["//third_party/patches:wasmtime_fiber_bexos.patch"], patch_args = ["-p1"])
+crate.spec(package = "wasmtime-wasi-io", version = "=48.0.1", default_features = False, features = ["std"])
+crate.spec(package = "wat", version = "1.252.0")
+crate.from_specs(
+    cargo_config = "//:.cargo/config.toml",
+    supported_platform_triples = [
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu",
+        "aarch64-unknown-none",
+        "x86_64-unknown-none",
+        "x86_64-unknown-linux-gnu",
+        "wasm32-unknown-unknown",
+    ],
+)
+use_repo(crate, "crates", "crates__aes-gcm-siv-0.12.1", "crates__blake3-1.8.2", "crates__redb-4.2.0", "crates__sha2-0.11.0")
+
+d1_crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate", isolate = True)
+d1_crate.spec(
+    package = "aes",
+    version = "0.8.4",
+    default_features = False,
+)
+d1_crate.spec(
+    package = "blake3",
+    version = "1.8.7",
+    default_features = False,
+    features = ["pure"],
+)
+d1_crate.spec(
+    package = "rosefs-core",
+    git = "https://github.com/rovelstars/roseFS",
+    rev = "0cb025fed13db2cd681698bb47f5a77ff6946cbd",
+)
+d1_crate.spec(
+    package = "reed-solomon-simd",
+    version = "3.1.0",
+    default_features = False,
+)
+d1_crate.spec(
+    package = "once_cell",
+    version = "1.21.4",
+    default_features = False,
+    features = ["alloc", "race"],
+)
+d1_crate.spec(
+    package = "thiserror",
+    version = "2.0.20",
+    default_features = False,
+)
+d1_crate.spec(
+    package = "virtio-drivers",
+    version = "0.13.0",
+    default_features = False,
+    features = ["alloc"],
+)
+d1_crate.from_specs(
+    name = "d1_crates",
+    cargo_config = "//:.cargo/config.toml",
+    supported_platform_triples = [
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu",
+        "aarch64-unknown-none",
+        "x86_64-unknown-none",
+        "x86_64-unknown-linux-gnu",
+    ],
+)
+use_repo(d1_crate, "d1_crates", "d1_crates__aes-gcm-siv-0.12.1")
+
+# Shell dependencies are isolated so native Tokio features never enter WASM.
+brush_crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate", isolate = True)
+brush_crate.spec(package = "brush-core", git = "https://github.com/reubeno/brush", rev = "a2620d71bf3d08ca4792655836f9f916c7bb73ff", features = ["serde"])
+brush_crate.spec(package = "brush-builtins", git = "https://github.com/reubeno/brush", rev = "a2620d71bf3d08ca4792655836f9f916c7bb73ff")
+brush_crate.spec(package = "wit-bindgen", version = "=0.58.0")
+brush_crate.spec(package = "serde", version = "1.0.228", features = ["derive"])
+brush_crate.spec(package = "regex", version = "=1.12.3")
+brush_crate.spec(package = "serde_json", version = "1.0.149")
+brush_crate.spec(package = "tokio", version = "1.53.1", default_features = False, features = ["rt", "sync", "io-util", "macros"])
+# Preserve the existing lockfile versions when regenerating Linux host selects.
+brush_crate.spec(package = "bitflags", version = "=2.13.1", default_features = False)
+brush_crate.spec(package = "bon", version = "=3.10.0", default_features = False)
+brush_crate.spec(package = "bon-macros", version = "=3.10.0", default_features = False)
+brush_crate.spec(package = "fancy-regex", version = "=0.19.0", default_features = False)
+brush_crate.spec(package = "uuid", version = "=1.26.0", default_features = False)
+brush_crate.spec(package = "zerocopy", version = "=0.8.56", default_features = False)
+brush_crate.spec(package = "zerocopy-derive", version = "=0.8.56", default_features = False)
+brush_crate.annotation(crate = "brush-core", patches = ["//third_party/patches:brush-core_bazel.patch", "//third_party/patches:brush-core_bexos.patch"], patch_args = ["-p1"])
+brush_crate.annotation(crate = "brush-builtins", patches = ["//third_party/patches:brush-builtins_bazel.patch", "//third_party/patches:brush-builtins_bexos.patch"], patch_args = ["-p1"])
+brush_crate.annotation(crate = "brush-parser", patches = ["//third_party/patches:brush-parser_bazel.patch"], patch_args = ["-p1"])
+# ARM security-stack fixtures include the shell component; its proc macros run
+# on the native build host even though the component itself targets WASI.
+brush_crate.from_specs(name = "brush_crates", cargo_config = "//:.cargo/config.toml", supported_platform_triples = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu", "wasm32-wasip2"])
+use_repo(brush_crate, "brush_crates")
+
+# Desktop graphics must not unify std features into kernel dependencies.
+graphics_crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate", isolate = True)
+graphics_crate.spec(package = "taffy", version = "=0.14.0", default_features = False, features = ["std", "taffy_tree", "flexbox", "grid", "block_layout"])
+graphics_crate.spec(package = "parley", version = "=0.11.1", default_features = False, features = ["std", "complex-scripts"])
+graphics_crate.spec(package = "stylo", version = "=0.20.0", default_features = False, features = ["servo"])
+graphics_crate.spec(package = "selectors", version = "=0.40.0")
+graphics_crate.spec(package = "stylo_dom", version = "=0.20.0")
+graphics_crate.spec(package = "stylo_static_prefs", version = "=0.20.0")
+graphics_crate.spec(package = "euclid", version = "=0.22.14")
+graphics_crate.spec(package = "app_units", version = "=0.7.8")
+graphics_crate.spec(package = "skrifa", version = "=0.44.0")
+graphics_crate.spec(package = "vello", version = "=0.10.0", default_features = False, features = ["wgpu"])
+graphics_crate.spec(package = "vello_encoding", version = "=0.10.0")
+graphics_crate.spec(package = "vello_cpu", version = "=0.2.0", default_features = False, features = ["std", "text", "u8_pipeline"])
+graphics_crate.spec(package = "wgpu", version = "=29.0.3", default_features = False, features = ["std", "vulkan", "wgsl"])
+graphics_crate.spec(package = "naga", version = "=29.0.4", default_features = False, features = ["wgsl-in", "spv-out"])
+graphics_crate.spec(package = "ash", version = "=0.38.0", default_features = False, features = ["std", "debug"])
+graphics_crate.annotation(crate = "vello_shaders", build_script_data_glob = ["shader/**"], patches = ["//third_party/patches:vello_shaders_bazel.patch"], patch_args = ["-p1"])
+graphics_crate.annotation(crate = "vello_encoding", patches = ["//third_party/patches:vello_image_pressure.patch"], patch_args = ["-p1"])
+graphics_crate.annotation(crate = "vello_cpu", patches = ["//third_party/patches:vello_cpu_glyph_atlas.patch"], patch_args = ["-p1"])
+graphics_crate.annotation(crate = "wgpu-hal", patches = ["//third_party/patches:wgpu_hal_headless.patch"], patch_args = ["-p1"])
+graphics_crate.annotation(crate = "stylo", build_script_data_glob = ["properties/**"])
+graphics_crate.from_specs(name = "graphics_crates", supported_platform_triples = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"])
+use_repo(graphics_crate, "graphics_crates")
+
+# Append host tooling repositories so existing canonical repository names stay stable.
+actionlint_repository = use_repo_rule("//tools/ci:repositories.bzl", "actionlint_repository")
+actionlint_repository(name = "ci_actionlint")

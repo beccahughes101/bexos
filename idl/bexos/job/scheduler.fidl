@@ -1,0 +1,116 @@
+library bexos.job;
+
+type Status = strict enum : int32 {
+    OK = 0,
+    NOT_FOUND = -1,
+    ACCESS_DENIED = -2,
+    INVALID_ARGS = -8,
+    STORAGE = -20,
+    CONSTRAINTS_UNMET = -21,
+    LAUNCH_FAILED = -22,
+};
+
+type NetworkRequirement = strict enum : uint8 {
+    NONE = 1,
+    ANY = 2,
+    UNMETERED = 3,
+};
+
+type JobState = strict enum : uint8 {
+    SCHEDULED = 1,
+    RUNNING = 2,
+    WAITING_CONSTRAINTS = 3,
+    LOCKED_USER = 4,
+    COMPLETED = 5,
+    FAILED = 6,
+    CANCELLED = 7,
+};
+
+type JobTimebase = strict enum : uint8 {
+    MONOTONIC = 1,
+    REALTIME_UTC = 2,
+    WAITING_REALTIME_ANCHOR = 3,
+};
+
+type JobRunStatus = strict enum : uint8 {
+    NEVER_RUN = 1,
+    OK = 2,
+    FAILED = 3,
+    TIMED_OUT = 4,
+    CANCELLED = 5,
+};
+
+table JobConstraints {
+    1: network NetworkRequirement;
+    2: require_charging bool;
+    3: require_device_idle bool;
+    4: require_battery_not_low bool;
+};
+
+struct JobSpec {
+    job_id string:64;
+    target_component string:64;
+    initial_delay_seconds uint64;
+    interval_seconds uint64;
+    flex_window_seconds uint32;
+    constraints JobConstraints;
+    max_execution_seconds uint32;
+    persist_across_reboots bool;
+};
+
+struct JobRecord {
+    package_id string:128;
+    uid uint64;
+    package_instance_id uint64;
+    spec JobSpec;
+    state JobState;
+    last_run_status JobRunStatus;
+    timebase JobTimebase;
+    next_run_seconds uint64;
+    last_run_seconds uint64;
+    job_token uint64;
+    run_attempts uint32;
+    anchor_delay_seconds uint64;
+};
+
+@discoverable
+protocol Scheduler {
+    1: ScheduleJob(struct {
+        spec JobSpec;
+    }) -> (struct {
+        status Status;
+    });
+
+    2: CancelJob(struct {
+        job_id string:64;
+    }) -> (struct {
+        status Status;
+    });
+
+    3: GetJob(struct {
+        job_id string:64;
+    }) -> (struct {
+        status Status;
+        job JobRecord;
+    });
+
+    4: ListJobs() -> (struct {
+        status Status;
+        jobs vector<JobRecord>:1024;
+    });
+
+    5: RunDueJobsNow() -> (struct {
+        status Status;
+        launched uint32;
+    });
+};
+
+protocol JobControl {
+    1: Complete(struct {
+        job_token uint64;
+        success bool;
+        reschedule bool;
+    }) -> (struct {
+        status Status;
+    });
+};

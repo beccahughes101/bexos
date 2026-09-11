@@ -1,0 +1,100 @@
+library bexos.app.opener;
+
+type OpenerStatus = strict enum : int32 {
+    OK = 0,
+    NOT_FOUND = -1,
+    INVALID_ARGS = -8,
+    ACCESS_DENIED = -10,
+    LAUNCH_FAILED = -22,
+};
+
+struct OpenTarget {
+    default_process bool;
+    specific_process string:64;
+};
+
+type OpenResult = strict enum : uint8 {
+    SUCCESS = 1,
+    PROMPT_PENDING_USER = 2,
+    NO_HANDLER_REGISTERED = 3,
+    ACCESS_DENIED = 4,
+};
+
+protocol Opener {
+    6: BindCommandLauncher(resource struct { launcher handle:CHANNEL; }) -> (struct { status OpenerStatus; });
+    1: OpenUrl(struct {
+        url string:2048;
+        target OpenTarget;
+    }) -> (struct {
+        status OpenerStatus;
+        result OpenResult;
+    });
+
+    2: OpenFile(resource struct {
+        file handle:CHANNEL;
+        mime_type string:128;
+        target OpenTarget;
+    }) -> (struct {
+        status OpenerStatus;
+        result OpenResult;
+    });
+
+    3: OpenApp(struct {
+        package_name string:128;
+        target OpenTarget;
+        arguments vector<string:256>:16;
+    }) -> (struct {
+        status OpenerStatus;
+        result OpenResult;
+    });
+
+    4: GetPreferredInterface(resource struct {
+        interface_name string:128;
+        server_channel handle:CHANNEL;
+    }) -> (struct {
+        status OpenerStatus;
+        selected_package string:128;
+    });
+
+    5: SetUserDefault(struct {
+        target_key string:128;
+        package_name string:128;
+    }) -> (struct {
+        status OpenerStatus;
+    });
+};
+
+struct CommandProcess { process_id uint64; package_name string:128; process_name string:64; exited bool; suspended bool; exit_code int32; };
+
+// Bound to the same authenticated identity as the Opener that created it.
+protocol CommandLauncher {
+    3: ListProcesses() -> (struct { status OpenerStatus; processes vector<CommandProcess>:128; });
+    4: SignalProcess(struct { process_id uint64; signal uint32; }) -> (struct { status OpenerStatus; });
+    1: ResolveCommand(struct { name string:256; }) -> (struct {
+        status OpenerStatus;
+        package_name string:128;
+        process_name string:64;
+        executable string:256;
+    });
+    2: LaunchCommand(resource struct {
+        command_name string:256;
+        package_name string:128;
+        process_name string:64;
+        arguments vector<string:1024>:64;
+        environment vector<string:1024>:64;
+        cwd handle:CHANNEL;
+        stdin_stream handle;
+        stdout_stream handle;
+        stderr_stream handle;
+    }) -> (resource struct {
+        status OpenerStatus;
+        process_control handle:OPTIONAL;
+    });
+};
+protocol ProcessControl {
+    1: GetStatus() -> (struct { status OpenerStatus; exited bool; suspended bool; exit_code int32; });
+    2: WatchExit() -> (struct { status OpenerStatus; exit_code int32; });
+    3: SendSignal(struct { signal uint32; }) -> (struct { status OpenerStatus; });
+    4: Suspend() -> (struct { status OpenerStatus; });
+    5: Resume() -> (struct { status OpenerStatus; });
+};

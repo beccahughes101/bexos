@@ -1,0 +1,14 @@
+package_name: "com.example.preferences_probe"
+name: "Preference receiver probe"
+processes {
+ name: "probe"
+ runner: "elf"
+ runner_options { [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/probe" } }
+}
+config_schema {
+ fields { name: "managed" type: CONFIG_BOOL scope: SCOPE_MDM_LOCKABLE default_value { bool_value: false } }
+ fields { name: "dark" type: CONFIG_BOOL scope: SCOPE_USER_EDITABLE default_value { bool_value: false } }
+ fields { name: "cache" type: CONFIG_UINT32 scope: SCOPE_MDM_LOCKABLE default_value { uint32_value: 64 } uint_range { min: 32 max: 1024 } }
+ fields { name: "system" type: CONFIG_BOOL default_value { bool_value: false } }
+}
+services_consumed { name: "bexos.preferences.UserPreferences" link_type: REQUIRED capabilities { capability: "Public" methods { ordinal: 1 link_type: REQUIRED } methods { ordinal: 2 link_type: REQUIRED } methods { ordinal: 3 link_type: REQUIRED } } }

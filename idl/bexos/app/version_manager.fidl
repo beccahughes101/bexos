@@ -1,0 +1,68 @@
+library bexos.app.version_manager;
+
+type MultiVersionPolicy = strict enum : uint8 {
+    SINGLE_ACTIVE_ONLY = 1,
+    PARALLEL_EXECUTION = 2,
+    SHARED_STORAGE_MULTI = 3,
+};
+
+type HealthCheckStatus = strict enum : uint8 {
+    HEALTHY = 1,
+    PROBATION = 2,
+    CRASH_LOOP = 3,
+};
+
+struct SemVer {
+    major uint32;
+    minor uint32;
+    patch uint32;
+    build uint32;
+    prerelease string:64;
+};
+
+struct AppVersionEntry {
+    package_id string:128;
+    version SemVer;
+    policy MultiVersionPolicy;
+    is_active bool;
+    disk_usage_bytes uint64;
+};
+
+type VersionManagerStatus = strict enum : int32 {
+    OK = 0,
+    NOT_FOUND = -1,
+    INVALID_ARGS = -8,
+    ACCESS_DENIED = -10,
+    STORAGE = -20,
+};
+
+protocol VersionManager {
+    1: ListVersions(struct {
+        package_id string:128;
+    }) -> (struct {
+        status VersionManagerStatus;
+        versions vector<AppVersionEntry>:16;
+    });
+
+    2: PinActiveVersion(struct {
+        package_id string:128;
+        target_version SemVer;
+    }) -> (struct {
+        status VersionManagerStatus;
+    });
+
+    3: RollbackToPrevious(struct {
+        package_id string:128;
+    }) -> (struct {
+        status VersionManagerStatus;
+        restored_version SemVer;
+    });
+
+    4: PruneInactiveVersions(struct {
+        package_id string:128;
+        keep_last_n uint32;
+    }) -> (struct {
+        status VersionManagerStatus;
+        reclaimed_bytes uint64;
+    });
+};

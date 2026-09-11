@@ -1,0 +1,24 @@
+load("//build/platforms:architecture.bzl", "guest_select")
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+package(default_visibility = ["//visibility:public"])
+rust_library(
+    name = "virtio_console",
+    rustc_flags = guest_select([], ["--cfg=bexos_arch_x86_64"]),
+    srcs = glob(["src/*.rs"], exclude = ["src/main.rs"]),
+    crate_name = "bexos_d1_virtio_console",
+    edition = "2024",
+    deps = ["//idl:serial_fidl_rust", "//idl:rpmb_fidl_rust", "//idl:kernel_fidl_rust", "//idl:hardware_manager_fidl_rust", "//lib/migration", "//lib/userspace", "//lib/virtio_hal", "//lib/rpmb_proxy", "@crates//:virtio-drivers"],
+)
+std_service_binary(
+    name = "virtio_console_driver", srcs = ["src/main.rs"],
+    crate_name = "bexos_d1_virtio_console_driver", deps = [":virtio_console", "@crates//:tokio"],
+)
+app_manifest(name = "package_manifest", src = "package/virtio_console_driver.prototxt")
+std_service_binary(
+    name = "replacement_elf", srcs = ["src/main.rs"],
+    crate_name = "bexos_d1_virtio_console_replacement", deps = [":virtio_console", "@crates//:tokio"],
+)
+app_archive(name = "replacement_archive", manifest = ":package_manifest", entries = {"bin/virtio_console_driver": ":replacement_elf"}, compression = "zstd")
+rust_test(name = "virtio_console_tests", crate = ":virtio_console")

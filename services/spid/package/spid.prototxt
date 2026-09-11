@@ -1,0 +1,33 @@
+package_name: "bexos.service.spid"
+name: "spid"
+library_dependencies { package_name: "bexos.lib.crypto" mount_alias: "bexos.lib.crypto" abi_version: 1 }
+library_dependencies { package_name: "bexos.lib.net" mount_alias: "bexos.lib.net" abi_version: 1 }
+processes {
+ name: "spid"
+ runner: "elf"
+ lifecycle { update_strategy: HEART_TRANSPLANT preparation_timeout_ms: 30000 migration_timeout_ms: 1000 }
+ service: true
+ wave: 2
+ runner_options { [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/spid" } }
+}
+services_consumed {
+ name: "bexos.hardware.manager.DeviceRegistry"
+ link_type: REQUIRED
+ capabilities {
+  capability: "SpiDescendantRegistrar"
+  methods { ordinal: 1 link_type: REQUIRED }
+  methods { ordinal: 2 link_type: REQUIRED }
+ }
+}
+services_exposed {
+ name: "bexos.hardware.i2cspi.DeterministicFixtureControl"
+ protocol: "DeterministicFixtureControl"
+ lifecycle: SINGLETON
+ visibility: PRIVATE
+ capabilities {
+  capability: "Fixture"
+  method_ordinals: 1
+  method_ordinals: 2
+  method_ordinals: 3
+ }
+}

@@ -1,0 +1,66 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "nvme",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_features = ["std"],
+    crate_name = "bexos_d1_nvme",
+    edition = "2024",
+    deps = [
+        "//drivers/d1/support/linux/shim:linux_shim_std",
+        "//idl:block_fidl_rust",
+        "//idl:hardware_manager_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//idl:power_fidl_rust",
+        "//lib/migration",
+        "//lib/userspace",
+        "//lib/userspace_async",
+        "@crates//:tokio",
+    ],
+)
+
+std_service_binary(
+    name = "nvme_driver",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_d1_nvme_driver",
+    deps = [
+        ":nvme",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "nvme_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "nvme_tests",
+    edition = "2024",
+    deps = [
+        ":nvme",
+        "//idl:block_fidl_rust",
+    ],
+)
+
+rust_test(
+    name = "nvme_async_tests",
+    srcs = ["tests/nvme_async_tests.rs"],
+    crate_name = "nvme_async_tests",
+    edition = "2024",
+    deps = [":nvme"],
+)
+
+app_manifest(name = "package_manifest", src = "package/nvme_driver.prototxt")
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_d1_nvme_driver_replacement",
+    deps = [
+        ":nvme",
+        "@crates//:tokio",
+    ],
+)
+app_archive(name = "replacement_archive", manifest = ":package_manifest", entries = {"bin/nvme_driver": ":replacement_elf"}, compression = "zstd")

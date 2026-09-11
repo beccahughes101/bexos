@@ -1,0 +1,19 @@
+package(default_visibility = ["//visibility:public"])
+
+sh_binary(name = "unpack", srcs = ["unpack.sh"], data = ["unpack.py"])
+
+genrule(
+    name = "firmware",
+    srcs = ["@ovmf_x86_secure_code//file", "@ovmf_x86_vars//file"],
+    outs = ["OVMF_CODE.fd", "OVMF_VARS.fd"],
+    tools = [":unpack"],
+    cmd = "$(location :unpack) $(location @ovmf_x86_secure_code//file) $(location OVMF_CODE.fd) $(location @ovmf_x86_vars//file) $(location OVMF_VARS.fd)",
+)
+
+sh_binary(name = "enroll", srcs = ["enroll.sh"], data = ["enroll.py"])
+
+sh_test(
+    name = "enroll_test",
+    srcs = ["enroll_test.sh"],
+    data = ["enroll.py", "enroll_test.py"],
+)

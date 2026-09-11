@@ -1,0 +1,12 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+package(default_visibility=["//visibility:public"])
+rust_library(name="virtio",srcs=glob(["src/*.rs"],exclude=["src/main.rs"]),crate_name="bexos_virtio_input",edition="2024",deps=["//lib/flatland_input","//lib/graphics_runtime","//lib/virtio_hal","//lib/userspace","//lib/migration","//idl:input_fidl_rust","//idl:hardware_manager_fidl_rust","//idl:kernel_fidl_rust","@crates//:virtio-drivers"])
+std_service_binary(name="input_driver",srcs=["src/main.rs"],crate_name="bexos_input_driver",deps=[":virtio"])
+std_service_binary(name="replacement_elf",srcs=["src/main.rs"],crate_name="bexos_input_replacement",deps=[":virtio"])
+app_manifest(name="package_manifest",src="package/input.prototxt")
+app_archive(name="replacement_archive",manifest=":package_manifest",entries={"bin/input":":replacement_elf"},compression="zstd")
+rust_test(name="tests",srcs=["tests/migration.rs"],edition="2024",deps=[":virtio","//lib/flatland_input","//lib/graphics_runtime","//lib/userspace","//idl:input_fidl_rust"])
+
+app_archive(name="input_archive",manifest=":package_manifest",entries={"bin/input":":input_driver"},compression="zstd")

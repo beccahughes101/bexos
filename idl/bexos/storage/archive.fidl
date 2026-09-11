@@ -1,0 +1,12 @@
+library bexos.storage.archive;
+
+protocol ArchiveManager {
+    41: MountMemory(resource struct { archive handle:VMO; length uint64; }) -> (resource struct { status int32; root_dir handle:CHANNEL; });
+    40: MountPackage(resource struct {
+        package_file handle:CHANNEL;
+        expected_merkle_root vector<uint8>:32;
+    }) -> (resource struct {
+        status int32;
+        root_dir handle:CHANNEL;
+    });
+};

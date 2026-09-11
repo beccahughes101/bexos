@@ -1,0 +1,11 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+package(default_visibility = ["//visibility:public"])
+rust_library(name = "gpu", srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]), crate_name = "bexos_virtio_gpu", edition = "2024", deps = ["//lib/virtio_gpu_protocol", "//lib/graphics", "//lib/graphics_runtime", "//lib/virtio_hal", "//lib/userspace", "//lib/migration", "//idl:graphics_fidl_rust", "//idl:hardware_manager_fidl_rust", "//idl:kernel_fidl_rust", "@crates//:virtio-drivers"])
+app_manifest(name = "package_manifest", src = "package/gpu.prototxt")
+std_service_binary(name = "gpu_driver", srcs = ["src/main.rs"], crate_name = "bexos_gpu_gpu_driver", deps = [":gpu"])
+std_service_binary(name = "replacement_elf", srcs = ["src/main.rs"], crate_name = "bexos_gpu_replacement_elf", deps = [":gpu"])
+app_archive(name = "replacement_archive", manifest = ":package_manifest", entries = {"bin/gpu": ":replacement_elf"}, compression = "zstd")
+
+rust_test(name = "tests", srcs = ["tests/migration_tests.rs"], edition = "2024", deps = ["//lib/migration", "//lib/virtio_hal", ":gpu", "//lib/graphics", "//lib/graphics_runtime", "//lib/userspace"])

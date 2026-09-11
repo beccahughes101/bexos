@@ -1,0 +1,12 @@
+load("//build/rules:userspace.bzl", "std_service_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+std_service_binary(
+    name = "tokio_smoke",
+    srcs = ["main.rs"],
+    crate_name = "bexos_tokio_smoke",
+    deps = [
+        "@crates//:tokio",
+    ],
+)

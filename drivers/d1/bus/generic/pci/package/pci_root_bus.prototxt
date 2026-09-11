@@ -1,0 +1,45 @@
+package_name: "bexos.driver.pci_root"
+name: "pci_root_bus"
+permissions {
+ name: "BEXOS_SYSTEM_PRIVILEGED"
+ usage_description: "Register PCI child device nodes with appd's hardware registry."
+}
+library_dependencies {
+ package_name: "bexos.lib.crypto"
+ mount_alias: "bexos.lib.crypto"
+ abi_version: 1
+}
+library_dependencies {
+ package_name: "bexos.lib.net"
+ mount_alias: "bexos.lib.net"
+ abi_version: 1
+}
+processes {
+ name: "pci_root_bus"
+ runner: "elf"
+ lifecycle { update_strategy: HEART_TRANSPLANT }
+ service: true
+ wave: 0
+ runner_options {
+  [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/pci_root_bus" }
+ }
+}
+services_exposed {
+ name: "bexos.power.DevicePowerControl"
+ protocol: "DevicePowerControl"
+ lifecycle: MULTIPLE_INSTANCE
+ visibility: PUBLIC
+ capabilities {
+  capability: "Public"
+  method_ordinals: 1
+ }
+}
+services_consumed {
+ name: "bexos.hardware.manager.DeviceRegistry"
+ link_type: REQUIRED
+ capabilities {
+  capability: "Public"
+  methods { ordinal: 1 link_type: REQUIRED }
+  methods { ordinal: 2 link_type: REQUIRED }
+ }
+}

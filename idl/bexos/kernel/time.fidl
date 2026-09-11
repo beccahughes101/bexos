@@ -1,0 +1,23 @@
+library bexos.kernel;
+
+type ClockType = strict enum : uint8 {
+    MONOTONIC = 1,
+    BOOT_TIME = 2,
+    REALTIME = 3,
+};
+
+protocol Clock {
+    /// Read elapsed nanoseconds from a kernel monotonic clock.
+    GetTime(struct {
+        clock_type ClockType
+    }) -> (struct {
+        status Status,
+        nanos uint64
+    });
+
+    /// Return the read-only shared seqlock time page used by libc fast paths.
+    GetVdsoTimePage() -> (resource struct {
+        status Status,
+        vmo handle:VMO
+    });
+};

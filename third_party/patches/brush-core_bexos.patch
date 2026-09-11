@@ -1,0 +1,386 @@
+diff --git a/src/interp.rs b/src/interp.rs
+--- a/src/interp.rs
++++ b/src/interp.rs
+@@ -208,6 +208,8 @@
+         shell: &mut Shell<impl extensions::ShellExtensions>,
+         params: &ExecutionParameters,
+     ) -> Result<ExecutionResult, error::Error> {
++        #[cfg(target_arch = "wasm32")]
++        crate::bexos::yield_execution().await?;
+         let mut result = ExecutionResult::success();
+ 
+         for command in &self.complete_commands {
+@@ -243,6 +245,8 @@
+         shell: &mut Shell<impl extensions::ShellExtensions>,
+         params: &ExecutionParameters,
+     ) -> Result<ExecutionResult, error::Error> {
++        #[cfg(target_arch = "wasm32")]
++        crate::bexos::yield_execution().await?;
+         let mut result = ExecutionResult::success();
+ 
+         for ast::CompoundListItem(ao_list, sep) in &self.0 {
+@@ -311,6 +315,8 @@
+         shell: &mut Shell<impl extensions::ShellExtensions>,
+         params: &ExecutionParameters,
+     ) -> Result<ExecutionResult, error::Error> {
++        #[cfg(target_arch = "wasm32")]
++        crate::bexos::yield_execution().await?;
+         let has_operators = !self.additional.is_empty();
+ 
+         // For the first command, suppress errexit if there are more commands after it
+@@ -367,6 +373,8 @@
+         shell: &mut Shell<impl extensions::ShellExtensions>,
+         params: &ExecutionParameters,
+     ) -> Result<ExecutionResult, error::Error> {
++        #[cfg(target_arch = "wasm32")]
++        crate::bexos::yield_execution().await?;
+         // Capture current timing if so requested.
+         let stopwatch = self
+             .timed
+@@ -461,7 +469,7 @@
+         pipe_writers.reserve_exact(pipeline_len - 1);
+ 
+         for _ in 0..(pipeline_len - 1) {
+-            let (reader, writer) = std::io::pipe()?;
++            let (reader, writer) = crate::pipes::pipe()?;
+             pipe_readers.push(Some(reader.into()));
+             pipe_writers.push(Some(writer.into()));
+         }
+@@ -538,6 +546,8 @@
+     shell: &mut Shell<impl extensions::ShellExtensions>,
+     params: &ExecutionParameters,
+ ) -> Result<ExecutionResult, error::Error> {
++        #[cfg(target_arch = "wasm32")]
++        crate::bexos::yield_execution().await?;
+     let mut result = ExecutionResult::success();
+     let mut stopped_children = vec![];
+     let mut last_failure_exit_code: Option<ExecutionExitCode> = None;
+@@ -655,6 +665,8 @@
+         shell: &mut Shell<impl extensions::ShellExtensions>,
+         params: &ExecutionParameters,
+     ) -> Result<ExecutionResult, error::Error> {
++        #[cfg(target_arch = "wasm32")]
++        crate::bexos::yield_execution().await?;
+         match self {
+             Self::BraceGroup(ast::BraceGroupCommand { list, .. }) => {
+                 list.execute(shell, params).await
+@@ -710,6 +722,8 @@
+         shell: &mut Shell<impl extensions::ShellExtensions>,
+         params: &ExecutionParameters,
+     ) -> Result<ExecutionResult, error::Error> {
++        #[cfg(target_arch = "wasm32")]
++        crate::bexos::yield_execution().await?;
+         if shell.options().do_not_execute_commands {
+             return Ok(ExecutionResult::success());
+         }
+@@ -729,8 +743,8 @@
+         }
+ 
+         // Set up the pipes that we'll use to communicate with the coprocess.
+-        let (stdin_reader, stdin_writer) = std::io::pipe()?;
+-        let (stdout_reader, stdout_writer) = std::io::pipe()?;
++        let (stdin_reader, stdin_writer) = crate::pipes::pipe()?;
++        let (stdout_reader, stdout_writer) = crate::pipes::pipe()?;
+ 
+         // Allocate new fds in the (parent) shell for the read end of the coprocess's stdout
+         // and the write end of the coprocess's stdin.
+@@ -795,6 +809,8 @@
+         shell: &mut Shell<impl extensions::ShellExtensions>,
+         params: &ExecutionParameters,
+     ) -> Result<ExecutionResult, error::Error> {
++        #[cfg(target_arch = "wasm32")]
++        crate::bexos::yield_execution().await?;
+         let mut result = ExecutionResult::success();
+ 
+         // If we were given explicit words to iterate over, then expand them all, with splitting
+@@ -861,6 +877,8 @@
+         shell: &mut Shell<impl extensions::ShellExtensions>,
+         params: &ExecutionParameters,
+     ) -> Result<ExecutionResult, error::Error> {
++        #[cfg(target_arch = "wasm32")]
++        crate::bexos::yield_execution().await?;
+         // N.B. One would think it makes sense to trace the expanded value being switched
+         // on, but that's not it.
+         if shell.options().print_commands_and_arguments {
+@@ -928,6 +946,8 @@
+         shell: &mut Shell<impl extensions::ShellExtensions>,
+         params: &ExecutionParameters,
+     ) -> Result<ExecutionResult, error::Error> {
++        #[cfg(target_arch = "wasm32")]
++        crate::bexos::yield_execution().await?;
+         // Execute condition with errexit suppressed
+         let mut condition_params = params.clone();
+         condition_params.suppress_errexit = true;
+@@ -981,6 +1001,8 @@
+         shell: &mut Shell<impl extensions::ShellExtensions>,
+         params: &ExecutionParameters,
+     ) -> Result<ExecutionResult, error::Error> {
++        #[cfg(target_arch = "wasm32")]
++        crate::bexos::yield_execution().await?;
+         let is_while = match self.0 {
+             WhileOrUntil::While => true,
+             WhileOrUntil::Until => false,
+@@ -1039,6 +1061,8 @@
+         shell: &mut Shell<impl extensions::ShellExtensions>,
+         params: &ExecutionParameters,
+     ) -> Result<ExecutionResult, error::Error> {
++        #[cfg(target_arch = "wasm32")]
++        crate::bexos::yield_execution().await?;
+         let value = self.expr.eval(shell, params, true).await?;
+         let result = if value != 0 {
+             ExecutionResult::success()
+@@ -1059,6 +1083,8 @@
+         shell: &mut Shell<impl extensions::ShellExtensions>,
+         params: &ExecutionParameters,
+     ) -> Result<ExecutionResult, error::Error> {
++        #[cfg(target_arch = "wasm32")]
++        crate::bexos::yield_execution().await?;
+         let mut result = ExecutionResult::success();
+         if let Some(initializer) = &self.initializer {
+             initializer.eval(shell, params, true).await?;
+@@ -1102,6 +1128,8 @@
+         shell: &mut Shell<impl extensions::ShellExtensions>,
+         _params: &ExecutionParameters,
+     ) -> Result<ExecutionResult, error::Error> {
++        #[cfg(target_arch = "wasm32")]
++        crate::bexos::yield_execution().await?;
+         let func_name = self.fname.value.clone();
+ 
+         // In POSIX mode, function names can't shadow special builtins.
+@@ -1955,7 +1983,7 @@
+     child_params.process_group_policy = ProcessGroupPolicy::SameProcessGroup;
+ 
+     // Set up pipe so we can connect to the command.
+-    let (reader, writer) = std::io::pipe()?;
++    let (reader, writer) = crate::pipes::pipe()?;
+     let (reader, writer) = (reader.into(), writer.into());
+ 
+     let target_file = match kind {
+@@ -1994,7 +2022,7 @@
+ }
+ 
+ fn setup_open_file_with_contents(contents: &str) -> Result<OpenFile, error::Error> {
+-    let (reader, mut writer) = std::io::pipe()?;
++    let (reader, mut writer) = crate::pipes::pipe()?;
+ 
+     let bytes = contents.as_bytes();
+ 
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -62,3 +62,8 @@
+ };
+ pub use sourceinfo::SourceInfo;
+ pub use variables::{ShellValue, ShellVariable};
++
++#[cfg(target_arch = "wasm32")]
++pub mod bexos;
++
++mod pipes;
+diff --git a/src/bexos.rs b/src/bexos.rs
+new file mode 100644
+--- /dev/null
++++ b/src/bexos.rs
+@@ -0,0 +1,56 @@
++//! Cooperative execution boundary for the BexOS service event loop.
++use std::cell::Cell;
++thread_local! { static INTERRUPTED: Cell<bool> = const { Cell::new(false) }; }
++/// Set the cancellation state of the session about to be polled.
++pub fn set_interrupted(value: bool) { INTERRUPTED.set(value); } pub fn interrupted() -> bool { INTERRUPTED.get() }
++pub(crate) async fn yield_execution() -> Result<(), crate::Error> {
++    tokio::task::yield_now().await;
++    if INTERRUPTED.get() { return Err(crate::error::ErrorKind::Interrupted.into()); }
++    Ok(())
++}
++
++/// Owned request at the boundary between Brush evaluation and appd execution.
++pub struct Command {
++    pub name: String,
++    pub arguments: Vec<String>,
++    pub environment: Vec<(String, String)>,
++    pub cwd: std::path::PathBuf,
++    pub path: Vec<std::path::PathBuf>,
++    pub files: [Option<crate::openfiles::OpenFile>; 3],
++}
++pub type CommandFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Result<crate::ExecutionResult, crate::Error>> + Send>>;
++pub type Launcher = fn(Command) -> CommandFuture;
++thread_local! { static LAUNCHER: Cell<Option<Launcher>> = const { Cell::new(None) }; }
++/// Install the capability-based process adapter for this service instance.
++pub fn set_launcher(launcher: Launcher) { LAUNCHER.set(Some(launcher)); }
++pub async fn launch(command: Command) -> Result<crate::ExecutionResult, crate::Error> {
++    match LAUNCHER.get() {
++        Some(launch) => launch(command).await,
++        None => Err(crate::error::ErrorKind::CommandNotFound(command.name).into()),
++    }
++}
++/// Whether another input line can complete this parse.
++pub fn incomplete(error: &brush_parser::ParseError) -> bool {
++    match error {
++        brush_parser::ParseError::ParsingAtEndOfInput => true,
++        brush_parser::ParseError::Tokenizing { inner, .. } => inner.is_incomplete(),
++        _ => false,
++    }
++}
++
++pub mod pipe;
++/// Cooperative bounded output: retain the exact unwritten suffix across yields.
++pub async fn write_all(mut writer: impl std::io::Write, bytes: &[u8]) -> Result<(), crate::Error> {
++    let mut offset=0;
++    while offset<bytes.len() {
++        yield_execution().await?;
++        match writer.write(&bytes[offset..]) {
++            Ok(0)=>return Err(std::io::Error::from(std::io::ErrorKind::WriteZero).into()),
++            Ok(n)=>offset+=n,
++            Err(e) if e.kind()==std::io::ErrorKind::WouldBlock=>(),
++            Err(e)=>return Err(e.into()),
++        }
++    }
++    writer.flush()?;
++    Ok(())
++}
+diff --git a/src/commands.rs b/src/commands.rs
+--- a/src/commands.rs
++++ b/src/commands.rs
+@@ -389,6 +389,30 @@
+             }
+         }
+ 
++        #[cfg(target_arch = "wasm32")]
++        {
++            let last_arg = Self::take_last_arg(&self.args);
++            let path = self.path_dirs.clone().unwrap_or_else(|| {
++                self.shell.env().get_str("PATH", &self.shell)
++                    .map(|value| value.split(':').map(PathBuf::from).collect())
++                    .unwrap_or_default()
++            });
++            let request = crate::bexos::Command {
++                name: self.command_name.clone(),
++                arguments: self.args.iter().skip(1).map(ToString::to_string).collect(),
++                environment: self.shell.env().iter_exported()
++                    .filter(|(_, value)| value.value().is_set())
++                    .map(|(name, value)| (name.clone(), value.value().to_cow_str(&self.shell).into_owned())).collect(),
++                cwd: self.shell.working_dir().to_path_buf(),
++                path,
++                files: std::array::from_fn(|fd| self.params.try_fd(&self.shell, fd as i32)),
++            };
++            let result = tokio::spawn(crate::bexos::launch(request));
++            self.shell.update_last_arg_variable(last_arg);
++            if let Some(post_execute) = self.post_execute { let _ = post_execute(&mut self.shell); }
++            return Ok(ExecutionSpawnResult::StartedTask(result));
++        }
++
+         // We still haven't found a command to invoke. We'll need to look for an external command.
+         if !sys::fs::contains_path_separator(&self.command_name) {
+             // All else failed; if we were given path directories to search, try to look through
+@@ -455,6 +479,14 @@
+         args: Vec<CommandArg>,
+     ) -> ExecutionSpawnResult {
+         let last_arg = Self::take_last_arg(&args);
++        #[cfg(target_arch="wasm32")]
++        let join_handle = tokio::spawn(async move {
++            let context = ExecutionContext { shell: &mut shell, command_name, params };
++            let result = execute_builtin_command(&builtin, context, args).await;
++            shell.update_last_arg_variable(last_arg);
++            result
++        });
++        #[cfg(not(target_arch="wasm32"))]
+         let join_handle = tokio::task::spawn_blocking(move || {
+             let cmd_context = ExecutionContext {
+                 shell: &mut shell,
+@@ -769,7 +801,7 @@
+     params.process_group_policy = ProcessGroupPolicy::SameProcessGroup;
+ 
+     // Set up pipe so we can read the output.
+-    let (reader, writer) = std::io::pipe()?;
++    let (reader, writer) = crate::pipes::pipe()?;
+     params.set_fd(OpenFiles::STDOUT_FD, writer.into());
+ 
+     let mut async_reader = sys::async_pipe::AsyncPipeReader::new(reader)?;
+diff --git a/src/pipes.rs b/src/pipes.rs
+new file mode 100644
+--- /dev/null
++++ b/src/pipes.rs
+@@ -0,0 +1,5 @@
++//! Pipe construction isolated from native OS support.
++#[cfg(not(target_arch="wasm32"))]
++pub use std::io::pipe;
++#[cfg(target_arch="wasm32")]
++pub use crate::bexos::pipe::pipe;
+diff --git a/src/bexos/pipe.rs b/src/bexos/pipe.rs
+new file mode 100644
+--- /dev/null
++++ b/src/bexos/pipe.rs
+@@ -0,0 +1,19 @@
++//! Bounded in-process pipes used by cooperative WASM tasks.
++use std::{collections::VecDeque,io::{self,Read,Write},sync::{Arc,Mutex}};
++const LIMIT:usize=32768;
++#[derive(Default)]struct State{bytes:VecDeque<u8>,readers:usize,writers:usize}
++pub struct Reader(Arc<Mutex<State>>);
++pub struct Writer(Arc<Mutex<State>>);
++pub fn pipe()->io::Result<(Reader,Writer)>{let state=Arc::new(Mutex::new(State{readers:1,writers:1,..Default::default()}));Ok((Reader(state.clone()),Writer(state)))}
++impl Clone for Reader{fn clone(&self)->Self{self.0.lock().unwrap().readers+=1;Self(self.0.clone())}}
++impl Clone for Writer{fn clone(&self)->Self{self.0.lock().unwrap().writers+=1;Self(self.0.clone())}}
++impl Drop for Reader{fn drop(&mut self){self.0.lock().unwrap().readers-=1;}}
++impl Drop for Writer{fn drop(&mut self){self.0.lock().unwrap().writers-=1;}}
++impl Read for Reader{fn read(&mut self,out:&mut[u8])->io::Result<usize>{let mut s=self.0.lock().unwrap();let n=out.len().min(s.bytes.len());if n==0 && !out.is_empty() && s.writers!=0{return Err(io::ErrorKind::WouldBlock.into());}for byte in &mut out[..n]{*byte=s.bytes.pop_front().unwrap();}Ok(n)}}
++impl Write for Writer{fn write(&mut self,input:&[u8])->io::Result<usize>{let mut s=self.0.lock().unwrap();if s.readers==0{return Err(io::ErrorKind::BrokenPipe.into());}let n=input.len().min(LIMIT-s.bytes.len());if n==0 && !input.is_empty(){return Err(io::ErrorKind::WouldBlock.into());}s.bytes.extend(&input[..n]);Ok(n)}fn flush(&mut self)->io::Result<()>{Ok(())}}
++impl Write for Reader{fn write(&mut self,_:&[u8])->io::Result<usize>{Err(io::ErrorKind::PermissionDenied.into())}fn flush(&mut self)->io::Result<()>{Ok(())}}
++impl Read for Writer{fn read(&mut self,_:&mut[u8])->io::Result<usize>{Err(io::ErrorKind::PermissionDenied.into())}}
++impl crate::openfiles::Stream for Reader{fn clone_box(&self)->Box<dyn crate::openfiles::Stream>{Box::new(self.clone())}}
++impl crate::openfiles::Stream for Writer{fn clone_box(&self)->Box<dyn crate::openfiles::Stream>{Box::new(self.clone())}}
++impl From<Reader> for crate::openfiles::OpenFile{fn from(r:Reader)->Self{Self::Stream(Box::new(r))}}
++impl From<Writer> for crate::openfiles::OpenFile{fn from(w:Writer)->Self{Self::Stream(Box::new(w))}}
+diff --git a/src/sys/stubs/async_pipe.rs b/src/sys/stubs/async_pipe.rs
+--- a/src/sys/stubs/async_pipe.rs
++++ b/src/sys/stubs/async_pipe.rs
+@@ -1,7 +1,9 @@
+-//! Async pipe reading utilities for non-Unix platforms.
+-//!
+-//! Uses `spawn_blocking` internally for the I/O operation only,
+-//! not for the entire subshell execution.
++#[cfg(not(target_arch="wasm32"))]
++mod native {
++// Async pipe reading utilities for non-Unix platforms.
++//
++// Uses `spawn_blocking` internally for the I/O operation only,
++// not for the entire subshell execution.
+ 
+ use std::io::{self, Read};
+ 
+@@ -28,3 +30,23 @@
+         .map_err(io::Error::other)?
+     }
+ }
++
++}
++#[cfg(not(target_arch="wasm32"))]
++pub(crate) use native::AsyncPipeReader;
++#[cfg(target_arch="wasm32")]
++pub(crate) struct AsyncPipeReader(crate::bexos::pipe::Reader);
++#[cfg(target_arch="wasm32")]
++impl AsyncPipeReader {
++    pub(crate) fn new(reader:crate::bexos::pipe::Reader)->std::io::Result<Self>{Ok(Self(reader))}
++    pub(crate) async fn read_to_string(&mut self)->std::io::Result<String>{
++        use std::io::Read;
++        let mut result=Vec::new();let mut bytes=[0;4096];
++        loop {match self.0.read(&mut bytes){
++            Ok(0)=>return String::from_utf8(result).map_err(std::io::Error::other),
++            Ok(n)=>{if result.len()+n>1<<20{return Err(std::io::Error::other("command substitution exceeds 1 MiB"));}result.extend_from_slice(&bytes[..n]);},
++            Err(e) if e.kind()==std::io::ErrorKind::WouldBlock=>tokio::task::yield_now().await,
++            Err(e)=>return Err(e),
++        }}
++    }
++}
+diff --git a/src/openfiles.rs b/src/openfiles.rs
+--- a/src/openfiles.rs
++++ b/src/openfiles.rs
+@@ -15,6 +15,9 @@
+ /// Types that implement this trait are expected to be cloneable via the
+ /// `clone_box` function.
+ pub trait Stream: std::io::Read + std::io::Write + Send + Sync {
++    /// Identifies a concrete stream adapter for checked provider checkpoint admission.
++    fn stream_type(&self) -> &'static str { std::any::type_name::<Self>() }
++
+     /// Clones the stream into a boxed trait object.
+     fn clone_box(&self) -> Box<dyn Stream>;
+ 

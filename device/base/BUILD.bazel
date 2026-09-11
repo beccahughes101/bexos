@@ -1,0 +1,15 @@
+load("//build/rules:assembly.bzl", "assembly_input_bundle")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["configs.star"])
+
+assembly_input_bundle(
+    name = "base_aib",
+    src = "base.aib.prototxt",
+)
+
+alias(
+    name = "base",
+    actual = ":base_aib_bin",
+)

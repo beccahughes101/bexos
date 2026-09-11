@@ -1,0 +1,74 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "timed",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_name = "bexos_timed",
+    edition = "2024",
+    deps = [
+        "//idl:kernel_fidl_rust",
+        "//idl:net_fidl_rust",
+        "//idl:time_fidl_rust",
+        "//lib/migration",
+        "//lib/net:net_secure",
+        "//lib/userspace",
+        "//lib/userspace_async",
+        "@crates//:aes-siv",
+        "@crates//:sntpc",
+        "@crates//:tokio",
+    ],
+)
+
+std_service_binary(
+    name = "timed_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_timed_elf",
+    deps = [
+        ":timed",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "timed_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "timed_tests",
+    edition = "2024",
+    deps = [
+        ":timed",
+        "//idl:time_fidl_rust",
+        "//lib/migration",
+        "//lib/userspace",
+        "@crates//:tokio",
+    ],
+)
+
+app_manifest(name = "package_manifest", src = "package/timed.prototxt")
+
+app_archive(
+    name = "timed_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/timed": ":timed_elf"},
+    compression = "none",
+)
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_timed_replacement_elf",
+    deps = [
+        ":timed",
+        "@crates//:tokio",
+    ],
+)
+
+app_archive(
+    name = "replacement_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/timed": ":replacement_elf"},
+    compression = "zstd",
+)

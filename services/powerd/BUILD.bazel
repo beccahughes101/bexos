@@ -1,0 +1,72 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "powerd",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_name = "bexos_powerd",
+    edition = "2024",
+    deps = [
+        "//idl:kernel_fidl_rust",
+        "//idl:power_fidl_rust",
+        "//lib/migration",
+        "//lib/userspace",
+        "@crates//:tokio",
+    ],
+)
+
+std_service_binary(
+    name = "powerd_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_powerd_elf",
+    deps = [
+        ":powerd",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "powerd_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "powerd_tests",
+    edition = "2024",
+    deps = [
+        ":powerd",
+        "//idl:power_fidl_rust",
+        "//lib/migration",
+        "//lib/userspace",
+    ],
+)
+
+app_manifest(name = "package_manifest", src = "package/powerd.prototxt")
+
+app_archive(
+    name = "powerd_archive",
+    manifest = ":package_manifest",
+    entries = {
+        "bin/powerd": ":powerd_elf",
+    },
+    compression = "none",
+)
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_powerd_replacement_elf",
+    deps = [
+        ":powerd",
+        "@crates//:tokio",
+    ],
+)
+
+app_archive(
+    name = "replacement_archive",
+    manifest = ":package_manifest",
+    entries = {
+        "bin/powerd": ":replacement_elf",
+    },
+    compression = "zstd",
+)

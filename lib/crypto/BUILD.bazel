@@ -1,0 +1,66 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_shared_library")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "empty_libs",
+    srcs = glob(["empty_libs/*.so"]),
+)
+
+rust_library(
+    name = "crypto",
+    srcs = ["src/lib.rs"],
+    crate_name = "bexos_crypto",
+    edition = "2024",
+    deps = [
+        "@crates__blake3-1.8.2//:blake3_no_std",
+        "@crates//:ed25519-dalek",
+    ],
+)
+
+rust_library(
+    name = "crypto_std",
+    srcs = ["src/lib.rs"],
+    crate_features = ["std"],
+    crate_name = "bexos_crypto",
+    edition = "2024",
+    deps = [
+        "@crates__blake3-1.8.2//:blake3_no_std",
+        "@crates//:ed25519-dalek",
+    ],
+)
+
+std_shared_library(
+    name = "crypto_shared",
+    srcs = ["src/shared.rs"],
+    crate_root = "src/shared.rs",
+    crate_features = ["bexos_libc_runtime"],
+    crate_name = "bexos_crypto",
+    soname = "libbexos_crypto.so",
+    deps = [
+        "@crates__blake3-1.8.2//:blake3_no_std",
+        "@crates//:ed25519-dalek",
+    ],
+)
+
+rust_test(
+    name = "crypto_tests",
+    srcs = ["tests/crypto_tests.rs"],
+    crate_name = "crypto_tests",
+    edition = "2024",
+    deps = [
+        ":crypto",
+        "@crates//:ed25519-dalek",
+    ],
+)
+
+app_manifest(name = "package_manifest", src = "package/crypto.prototxt")
+
+app_archive(
+    name = "crypto_archive",
+    manifest = ":package_manifest",
+    entries = {"lib/libbexos_crypto.so": ":crypto_shared"},
+    compression = "zstd",
+)

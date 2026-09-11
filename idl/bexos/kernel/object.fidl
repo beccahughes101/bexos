@@ -1,0 +1,57 @@
+library bexos.kernel;
+
+/// Lifetime and D1 physical-memory operations. Physical mappings are restricted
+/// to the caller's platform-assigned MMIO regions; pinning requires DIRECT.
+protocol ObjectControl {
+    Close(resource struct { object handle; }) -> (struct { status Status; });
+    Duplicate(resource struct { object handle; rights Rights; }) -> (resource struct {
+        status Status; duplicate handle;
+    });
+    CreatePhysicalVmo(struct { base uint64; size_bytes uint64; }) -> (resource struct {
+        status Status; vmo handle:VMO;
+    });
+    Pin(resource struct { vmo handle:VMO; }) -> (struct {
+        status Status; physical_address uint64; token uint64;
+    });
+    Unpin(struct { token uint64; }) -> (struct { status Status; });
+    CreateIommuDomain(struct { stream_id uint64; address_width uint8; }) -> (resource struct {
+        status Status; domain handle;
+    });
+    MapDma(resource struct {
+        domain handle; vmo handle:VMO; offset uint64; length uint64; permissions uint32;
+    }) -> (struct {
+        status Status; device_address uint64; token uint64;
+    });
+    UnmapDma(struct { token uint64; }) -> (struct { status Status; });
+    MemoryStats() -> (struct {
+        status Status; free_pages uint64; bootfs_pages uint64; reclaimed_pages uint64; reused_pages uint64;
+    });
+    /// Inspect only a handle owned by the calling process; no authority is added.
+    GetInfo(resource struct { object handle; }) -> (struct {
+        status Status; kind ObjectType; rights Rights;
+    });
+    /// Stable endpoint identities for an owned channel. Numbers identify an
+    /// object but confer no authority; protocols must still require its handle.
+    GetChannelIdentity(resource struct { channel handle:CHANNEL; }) -> (struct {
+        status Status; endpoint uint64; peer uint64;
+    });
+    /// Granted GPU driver only. The region must be host-visible PCI RAM, not
+    /// registers. Normal cached attributes and borrowed ownership survive
+    /// replacement; closing the VMO never frees these pages to the guest.
+    CreateSharedDeviceVmo(struct { base uint64; size_bytes uint64; }) -> (resource struct {
+        status Status; vmo handle:VMO;
+    });
+    /// True only when this handle is the last reference, including mappings and
+    /// in-transit handles. The driver must not duplicate it after this check.
+    IsSharedDeviceVmoIdle(resource struct { vmo handle:VMO; }) -> (struct {
+        status Status; idle bool;
+    });
+};
+
+type ObjectType = strict enum : uint32 {
+    OTHER = 0;
+    CHANNEL = 1;
+    SOCKET = 2;
+    VMO = 3;
+    PROCESS = 4;
+};

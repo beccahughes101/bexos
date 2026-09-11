@@ -1,0 +1,36 @@
+name: Set up BexOS CI
+description: Install native Linux prerequisites and configure the pinned Bazel toolchain.
+inputs:
+  cache-role:
+    description: Separate build caches by job and guest configuration.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Install host prerequisites
+      shell: bash
+      run: bash "$GITHUB_WORKSPACE/tools/ci/setup.sh"
+    - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+      with:
+        bazelisk-cache: true
+        repository-cache: |
+          - .bazelversion
+          - MODULE.bazel
+          - MODULE.bazel.lock
+        disk-cache: ubuntu-26.04-x86_64-${{ inputs.cache-role }}
+        cache-version: bexos-ci-1
+        cache-save: ${{ github.event_name != 'pull_request' }}
+        bazelrc: |
+          common --lockfile_mode=error
+          build --jobs=2
+          build --local_resources=memory=HOST_RAM*.65
+          build --color=no
+          build --curses=no
+          test --local_test_jobs=1
+    - name: Record tool versions
+      shell: bash
+      run: |
+        bazel version
+        qemu-system-aarch64 --version
+        qemu-system-x86_64 --version
+        df -h "$GITHUB_WORKSPACE" "$RUNNER_TEMP"

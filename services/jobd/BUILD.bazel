@@ -1,0 +1,102 @@
+load("//build/platforms:architecture.bzl", "guest_select")
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "jobd",
+    rustc_flags = guest_select([], ["--cfg=bexos_arch_x86_64"]),
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_features = ["persistent"],
+    crate_name = "bexos_jobd",
+    edition = "2024",
+    deps = [
+        "//idl:app_worker_fidl_rust",
+        "//idl:fs_fidl_rust",
+        "//idl:job_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//idl:net_fidl_rust",
+        "//idl:power_fidl_rust",
+        "//idl:time_fidl_rust",
+        "//idl:user_manager_fidl_rust",
+        "//lib/job_store:job_store_bexos_std",
+        "//lib/migration",
+        "//lib/redb:redb_bexos_std",
+        "//lib/userspace",
+        "//services/appd",
+        "@crates//:tokio",
+    ],
+)
+
+rust_library(
+    name = "jobd_memory",
+    rustc_flags = guest_select([], ["--cfg=bexos_arch_x86_64"]),
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_name = "bexos_jobd",
+    edition = "2024",
+    deps = [
+        "//idl:app_worker_fidl_rust",
+        "//idl:job_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//idl:net_fidl_rust",
+        "//idl:power_fidl_rust",
+        "//idl:time_fidl_rust",
+        "//idl:user_manager_fidl_rust",
+        "//lib/job_store",
+        "//lib/migration",
+        "//lib/userspace",
+        "//services/appd",
+        "@crates//:tokio",
+    ],
+)
+
+std_service_binary(
+    name = "jobd_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_jobd_elf",
+    deps = [
+        ":jobd",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "jobd_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "jobd_tests",
+    edition = "2024",
+    deps = [
+        ":jobd_memory",
+        "//lib/job_store",
+    ],
+)
+
+app_manifest(name = "package_manifest", src = "package/jobd.prototxt")
+
+app_archive(
+    name = "jobd_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/jobd": ":jobd_elf"},
+    compression = "none",
+)
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_jobd_replacement_elf",
+    deps = [
+        ":jobd",
+        "@crates//:tokio",
+    ],
+)
+
+app_archive(
+    name = "replacement_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/jobd": ":replacement_elf"},
+    compression = "zstd",
+)
+
+rust_test(name = "migration_tests", crate = ":jobd_memory")

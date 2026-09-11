@@ -1,0 +1,82 @@
+metadata {
+  target_board: "//device/virtual/qemu/base/aarch64"
+  platform_profile: "virtual_aarch64_emulated"
+  min_platform_version: 1
+  architecture: ARCH_AARCH64
+}
+
+runner_policy {
+  realtime_scheduling_allowlist { package_id: "bexos.service.splashd" expected_signer: "bexos_official_platform_v1" }
+  realtime_scheduling_allowlist { package_id: "bexos.service.scened" expected_signer: "bexos_official_platform_v1" }
+  default_tier: TIER_1_WASM
+  allow_microvm_runner: true
+  microvm_constraints {
+    max_vram_allocation_mb: 1024
+    allow_network_bridge: false
+    allow_pci_passthrough: false
+  }
+  allow_native_elf_runner: false
+  native_elf_runner_allowlist {
+    package_id: "bexos.platform.appd"
+    expected_signer: "bexos_official_platform_v1"
+  }
+}
+
+# The explicit software-TEE product has no authenticated BL33 or RPMB backend,
+# so it must not assert those properties in boot evidence.
+tee_policy {
+  enforce_secure_boot: false
+  rpmb_anti_rollback: false
+}
+
+driver_policy {
+  default_unmatched_action: REJECT_AND_ISOLATE
+  tier_1_allowlist { package_id: "bexos.driver.input.virtio" expected_signer: "bexos_official_platform_v1" }
+  tier_1_allowlist { package_id: "bexos.driver.uart.pl011" expected_signer: "bexos_official_platform_v1" }
+  tier_1_allowlist { package_id: "bexos.driver.rtc.pl031" expected_signer: "bexos_official_platform_v1" }
+  tier_1_allowlist { package_id: "bexos.driver.pci_root" expected_signer: "bexos_official_platform_v1" }
+  tier_1_allowlist { package_id: "bexos.driver.storage.nvme" expected_signer: "bexos_official_platform_v1" }
+  tier_1_allowlist { package_id: "bexos.driver.storage.bexfs" expected_signer: "bexos_official_platform_v1" }
+  tier_1_allowlist { package_id: "bexos.driver.storage.user_bexfs" expected_signer: "bexos_official_platform_v1" }
+  tier_1_allowlist { package_id: "bexos.driver.storage.archivefs" expected_signer: "bexos_official_platform_v1" }
+  tier_1_allowlist { package_id: "bexos.driver.storage.memfs" expected_signer: "bexos_official_platform_v1" }
+  tier_1_allowlist { package_id: "bexos.driver.storage.diskimage" expected_signer: "bexos_official_platform_v1" }
+  tier_1_allowlist { package_id: "bexos.driver.debugd" expected_signer: "bexos_official_platform_v1" }
+  tier_1_allowlist { package_id: "bexos.driver.network.virtio_net" expected_signer: "bexos_official_platform_v1" }
+  tier_1_allowlist { package_id: "bexos.driver.display.virtio_gpu" expected_signer: "bexos_official_platform_v1" }
+  tier_1_allowlist { package_id: "bexos.service.updated" expected_signer: "bexos_official_platform_v1" }
+  tier_1_allowlist { package_id: "bexos.service.powerd" expected_signer: "bexos_official_platform_v1" }
+  tier_2_rules {
+    enforce_strict_iommu: true
+    allow_raw_mmio: false
+    max_dma_bandwidth_mbps: 1000
+  }
+}
+
+update_policy {
+  metadata_base_url: "https://distribution.bexos.org/metadata"
+  targets_base_url: "https://distribution.bexos.org/targets"
+  app_target_prefix: "apps/"
+  kernel_target_name: "kernel.img"
+  tee_target_name: "tee.bin"
+  max_metadata_bytes: 1048576
+  max_target_bytes: 67108864
+  default_apply_policy: CHECK_ONLY
+  trusted_root_keys {
+    key_id: "bexos-qemu-test-ed25519-key-v001"
+    public_key: "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+  }
+}
+
+app_lifecycle_policy {
+  probation_window_seconds: 60
+  crash_window_seconds: 60
+  crash_threshold: 3
+  restart_delay_seconds: 1
+}
+
+interface_defaults {
+  interface_name: "bexos.shell.ShellProvider"
+  package_name: "bexos.app.brush_shell"
+  process_name: "terminal"
+}

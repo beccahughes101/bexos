@@ -1,0 +1,13 @@
+diff --git a/src/echo.rs b/src/echo.rs
+--- a/src/echo.rs
++++ b/src/echo.rs
+@@ -73,6 +73,9 @@
+             s.push('\n');
+         }
+ 
++        #[cfg(target_arch="wasm32")]
++        brush_core::bexos::write_all(context.stdout(), s.as_bytes()).await?;
++        #[cfg(not(target_arch="wasm32"))]
+         write!(context.stdout(), "{s}")?;
+         context.stdout().flush()?;
+ 

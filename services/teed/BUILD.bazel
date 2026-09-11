@@ -1,0 +1,94 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "teed",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_name = "bexos_teed",
+    edition = "2024",
+    deps = [
+        "//idl:kernel_fidl_rust",
+        "//idl:tee_manager_fidl_rust",
+        "//lib/crypto",
+        "//lib/migration",
+        "//lib/rpmb_proxy",
+        "//lib/tee_driver_client",
+        "//lib/trusty_client:trusty_client_no_std",
+        "//lib/userspace",
+        "//secure/orchestrator",
+        "//lib/userspace_async",
+        "@crates//:tokio",
+    ],
+)
+
+std_service_binary(
+    name = "teed_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_teed_elf",
+    deps = [
+        ":teed",
+        "//idl:tee_manager_fidl_rust",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "teed_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "teed_tests",
+    edition = "2024",
+    deps = [
+        ":teed",
+        "//idl:kernel_fidl_rust",
+        "//idl:tee_manager_fidl_rust",
+        "//lib/crypto",
+        "//lib/migration",
+        "//lib/rpmb_proxy",
+        "//lib/tee_driver_client",
+        "//lib/trusty_client:trusty_client_no_std",
+        "//lib/userspace",
+        "@crates//:tokio",
+    ],
+)
+
+app_manifest(name = "package_manifest", src = "package/teed.prototxt")
+
+app_manifest(name = "package_manifest_software", src = "package/teed_software.prototxt")
+
+app_archive(
+    name = "teed_archive",
+    manifest = ":package_manifest",
+    entries = {
+        "bin/teed": ":teed_elf",
+    },
+    compression = "none",
+)
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_teed_elf_replacement",
+    deps = [
+        ":teed",
+        "//idl:tee_manager_fidl_rust",
+        "@crates//:tokio",
+    ],
+)
+
+app_archive(
+    name = "replacement_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/teed": ":replacement_elf"},
+    compression = "zstd",
+)
+
+# Explicit software-backend replacement for development products.
+app_archive(
+    name = "replacement_software_archive",
+    manifest = ":package_manifest_software",
+    entries = {"bin/teed": ":replacement_elf"},
+    compression = "zstd",
+)

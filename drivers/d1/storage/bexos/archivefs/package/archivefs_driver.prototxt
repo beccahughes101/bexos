@@ -1,0 +1,33 @@
+package_name: "bexos.driver.storage.archivefs"
+name: "archivefs_driver"
+library_dependencies {
+ package_name: "bexos.lib.crypto"
+ mount_alias: "bexos.lib.crypto"
+ abi_version: 1
+}
+library_dependencies {
+ package_name: "bexos.lib.net"
+ mount_alias: "bexos.lib.net"
+ abi_version: 1
+}
+processes {
+ name: "archivefs_driver"
+ runner: "elf"
+  lifecycle { update_strategy: HEART_TRANSPLANT preparation_timeout_ms: 600000 }
+ service: true
+ wave: 2
+ runner_options {
+  [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/archivefs_driver" }
+ }
+}
+services_exposed {
+ name: "bexos.storage.archive.ArchiveManager"
+ protocol: "ArchiveManager"
+ lifecycle: SINGLETON
+ visibility: PUBLIC
+ capabilities {
+  capability: "Public"
+  method_ordinals: 40
+  method_ordinals: 41
+ }
+}

@@ -1,0 +1,105 @@
+load("//build/platforms:architecture.bzl", "guest_select")
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "keychaind",
+    rustc_flags = guest_select([], ["--cfg=bexos_arch_x86_64"]),
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_features = ["persistent"],
+    crate_name = "bexos_keychaind",
+    edition = "2024",
+    deps = [
+        "//idl:tee_manager_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//idl:keychain_fidl_rust",
+        "//idl:user_manager_fidl_rust",
+        "//idl:vfs_manager_fidl_rust",
+        "//lib/crypto_client",
+        "//lib/keychain_store:keychain_store_bexos_std",
+        "//lib/lazy_service",
+        "//lib/migration",
+        "//lib/redb:redb_bexos_std",
+        "//lib/trusty_client",
+        "//lib/userspace",
+        "@crates//:tokio",
+    ],
+)
+
+rust_library(
+    name = "keychaind_memory",
+    rustc_flags = guest_select([], ["--cfg=bexos_arch_x86_64"]),
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_name = "bexos_keychaind",
+    edition = "2024",
+    deps = [
+        "//idl:tee_manager_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//idl:keychain_fidl_rust",
+        "//idl:user_manager_fidl_rust",
+        "//lib/crypto",
+        "//lib/keychain_store:keychain_store_memory",
+        "//lib/lazy_service",
+        "//lib/migration",
+        "//lib/trusty_client",
+        "//lib/userspace",
+        "@crates//:tokio",
+    ],
+)
+
+std_service_binary(
+    name = "keychaind_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_keychaind_elf",
+    deps = [
+        ":keychaind",
+        "//idl:keychain_fidl_rust",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "keychaind_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "keychaind_tests",
+    edition = "2024",
+    deps = [
+        ":keychaind_memory",
+        "//lib/migration",
+        "//lib/lazy_service",
+        "//lib/userspace",
+        "//idl:keychain_fidl_rust",
+        "//lib/keychain_store:keychain_store_memory",
+        "//lib/trusty_client",
+    ],
+)
+
+app_manifest(name = "package_manifest", src = "package/keychaind.prototxt")
+
+app_archive(
+    name = "keychaind_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/keychaind": ":keychaind_elf"},
+    compression = "none",
+)
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_keychaind_elf_replacement",
+    deps = [
+        ":keychaind",
+        "//idl:keychain_fidl_rust",
+        "@crates//:tokio",
+    ],
+)
+
+app_archive(
+    name = "replacement_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/keychaind": ":replacement_elf"},
+    compression = "zstd",
+)

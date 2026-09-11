@@ -1,0 +1,11 @@
+package_name: "bexos.test.wasm.command"
+name: "WASM command fixture"
+processes {
+ name: "command"
+ runner: "wasm"
+ service: false
+ lifecycle { update_strategy: RESTART }
+ runner_options {
+  [type.googleapis.com/bexos.app.WasmRunnerOptions] { path: "/pkg/bin/command.wasm" }
+ }
+}

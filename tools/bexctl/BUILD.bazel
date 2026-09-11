@@ -1,0 +1,33 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_binary(
+    name = "bexctl",
+    srcs = glob(["src/**/*.rs"]),
+    edition = "2024",
+    deps = [
+        "//lib/component_config",
+        "@crates//:clap",
+        "@crates//:libc",
+        "@crates//:clap_complete",
+        "@crates//:serde_json",
+        "//host/debug_client",
+        "//lib/crypto",
+        "//lib/debug_wire",
+        "//lib/trace",
+        "//lib/user_store:user_store_host",
+    ],
+)
+
+rust_test(
+    name = "bexctl_tests",
+    srcs = glob(["tests/**/*.rs"]) + ["src/args.rs", "src/input.rs", "src/output.rs"],
+    crate_name = "bexctl_tests",
+    edition = "2024",
+    data = ["//:docs/cli.md", ":bexctl"],
+    env = {"CLI_REFERENCE": "$(rootpath //:docs/cli.md)", "BEXCTL": "$(rootpath :bexctl)"},
+    deps = ["@crates//:clap", "@crates//:clap_complete", "@crates//:serde_json", "//lib/trace", "//lib/debug_wire"],
+)
+
+rust_test(name = "terminal_tests", crate = ":bexctl")

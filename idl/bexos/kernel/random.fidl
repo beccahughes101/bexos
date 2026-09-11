@@ -1,0 +1,10 @@
+library bexos.kernel;
+
+/// Private computation primitive backed by boot entropy. Unavailable when the
+/// boot handoff did not provide an entropy seed; never substitutes a clock.
+protocol Random {
+    1: GetBytes(struct { length uint32 }) -> (struct {
+        status Status,
+        data vector<uint8>:32768
+    });
+};

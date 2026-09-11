@@ -1,0 +1,130 @@
+library bexos.kernel;
+
+type VmoFlags = strict bits : uint32 {
+    RESIZABLE = 0x00000001,
+    CONTIGUOUS_PHYS = 0x00000002, // For D1 DMA drivers
+    CACHE_POLICY_WB = 0x00000004, // Write-Back Cache
+    CACHE_POLICY_UC = 0x00000008, // Uncached / MMIO registers
+};
+
+type VmarFlags = strict bits : uint32 {
+    CAN_MAP_READ = 0x00000001,
+    CAN_MAP_WRITE = 0x00000002,
+    CAN_MAP_EXECUTE = 0x00000004,
+    CAN_MAP_SPECIFIC = 0x00000008,
+    COMPACT = 0x00000010,
+    ALLOCATE = 0x00000020, // CreateSubVmar only: select an unused range; offset must be zero.
+};
+
+/// Virtual Memory Object (VMO) manipulation for zero-copy allocations & sharing
+protocol VirtualMemory {
+    /// Create a page-aligned anonymous VMO
+    CreateVmo(struct {
+        size_bytes uint64,
+        flags VmoFlags
+    }) -> (resource struct {
+        status Status,
+        vmo handle:VMO
+    });
+
+    /// Map a VMO range directly into the calling process address space
+    Map(resource struct {
+        vmo handle:VMO,
+        vmo_offset uint64,
+        size_bytes uint64,
+        target_vaddr uint64, // 0 for kernel-selected address
+        requested_rights Rights
+    }) -> (struct {
+        status Status,
+        mapped_vaddr uint64
+    });
+
+    /// Map a VMO range into an explicit process address space
+    MapInVmSpace(resource struct {
+        vm_space handle:VM_SPACE,
+        vmo handle:VMO,
+        vmo_offset uint64,
+        size_bytes uint64,
+        target_vaddr uint64, // 0 for kernel-selected address
+        requested_rights Rights
+    }) -> (struct {
+        status Status,
+        mapped_vaddr uint64
+    });
+
+    /// Unmap a virtual memory region
+    Unmap(struct {
+        vaddr uint64,
+        size_bytes uint64
+    }) -> (struct {
+        status Status
+    });
+
+    /// Unmap a virtual memory region from an explicit process address space
+    UnmapInVmSpace(resource struct {
+        vm_space handle:VM_SPACE,
+        vaddr uint64,
+        size_bytes uint64
+    }) -> (struct {
+        status Status
+    });
+
+    /// Create a Copy-on-Write (CoW) clone of an existing VMO
+    CloneVmo(resource struct {
+        parent_vmo handle:VMO,
+        offset uint64,
+        size_bytes uint64
+    }) -> (resource struct {
+        status Status,
+        cloned_vmo handle:VMO
+    });
+
+    /// Allocate a nested virtual memory address region
+    CreateSubVmar(resource struct {
+        parent_vmar handle:VMAR,
+        offset uint64,
+        size_bytes uint64,
+        flags VmarFlags
+    }) -> (resource struct {
+        status Status,
+        sub_vmar handle:VMAR,
+        base_address uint64
+    });
+
+    /// Map a VMO range into a VMAR
+    MapVmo(resource struct {
+        vmar handle:VMAR,
+        vmo handle:VMO,
+        vmo_offset uint64,
+        vmar_offset uint64,
+        size_bytes uint64,
+        flags VmarFlags
+    }) -> (struct {
+        status Status,
+        mapped_vaddr uint64
+    });
+
+    /// Unmap a virtual memory region from a VMAR
+    UnmapVmar(resource struct {
+        vmar handle:VMAR,
+        vaddr uint64,
+        size_bytes uint64
+    }) -> (struct {
+        status Status
+    });
+
+    /// Destroy a non-root VMAR and all nested VMARs and mappings
+    DestroyVmar(resource struct {
+        vmar handle:VMAR
+    }) -> (struct {
+        status Status
+    });
+
+    /// Commit physical backing for a writable mapped range in one operation.
+    CommitRange(struct {
+        vaddr uint64,
+        size_bytes uint64
+    }) -> (struct {
+        status Status
+    });
+};

@@ -1,0 +1,45 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "secure_firmware",
+    srcs = glob(["src/*.rs"]),
+    crate_name = "bexos_secure_firmware",
+    edition = "2024",
+    deps = ["//lib/avb", "@crates__sha2-0.11.0//:sha2"],
+)
+
+rust_test(name = "tests", crate = ":secure_firmware")
+
+rust_test(
+    name = "selection_wire_tests",
+    srcs = ["integration/selection.rs"],
+    edition = "2024",
+    deps = [":secure_firmware"],
+    compile_data = ["//secure/orchestrator/trusty:boot_selection_records"],
+    rustc_env = {"SELECTION_RECORDS": "$(execpath //secure/orchestrator/trusty:boot_selection_records)"},
+)
+genrule(
+    name = "storage_test_payload",
+    testonly = True,
+    srcs = ["integration/fixture.py"],
+    outs = ["storage_test.elf"],
+    cmd = "python3 -B $(location integration/fixture.py) $@",
+)
+genrule(
+    name = "storage_test_firmware",
+    testonly = True,
+    srcs = [":storage_test_payload", "//device/virtual/qemu/base:keys/avb_dev_rsa_private.pem"],
+    tools = ["//tools/image:vbmeta"],
+    outs = ["storage_test.fw", "storage_test.avbpubkey"],
+    cmd = "$(location //tools/image:vbmeta) --firmware $(location //device/virtual/qemu/base:keys/avb_dev_rsa_private.pem) $(location storage_test.fw) $(location storage_test.avbpubkey) 2 x86_64 hypervisor $(location :storage_test_payload)",
+)
+rust_test(
+    name = "store_tests",
+    srcs = ["integration/store.rs"],
+    edition = "2024",
+    deps = [":secure_firmware"],
+    compile_data = [":storage_test.fw", ":storage_test.avbpubkey"],
+    rustc_env = {"TEST_FIRMWARE": "$(execpath :storage_test.fw)", "TEST_ROOT": "$(execpath :storage_test.avbpubkey)"},
+)

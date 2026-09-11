@@ -1,0 +1,13 @@
+package(default_visibility = ["//visibility:public"])
+sh_binary(
+    name = "benchmark",
+    srcs = ["run.sh"],
+    data = ["run.py", "telemetry.py", "//lib/flatland:benchmark", "//lib/flatland:blur_benchmark", "//lib/flatland_cpu:benchmark"],
+)
+sh_test(
+    name = "telemetry_tests",
+    srcs = ["telemetry_test.sh"],
+    data = ["telemetry_test.py", "telemetry.py", "guest.py"],
+)
+
+exports_files(["guest.py"])

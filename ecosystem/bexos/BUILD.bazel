@@ -1,0 +1,26 @@
+package(default_visibility = ["//visibility:public"])
+
+alias(
+    name = "selected",
+    actual = "//ecosystem/bexos/dev:profile",
+)
+
+alias(
+    name = "public_bundle",
+    actual = "//ecosystem/bexos/dev:public_bundle",
+)
+
+alias(
+    name = "tls_roots_redb",
+    actual = "//ecosystem/bexos/dev:tls_roots_redb",
+)
+
+alias(
+    name = "app_signing_roots_redb",
+    actual = "//ecosystem/bexos/dev:app_signing_roots_redb",
+)
+
+alias(
+    name = "app_signing_key",
+    actual = "//ecosystem/bexos/dev:dev_app_signer.key",
+)

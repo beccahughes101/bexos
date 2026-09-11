@@ -1,0 +1,30 @@
+load("//build/platforms:architecture.bzl", "bool_flag")
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:optimized_artifact.bzl", "optimized_artifact")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//lib/flatland_text:BUILD.fonts.bzl", "FONT_DATA", "FONT_ENV", "FONT_LICENSES")
+package(default_visibility = ["//visibility:public"])
+genrule(name = "desktop_config", srcs = ["desktop.proto", ":desktop_source"], outs = ["desktop.pb"], tools = ["@protobuf//:protoc"], cmd = "$(location @protobuf//:protoc) --proto_path=. --encode=bexos.ui.scened.Desktop $(location desktop.proto) < $(location :desktop_source) > $@")
+genrule(name = "input_config", srcs = ["input.proto", "package/input.prototxt"], outs = ["input.pb"], tools = ["@protobuf//:protoc"], cmd = "$(location @protobuf//:protoc) --proto_path=. --encode=bexos.ui.scened.InputPolicy $(location input.proto) < $(location package/input.prototxt) > $@")
+rust_library(name = "scened", rustc_flags = select({"//build/platforms:is_bexos_userspace": ["--cfg=bexos_guest"], "//conditions:default": []}), srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]), crate_name = "bexos_scened", edition = "2024", compile_data = FONT_DATA + [":desktop_config", ":input_config"], rustc_env = dict(FONT_ENV, DESKTOP_CONFIG = "$(execpath :desktop_config)", INPUT_CONFIG = "$(execpath :input_config)"), deps = ["//lib/bexos_libc", "//lib/flatland_style", "//lib/flatland_cpu", "//lib/flatland_text", "//lib/flatland_layout", "//lib/flatland_input", "//idl:input_fidl_rust", "//lib/graphics", "//lib/graphics_runtime", "//lib/userspace", "//lib/migration", "//idl:graphics_fidl_rust", "//idl:kernel_fidl_rust"] + select({"//build/platforms:is_bexos_userspace": ["//lib/venus_wgpu", "//lib/flatland_render"], "//conditions:default": []}))
+app_manifest(name = "package_manifest", src = "package/scened.prototxt")
+std_service_binary(name = "scened_binary", srcs = ["src/main.rs"], crate_name = "bexos_scened_elf", deps = [":scened"])
+std_service_binary(name = "replacement_binary", srcs = ["src/main.rs"], crate_name = "bexos_replacement_elf", deps = [":scened"])
+# The graphics stack's fastbuild ELF exceeds the kernel's 64 MiB VMO limit.
+# Keep both sides of a heart transplant loadable in the default workstation.
+optimized_artifact(name = "scened_elf", src = ":scened_binary")
+optimized_artifact(name = "replacement_elf", src = ":replacement_binary")
+app_archive(name = "replacement_archive", manifest = ":package_manifest", entries = dict(FONT_LICENSES.items() + [("licenses/mesa/NOTICES.txt", "//third_party/mesa:notices"), ("licenses/nanoprintf/LICENSE", "@nanoprintf//:LICENSE"), ("bin/scened", ":replacement_elf"), ("config/desktop.pb", ":desktop_config"), ("config/input.pb", ":input_config")]), compression = "zstd")
+
+rust_test(name = "tests", srcs = ["tests/migration_tests.rs"], edition = "2024", deps = [":scened", "//lib/flatland_input", "//lib/graphics", "//lib/graphics_runtime", "//lib/userspace", "//lib/migration"])
+rust_test(name = "controls_tests", srcs = ["tests/controls.rs"], edition = "2024", deps = [":scened", "//lib/graphics", "//lib/graphics_runtime", "//lib/userspace"])
+rust_test(name = "internal_tests", crate = ":scened")
+
+rust_test(name = "input_config_tests", srcs = ["policy_tests/input_config.rs"], compile_data=[":input_config"], rustc_env={"INPUT_CONFIG":"$(execpath :input_config)"}, edition="2024", deps=[":scened", "//lib/flatland_input", "//lib/migration"])
+
+config_setting(name="profile_gpu",define_values={"scened_profile_gpu":"true"})
+bool_flag(name="legacy_standalone", build_setting_default=False)
+config_setting(name="standalone",flag_values={":legacy_standalone":"true"})
+config_setting(name="standalone_profiled",flag_values={":legacy_standalone":"true"},define_values={"scened_profile_gpu":"true"})
+alias(name="desktop_source",actual=select({":standalone_profiled":"package/desktop_standalone_profiled.prototxt",":standalone":"package/desktop_standalone.prototxt",":profile_gpu":"package/desktop_profiled.prototxt","//conditions:default":"package/desktop.prototxt"}))

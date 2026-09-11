@@ -1,0 +1,9 @@
+package(default_visibility = ["//visibility:public"])
+
+exports_files([".cargo/config.toml", "docs/cli.md"])
+
+sh_test(
+    name = "heart_transplant_coverage_test",
+    srcs = ["tools/heart_transplant/coverage_test.sh"],
+    tags = ["local"],
+)

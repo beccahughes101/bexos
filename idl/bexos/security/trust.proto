@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package bexos.security.trust;
+
+enum TrustTier {
+  TIER0_BASE_SYSTEM = 0;
+  TIER1_PLATFORM_APP = 1;
+  TIER2_VERIFIED_ECO = 2;
+  TIER3_ENTERPRISE = 3;
+  TIER4_WEB_ORIGIN = 4;
+}
+
+message AppSigningRootAnchor {
+  string anchor_id = 1;
+  TrustTier tier = 2;
+  string algorithm = 3;
+  bytes public_key_bytes = 4;
+  repeated string permitted_package_prefixes = 5;
+  uint64 valid_from = 6;
+  uint64 valid_until = 7;
+  bool is_hardware_anchored = 8;
+  bytes certificate_der = 9;
+  bool immutable = 10;
+  bool enterprise = 11;
+}
+
+message RevocationPayload {
+  uint64 generation = 1;
+  uint64 valid_from = 2;
+  uint64 valid_until = 3;
+  repeated bytes revoked_cert_fingerprints = 4;
+  repeated bytes revoked_spki_fingerprints = 5;
+  repeated bytes revoked_serials = 6;
+}

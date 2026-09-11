@@ -1,0 +1,162 @@
+package_name: "bexos.service.netstackd"
+name: "netstackd"
+library_dependencies {
+ package_name: "bexos.lib.crypto"
+ mount_alias: "bexos.lib.crypto"
+ abi_version: 1
+}
+library_dependencies {
+ package_name: "bexos.lib.net"
+ mount_alias: "bexos.lib.net"
+ abi_version: 1
+}
+processes {
+ name: "netstackd"
+ runner: "elf"
+ lifecycle { update_strategy: HEART_TRANSPLANT }
+ service: true
+ wave: 5
+ resource_group: "system"
+ runner_options {
+  [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/netstackd" }
+ }
+}
+config_schema {
+ fields {
+  name: "static_ipv4"
+  type: CONFIG_BYTES
+  max_size: 4
+ }
+ fields {
+  name: "static_prefix_len"
+  type: CONFIG_UINT32
+  default_value { uint32_value: 24 }
+ }
+ fields {
+  name: "static_gateway"
+  type: CONFIG_BYTES
+  max_size: 4
+ }
+ fields {
+  name: "static_dns"
+  type: CONFIG_BYTES
+  max_size: 4
+ }
+ fields {
+  name: "static_ipv6"
+  type: CONFIG_BYTES
+  max_size: 16
+ }
+ fields {
+  name: "static_ipv6_prefix_len"
+  type: CONFIG_UINT32
+  default_value { uint32_value: 64 }
+ }
+ fields {
+  name: "static_ipv6_gateway"
+  type: CONFIG_BYTES
+  max_size: 16
+ }
+ fields {
+  name: "static_dns_ipv6"
+  type: CONFIG_BYTES
+  max_size: 16
+ }
+ fields {
+  name: "slaac_enabled"
+  type: CONFIG_BOOL
+  default_value { bool_value: true }
+ }
+ fields {
+  name: "dhcp_enabled"
+  type: CONFIG_BOOL
+  default_value { bool_value: true }
+ }
+ fields {
+  name: "dhcp_timeout_ms"
+  type: CONFIG_UINT32
+  default_value { uint32_value: 3000 }
+ }
+ fields {
+  name: "mtu"
+  type: CONFIG_UINT32
+  default_value { uint32_value: 1500 }
+ }
+ fields {
+  name: "dns_mode"
+  type: CONFIG_STRING
+  max_size: 16
+  default_value { string_value: "udp53" }
+ }
+ fields {
+  name: "doh_host"
+  type: CONFIG_STRING
+  max_size: 255
+  default_value { string_value: "dns.google" }
+ }
+ fields {
+  name: "doh_path"
+  type: CONFIG_STRING
+  max_size: 255
+  default_value { string_value: "/dns-query" }
+ }
+ fields {
+  name: "doh_bootstrap_ipv4"
+  type: CONFIG_BYTES
+  max_size: 4
+ }
+ fields {
+  name: "doh_bootstrap_ipv6"
+  type: CONFIG_BYTES
+  max_size: 16
+ }
+ fields {
+  name: "doh_port"
+  type: CONFIG_UINT32
+  default_value { uint32_value: 443 }
+ }
+ fields {
+  name: "doh_strict"
+  type: CONFIG_BOOL
+  default_value { bool_value: false }
+ }
+ fields {
+  name: "dns_cache_capacity"
+  type: CONFIG_UINT32
+  default_value { uint32_value: 64 }
+ }
+}
+services_exposed {
+ name: "bexos.net.Netstack"
+ protocol: "Netstack"
+ lifecycle: SINGLETON
+ visibility: PUBLIC
+ capabilities {
+  capability: "Public"
+  method_ordinals: 1
+  method_ordinals: 2
+  method_ordinals: 3
+  method_ordinals: 4
+  method_ordinals: 5
+  method_ordinals: 6
+ }
+}
+services_consumed {
+ name: "bexos.hardware.ethernet.Device"
+ link_type: REQUIRED
+ capabilities {
+  capability: "Public"
+  methods { ordinal: 1 link_type: REQUIRED }
+  methods { ordinal: 2 link_type: REQUIRED }
+  methods { ordinal: 4 link_type: REQUIRED }
+  methods { ordinal: 5 link_type: REQUIRED }
+ }
+}
+services_consumed {
+ name: "bexos.security.trust.TlsTrustManager"
+ link_type: REQUIRED
+ capabilities {
+  capability: "Public"
+  methods { ordinal: 1 link_type: REQUIRED }
+ }
+}

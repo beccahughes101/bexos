@@ -1,0 +1,95 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "usersd",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_features = ["persistent"],
+    crate_name = "bexos_usersd",
+    edition = "2024",
+    deps = [
+        "//idl:fs_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//idl:tee_manager_fidl_rust",
+        "//idl:user_manager_fidl_rust",
+        "//lib/crypto:crypto_std",
+        "//lib/migration",
+        "//lib/redb:redb_bexos_std",
+        "//lib/trusty_client",
+        "//lib/user_store:user_store_bexos_std",
+        "//lib/userspace",
+        "@crates//:tokio",
+    ],
+)
+
+rust_library(
+    name = "usersd_memory",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_name = "bexos_usersd",
+    edition = "2024",
+    deps = [
+        "//idl:fs_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//idl:tee_manager_fidl_rust",
+        "//idl:user_manager_fidl_rust",
+        "//lib/crypto:crypto_std",
+        "//lib/migration",
+        "//lib/trusty_client",
+        "//lib/user_store",
+        "//lib/userspace",
+        "@crates//:tokio",
+    ],
+)
+
+std_service_binary(
+    name = "usersd_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_usersd_elf",
+    deps = [
+        ":usersd",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "usersd_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "usersd_tests",
+    edition = "2024",
+    deps = [
+        ":usersd_memory",
+        "//lib/migration",
+        "//lib/trusty_client",
+        "//lib/user_store",
+        "//lib/userspace",
+    ],
+)
+
+app_manifest(name = "package_manifest", src = "package/usersd.prototxt")
+
+app_archive(
+    name = "usersd_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/usersd": ":usersd_elf"},
+    compression = "none",
+)
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_usersd_replacement_elf",
+    deps = [
+        ":usersd",
+        "@crates//:tokio",
+    ],
+)
+
+app_archive(
+    name = "replacement_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/usersd": ":replacement_elf"},
+    compression = "zstd",
+)

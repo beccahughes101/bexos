@@ -1,0 +1,19 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+load("//build/rules:userspace.bzl", "app_manifest")
+package(default_visibility = ["//visibility:public"])
+rust_binary(name = "stamp", srcs = ["src/main.rs"], crate_name = "manifest_stamp", edition = "2024", deps = ["//lib/app_manifest"])
+
+app_manifest(name = "automatic_fixture", src = "tests/native.prototxt")
+app_manifest(name = "arm_fixture", src = "tests/native.prototxt", architecture = "AARCH64")
+app_manifest(name = "x86_fixture", src = "tests/native.prototxt", architecture = "X86_64")
+app_manifest(name = "portable_fixture", src = "tests/portable.prototxt", architecture = "MULTI")
+rust_test(
+    name = "stamping_tests", srcs = ["tests/stamping.rs"], edition = "2024",
+    deps = ["//lib/app_manifest"],
+    data = [":stamp", ":automatic_fixture", ":arm_fixture", ":x86_fixture", ":portable_fixture"],
+    env = {
+        "STAMP": "$(rootpath :stamp)", "AUTO": "$(rootpath :automatic_fixture)",
+        "ARM": "$(rootpath :arm_fixture)", "X86": "$(rootpath :x86_fixture)",
+        "PORTABLE": "$(rootpath :portable_fixture)",
+    },
+)

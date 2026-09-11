@@ -1,0 +1,50 @@
+library bexos.hardware.serial;
+
+using bexos.kernel;
+
+enum Status : int32 {
+    OK = 0,
+    ERR_INVALID_HANDLE = -1,
+    ERR_ACCESS_DENIED = -2,
+    ERR_NO_MEMORY = -3,
+    ERR_BUFFER_TOO_SMALL = -4,
+    ERR_PEER_CLOSED = -5,
+    ERR_TIMED_OUT = -6,
+    ERR_ALREADY_EXISTS = -7,
+    ERR_INVALID_ARGS = -8,
+};
+
+struct SerialConfig {
+    baud_rate uint32;
+    data_bits uint8;
+    stop_bits uint8;
+    parity uint8;
+    flow_control uint8;
+};
+
+protocol Device {
+    1: Configure(struct {
+        config SerialConfig;
+    }) -> (struct {
+        status Status;
+    });
+
+    2: Write(struct {
+        bytes vector<uint8>:4096;
+    }) -> (struct {
+        status Status;
+        bytes_written uint32;
+    });
+
+    3: Read(struct {
+        max_bytes uint32;
+    }) -> (struct {
+        status Status;
+        bytes vector<uint8>:4096;
+    });
+
+    4: GetInterruptChannel() -> (resource struct {
+        status Status;
+        irq_channel handle:CHANNEL;
+    });
+};

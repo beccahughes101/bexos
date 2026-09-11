@@ -1,0 +1,21 @@
+device_name: "qemu_aarch64_emulated"
+architecture: ARCH_AARCH64
+
+hardware_features {
+  has_acpi: false
+  has_pci: true
+  secure_world: EMULATED
+}
+
+memory_layout {
+  kernel_base_phys: 0x40200000
+  bootfs_reserved_mb: 64
+}
+
+boot_configuration {
+  default_cmdline: "console=ttyAMA0 log_level=debug early_watchdog=off"
+}
+
+cpu_topology {
+  max_cpus: 4
+}

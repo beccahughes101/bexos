@@ -1,0 +1,167 @@
+diff --git a/src/virtio/vulkan/vn_renderer.h b/src/virtio/vulkan/vn_renderer.h
+--- a/src/virtio/vulkan/vn_renderer.h
++++ b/src/virtio/vulkan/vn_renderer.h
+@@ -230,12 +230,21 @@
+                          const VkAllocationCallbacks *alloc,
+                          struct vn_renderer **renderer);
+ 
++#ifdef BEXOS_VENUS
++VkResult
++vn_renderer_create_bexos(struct vn_instance *instance,
++                         const VkAllocationCallbacks *alloc,
++                         struct vn_renderer **renderer);
++#endif
++
+ static inline VkResult
+ vn_renderer_create(struct vn_instance *instance,
+                    const VkAllocationCallbacks *alloc,
+                    struct vn_renderer **renderer)
+ {
+-#ifdef HAVE_LIBDRM
++#ifdef BEXOS_VENUS
++   return vn_renderer_create_bexos(instance, alloc, renderer);
++#elif defined(HAVE_LIBDRM)
+    if (VN_DEBUG(VTEST)) {
+       VkResult result = vn_renderer_create_vtest(instance, alloc, renderer);
+       if (result == VK_SUCCESS)
+diff --git a/src/virtio/vulkan/vn_instance.c b/src/virtio/vulkan/vn_instance.c
+--- a/src/virtio/vulkan/vn_instance.c
++++ b/src/virtio/vulkan/vn_instance.c
+@@ -55,7 +55,7 @@
+ #ifdef VK_USE_PLATFORM_XLIB_XRANDR_EXT
+       .EXT_acquire_xlib_display = true,
+ #endif
+-#ifndef VK_USE_PLATFORM_WIN32_KHR
++#if !defined(VK_USE_PLATFORM_WIN32_KHR) && !defined(BEXOS_VENUS)
+       .EXT_headless_surface = true,
+ #endif
+ #ifdef VK_USE_PLATFORM_DISPLAY_KHR
+@@ -283,8 +283,10 @@
+    struct vk_instance_dispatch_table dispatch_table;
+    vk_instance_dispatch_table_from_entrypoints(
+       &dispatch_table, &vn_instance_entrypoints, true);
++#ifndef BEXOS_VENUS
+    vk_instance_dispatch_table_from_entrypoints(
+       &dispatch_table, &wsi_instance_entrypoints, false);
++#endif
+    result = vn_instance_base_init(&instance->base,
+                                   &vn_instance_supported_extensions,
+                                   &dispatch_table, pCreateInfo, alloc);
+diff --git a/src/virtio/vulkan/vn_device.c b/src/virtio/vulkan/vn_device.c
+--- a/src/virtio/vulkan/vn_device.c
++++ b/src/virtio/vulkan/vn_device.c
+@@ -554,8 +554,10 @@
+    struct vk_device_dispatch_table dispatch_table;
+    vk_device_dispatch_table_from_entrypoints(&dispatch_table,
+                                              &vn_device_entrypoints, true);
++#ifndef BEXOS_VENUS
+    vk_device_dispatch_table_from_entrypoints(&dispatch_table,
+                                              &wsi_device_entrypoints, false);
++#endif
+    result = vn_device_base_init(&dev->base, &physical_dev->base,
+                                 &dispatch_table, pCreateInfo, alloc);
+    if (result != VK_SUCCESS) {
+diff --git a/src/virtio/vulkan/vn_physical_device.c b/src/virtio/vulkan/vn_physical_device.c
+--- a/src/virtio/vulkan/vn_physical_device.c
++++ b/src/virtio/vulkan/vn_physical_device.c
+@@ -1832,8 +1832,10 @@
+       struct vk_physical_device_dispatch_table dispatch_table;
+       vk_physical_device_dispatch_table_from_entrypoints(
+          &dispatch_table, &vn_physical_device_entrypoints, true);
++#ifndef BEXOS_VENUS
+       vk_physical_device_dispatch_table_from_entrypoints(
+          &dispatch_table, &wsi_physical_device_entrypoints, false);
++#endif
+       result = vn_physical_device_base_init(
+          &physical_dev->base, &instance->base, NULL, &dispatch_table);
+       if (result != VK_SUCCESS) {
+diff --git a/src/virtio/vulkan/vn_image.c b/src/virtio/vulkan/vn_image.c
+--- a/src/virtio/vulkan/vn_image.c
++++ b/src/virtio/vulkan/vn_image.c
+@@ -686,6 +686,8 @@
+    } else if (swapchain_info) {
+ #ifdef VK_USE_PLATFORM_ANDROID_KHR
+       result = vn_image_create_deferred(dev, pCreateInfo, alloc, &img);
++#elif defined(BEXOS_VENUS)
++      result = VK_ERROR_EXTENSION_NOT_PRESENT;
+ #else
+       result = wsi_common_create_swapchain_image(
+          &dev->physical_device->wsi_device, pCreateInfo,
+@@ -794,6 +796,9 @@
+             STACK_ARRAY_FINISH(local_infos);
+             return VK_ERROR_OUT_OF_HOST_MEMORY;
+          }
++#elif defined(BEXOS_VENUS)
++         STACK_ARRAY_FINISH(local_infos);
++         return VK_ERROR_EXTENSION_NOT_PRESENT;
+ #else
+          const VkBindImageMemorySwapchainInfoKHR *swapchain_info =
+             vk_find_struct_const(info->pNext,
+diff --git a/src/util/log.c b/src/util/log.c
+--- a/src/util/log.c
++++ b/src/util/log.c
+@@ -31,7 +31,7 @@
+ #include "util/ralloc.h"
+ #include "util/u_debug.h"
+ 
+-#if DETECT_OS_POSIX
++#if DETECT_OS_POSIX && !defined(BEXOS_VENUS)
+ #include <syslog.h>
+ #include "util/u_process.h"
+ #endif
+@@ -125,7 +125,7 @@
+ 
+    mesa_log_file = stderr;
+ 
+-#if !DETECT_OS_WINDOWS
++#if !DETECT_OS_WINDOWS && !defined(BEXOS_VENUS)
+    if (__normal_user()) {
+       const char *log_file = os_get_option("MESA_LOG_FILE");
+       if (log_file) {
+@@ -138,7 +138,7 @@
+    }
+ #endif
+ 
+-#if DETECT_OS_POSIX
++#if DETECT_OS_POSIX && !defined(BEXOS_VENUS)
+    if (mesa_log_control & MESA_LOG_CONTROL_SYSLOG)
+       openlog(util_get_process_name(), LOG_NDELAY | LOG_PID, LOG_USER);
+ #endif
+@@ -293,7 +293,7 @@
+       free(msg);
+ }
+ 
+-#if DETECT_OS_POSIX
++#if DETECT_OS_POSIX && !defined(BEXOS_VENUS)
+ 
+ static inline int
+ level_to_syslog(enum mesa_log_level l)
+@@ -429,7 +429,7 @@
+                   va_list va);
+    } loggers[] = {
+       { MESA_LOG_CONTROL_FILE, logger_file },
+-#if DETECT_OS_POSIX
++#if DETECT_OS_POSIX && !defined(BEXOS_VENUS)
+       { MESA_LOG_CONTROL_SYSLOG, logger_syslog },
+ #endif
+ #if DETECT_OS_ANDROID
+diff --git a/src/virtio/vulkan/vn_common.c b/src/virtio/vulkan/vn_common.c
+--- a/src/virtio/vulkan/vn_common.c
++++ b/src/virtio/vulkan/vn_common.c
+@@ -92,7 +92,16 @@
+    va_list ap;
+ 
+    va_start(ap, format);
++#ifdef BEXOS_VENUS
++   /* Services need no ambient Unix standard streams for diagnostics. */
++   extern void bexos_venus_log(const char *text, size_t length);
++   char text[1024];
++   int length = vsnprintf(text, sizeof(text), format, ap);
++   if (length > 0)
++      bexos_venus_log(text, MIN2((size_t)length, sizeof(text) - 1));
++#else
+    mesa_log_v(MESA_LOG_DEBUG, "MESA-VIRTIO", format, ap);
++#endif
+    va_end(ap);
+ 
+    /* instance may be NULL or partially initialized */

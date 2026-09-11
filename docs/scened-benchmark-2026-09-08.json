@@ -1,0 +1,223 @@
+{
+  "schema": 2,
+  "started_utc": "2026-09-08T07:47:46.314755+00:00",
+  "machine": {
+    "os": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+    "architecture": "arm64",
+    "logical_cpus": 8,
+    "processor": "arm",
+    "cpu": "Apple M2",
+    "memory_bytes": "8589934592"
+  },
+  "build": "Bazel -c opt; enforced by benchmark binaries",
+  "hardware_performance_verified": false,
+  "results": [
+    {
+      "workload": "fullscreen_cpu_1920x1080",
+      "scope": "host operation wall time",
+      "samples": 200,
+      "warmup": 10,
+      "p50_ns": 718084,
+      "p99_ns": 890500,
+      "allocations": 0,
+      "allocated_bytes": 0,
+      "output_bytes_per_iteration": 8294400,
+      "over_3ms": 0,
+      "over_7_5ms": 0,
+      "over_8_333ms": 0,
+      "hardware_performance_verified": false
+    },
+    {
+      "workload": "fullscreen_scanout_eligibility_1920x1080",
+      "scope": "host operation wall time",
+      "samples": 200,
+      "warmup": 10,
+      "p50_ns": 41,
+      "p99_ns": 42,
+      "allocations": 0,
+      "allocated_bytes": 0,
+      "output_bytes_per_iteration": 0,
+      "over_3ms": 0,
+      "over_7_5ms": 0,
+      "over_8_333ms": 0,
+      "hardware_performance_verified": false
+    },
+    {
+      "workload": "animated_overlap_8x640x480",
+      "scope": "host operation wall time",
+      "samples": 200,
+      "warmup": 10,
+      "p50_ns": 1436500,
+      "p99_ns": 1681667,
+      "allocations": 0,
+      "allocated_bytes": 0,
+      "output_bytes_per_iteration": 8294400,
+      "over_3ms": 0,
+      "over_7_5ms": 0,
+      "over_8_333ms": 0,
+      "hardware_performance_verified": false
+    },
+    {
+      "workload": "partial_damage_64x64",
+      "scope": "host operation wall time",
+      "samples": 200,
+      "warmup": 10,
+      "p50_ns": 11416,
+      "p99_ns": 11542,
+      "allocations": 0,
+      "allocated_bytes": 0,
+      "output_bytes_per_iteration": 16384,
+      "over_3ms": 0,
+      "over_7_5ms": 0,
+      "over_8_333ms": 0,
+      "hardware_performance_verified": false
+    },
+    {
+      "workload": "backdrop_640x480",
+      "scope": "host operation wall time",
+      "samples": 200,
+      "warmup": 10,
+      "p50_ns": 794667,
+      "p99_ns": 877709,
+      "allocations": 0,
+      "allocated_bytes": 0,
+      "output_bytes_per_iteration": 1228800,
+      "over_3ms": 0,
+      "over_7_5ms": 0,
+      "over_8_333ms": 0,
+      "hardware_performance_verified": false
+    },
+    {
+      "workload": "backdrop_partial_64x64",
+      "scope": "host operation wall time",
+      "samples": 200,
+      "warmup": 10,
+      "p50_ns": 14375,
+      "p99_ns": 14625,
+      "allocations": 0,
+      "allocated_bytes": 0,
+      "output_bytes_per_iteration": 16384,
+      "over_3ms": 0,
+      "over_7_5ms": 0,
+      "over_8_333ms": 0,
+      "hardware_performance_verified": false
+    },
+    {
+      "workload": "backdrop_fullscreen",
+      "scope": "host operation wall time",
+      "samples": 200,
+      "warmup": 10,
+      "p50_ns": 5351000,
+      "p99_ns": 6004083,
+      "allocations": 0,
+      "allocated_bytes": 0,
+      "output_bytes_per_iteration": 8294400,
+      "over_3ms": 200,
+      "over_7_5ms": 0,
+      "over_8_333ms": 0,
+      "hardware_performance_verified": false
+    },
+    {
+      "workload": "cached_multilingual_shape",
+      "scope": "host operation wall time",
+      "samples": 200,
+      "warmup": 10,
+      "p50_ns": 41,
+      "p99_ns": 42,
+      "allocations": 0,
+      "allocated_bytes": 0,
+      "hardware_performance_verified": false
+    },
+    {
+      "workload": "cached_glyph_raster_480x120",
+      "scope": "host operation wall time",
+      "samples": 200,
+      "warmup": 10,
+      "p50_ns": 34375,
+      "p99_ns": 47459,
+      "allocations": 1629,
+      "allocated_bytes": 2410440,
+      "hardware_performance_verified": false
+    },
+    {
+      "workload": "changing_multilingual_shape_and_raster",
+      "scope": "host operation wall time",
+      "samples": 200,
+      "warmup": 10,
+      "p50_ns": 64458,
+      "p99_ns": 110125,
+      "allocations": 5925,
+      "allocated_bytes": 4290984,
+      "hardware_performance_verified": false
+    }
+  ],
+  "raw": {
+    "lib/flatland/benchmark": "{\"workload\":\"fullscreen_cpu_1920x1080\",\"scope\":\"host operation wall time\",\"samples\":200,\"warmup\":10,\"p50_ns\":718084,\"p99_ns\":890500,\"allocations\":0,\"allocated_bytes\":0,\"output_bytes_per_iteration\":8294400,\"over_3ms\":0,\"over_7_5ms\":0,\"over_8_333ms\":0,\"hardware_performance_verified\":false}\n{\"workload\":\"fullscreen_scanout_eligibility_1920x1080\",\"scope\":\"host operation wall time\",\"samples\":200,\"warmup\":10,\"p50_ns\":41,\"p99_ns\":42,\"allocations\":0,\"allocated_bytes\":0,\"output_bytes_per_iteration\":0,\"over_3ms\":0,\"over_7_5ms\":0,\"over_8_333ms\":0,\"hardware_performance_verified\":false}\n{\"workload\":\"animated_overlap_8x640x480\",\"scope\":\"host operation wall time\",\"samples\":200,\"warmup\":10,\"p50_ns\":1436500,\"p99_ns\":1681667,\"allocations\":0,\"allocated_bytes\":0,\"output_bytes_per_iteration\":8294400,\"over_3ms\":0,\"over_7_5ms\":0,\"over_8_333ms\":0,\"hardware_performance_verified\":false}\n{\"workload\":\"partial_damage_64x64\",\"scope\":\"host operation wall time\",\"samples\":200,\"warmup\":10,\"p50_ns\":11416,\"p99_ns\":11542,\"allocations\":0,\"allocated_bytes\":0,\"output_bytes_per_iteration\":16384,\"over_3ms\":0,\"over_7_5ms\":0,\"over_8_333ms\":0,\"hardware_performance_verified\":false}\n",
+    "lib/flatland/blur_benchmark": "{\"workload\":\"backdrop_640x480\",\"scope\":\"host operation wall time\",\"samples\":200,\"warmup\":10,\"p50_ns\":794667,\"p99_ns\":877709,\"allocations\":0,\"allocated_bytes\":0,\"output_bytes_per_iteration\":1228800,\"over_3ms\":0,\"over_7_5ms\":0,\"over_8_333ms\":0,\"hardware_performance_verified\":false}\n{\"workload\":\"backdrop_partial_64x64\",\"scope\":\"host operation wall time\",\"samples\":200,\"warmup\":10,\"p50_ns\":14375,\"p99_ns\":14625,\"allocations\":0,\"allocated_bytes\":0,\"output_bytes_per_iteration\":16384,\"over_3ms\":0,\"over_7_5ms\":0,\"over_8_333ms\":0,\"hardware_performance_verified\":false}\n{\"workload\":\"backdrop_fullscreen\",\"scope\":\"host operation wall time\",\"samples\":200,\"warmup\":10,\"p50_ns\":5351000,\"p99_ns\":6004083,\"allocations\":0,\"allocated_bytes\":0,\"output_bytes_per_iteration\":8294400,\"over_3ms\":200,\"over_7_5ms\":0,\"over_8_333ms\":0,\"hardware_performance_verified\":false}\n",
+    "lib/flatland_cpu/benchmark": "{\"workload\":\"cached_multilingual_shape\",\"scope\":\"host operation wall time\",\"samples\":200,\"warmup\":10,\"p50_ns\":41,\"p99_ns\":42,\"allocations\":0,\"allocated_bytes\":0,\"hardware_performance_verified\":false}\n{\"workload\":\"cached_glyph_raster_480x120\",\"scope\":\"host operation wall time\",\"samples\":200,\"warmup\":10,\"p50_ns\":34375,\"p99_ns\":47459,\"allocations\":1629,\"allocated_bytes\":2410440,\"hardware_performance_verified\":false}\n{\"workload\":\"changing_multilingual_shape_and_raster\",\"scope\":\"host operation wall time\",\"samples\":200,\"warmup\":10,\"p50_ns\":64458,\"p99_ns\":110125,\"allocations\":5925,\"allocated_bytes\":4290984,\"hardware_performance_verified\":false}\nscope=host CPU only; font loading, destination copies, IPC, GPU and display timing excluded\n"
+  },
+  "guest_observations": [
+    {
+      "compositor_windows": [],
+      "gpu_worker_observations": [
+        {
+          "submission_us": 3250739,
+          "worker_us": 3251163,
+          "gpu_queue_interval_ns": 2858046168,
+          "hardware_performance_verified": false
+        },
+        {
+          "submission_us": 3815605,
+          "worker_us": 3815812,
+          "gpu_queue_interval_ns": 3362385460,
+          "hardware_performance_verified": false
+        }
+      ],
+      "input_latency_observations_ms": [
+        {
+          "device_add_to_compositor_attachment": 43561.604145999976,
+          "host_inject_to_client_log": 101.919458999987,
+          "surprise_removal_to_key_cancellation": 17240.658966000014,
+          "surprise_removal_to_registry_retirement": 17996.47538400001
+        }
+      ],
+      "hardware_performance_verified": false,
+      "scope": "functional guest integration; observations are not hardware acceptance",
+      "duplicate_log_observations_removed": true,
+      "cutovers": [
+        {
+          "generation": 91,
+          "wall_ms": 43
+        },
+        {
+          "generation": 96,
+          "wall_ms": 61
+        },
+        {
+          "generation": 94,
+          "wall_ms": 37
+        },
+        {
+          "generation": 92,
+          "wall_ms": 82
+        },
+        {
+          "generation": 95,
+          "wall_ms": 72
+        }
+      ],
+      "compositor_gpu_frame_observed": true,
+      "integration_passed": true,
+      "guest_cpu_accounting_available": false,
+      "guest_allocation_counts_available": false,
+      "source": "/private/var/tmp/_bazel_becca/afab53b7bdad8be8619fbd31ddf98cba/execroot/_main/bazel-out/darwin_arm64-opt/testlogs/testing/e2e/qemu/venus_linux/guest_aarch64/test.log"
+    }
+  ],
+  "limitations": [
+    "Host operation wall time includes descheduling; this is not full compositor CPU accounting.",
+    "Scanout eligibility measures the scene decision only. Actual scanout and retirement use the QEMU fixtures.",
+    "Output bytes count the affected destination region, not all memory reads or driver transfers.",
+    "Guest logs can provide GPU queue intervals, input observations and cutovers; software Vulkan establishes functionality only.",
+    "Compositor-wide CPU accounting, guest allocation counts, hardware input latency and physical display timing are not established by this report."
+  ]
+}

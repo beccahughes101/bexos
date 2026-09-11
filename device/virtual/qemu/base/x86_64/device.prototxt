@@ -1,0 +1,21 @@
+device_name: "qemu_x86_64"
+architecture: ARCH_X86_64
+
+hardware_features {
+  has_acpi: true
+  has_pci: true
+  secure_world: TRUSTY
+}
+
+memory_layout {
+  kernel_base_phys: 0x02000000
+  bootfs_reserved_mb: 64
+}
+
+boot_configuration {
+  default_cmdline: "console=ttyS0 log_level=debug early_watchdog=off"
+}
+
+cpu_topology {
+  max_cpus: 4
+}

@@ -1,0 +1,480 @@
+load("//testing/e2e/qemu:architecture_test.bzl", "qemu_suites")
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "userspace_binary")
+load("//testing/e2e/qemu:qemu_e2e.bzl", "QEMU_BOOT_DATA", "QEMU_DEVELOPMENT_BOOT_DATA", "qemu_development_e2e_test")
+load("//testing/e2e/qemu/update:update_e2e.bzl", "rpmb_service_update_test", "service_update_test", "update_e2e_test", "development_service_tests")
+
+package(default_visibility = ["//visibility:public"])
+
+BOOT_DATA = QEMU_BOOT_DATA
+
+SERVICE_PRELUDE_APP = "//testing/e2e/qemu/bexfs:registry_test_archive"
+
+PCI_UPDATE = {
+    "package": "bexos.driver.pci_root",
+    "generation": 11,
+    "archive": "//drivers/d1/bus/generic/pci:replacement_archive",
+}
+
+UART_UPDATE = {
+    "package": "bexos.driver.uart.pl011",
+    "generation": 12,
+    "archive": "//drivers/d1/serial/arm/pl011:replacement_archive",
+    "x86_package": "bexos.driver.serial.virtio_console",
+    "x86_archive": "//drivers/d1/serial/virtio/console:replacement_archive",
+}
+
+NVME_UPDATE = {
+    "package": "bexos.driver.storage.nvme",
+    "generation": 13,
+    "archive": "//drivers/d1/storage/nvmexpress/nvme:replacement_archive",
+}
+
+BEXFS_UPDATE = {
+    "package": "bexos.driver.storage.bexfs",
+    "generation": 14,
+    "archive": "//drivers/d1/storage/bexos/bexfs:replacement_archive",
+}
+
+ARCHIVEFS_UPDATE = {
+    "package": "bexos.driver.storage.archivefs",
+    "generation": 15,
+    "archive": "//drivers/d1/storage/bexos/archivefs:replacement_archive",
+}
+
+VFSD_UPDATE = {
+    "package": "bexos.service.vfsd",
+    "generation": 16,
+    "archive": "//services/vfsd:replacement_archive",
+}
+
+DEBUGD_UPDATE = {
+    "package": "bexos.driver.debugd",
+    "generation": 17,
+    "archive": "//services/debugd:replacement_archive",
+}
+
+UPDATE_ENGINE_UPDATE = {
+    "package": "bexos.service.updated",
+    "generation": 18,
+    "archive": "//services/updated:replacement_archive",
+}
+
+TEED_UPDATE = {
+    "package": "bexos.service.teed",
+    "generation": 19,
+    "archive": "//services/teed:replacement_archive",
+}
+
+service_update_test(
+    name = "pci_update_e2e_test",
+    boot_data = BOOT_DATA,
+    prelude_app = SERVICE_PRELUDE_APP,
+    prelude_tee = True,
+    package = PCI_UPDATE["package"],
+    generation = PCI_UPDATE["generation"],
+    archive = PCI_UPDATE["archive"],
+)
+
+service_update_test(
+    name = "uart_update_e2e_test",
+    boot_data = BOOT_DATA,
+    prelude_app = SERVICE_PRELUDE_APP,
+    prelude_tee = True,
+    package = UART_UPDATE["package"],
+    generation = UART_UPDATE["generation"],
+    archive = UART_UPDATE["archive"],
+    x86_package = UART_UPDATE["x86_package"],
+    x86_archive = UART_UPDATE["x86_archive"],
+    prerequisites = [PCI_UPDATE],
+)
+
+service_update_test(
+    name = "nvme_update_e2e_test",
+    boot_data = BOOT_DATA,
+    prelude_app = SERVICE_PRELUDE_APP,
+    prelude_tee = True,
+    package = NVME_UPDATE["package"],
+    generation = NVME_UPDATE["generation"],
+    archive = NVME_UPDATE["archive"],
+    flags = ["--nvme-dma-markers"],
+    prerequisites = [
+        PCI_UPDATE,
+        UART_UPDATE,
+    ],
+)
+
+service_update_test(
+    name = "bexfs_update_e2e_test",
+    boot_data = BOOT_DATA,
+    prelude_app = SERVICE_PRELUDE_APP,
+    prelude_tee = True,
+    package = BEXFS_UPDATE["package"],
+    generation = BEXFS_UPDATE["generation"],
+    archive = BEXFS_UPDATE["archive"],
+    prerequisites = [
+        PCI_UPDATE,
+        UART_UPDATE,
+        NVME_UPDATE,
+    ],
+)
+
+service_update_test(
+    name = "archivefs_update_e2e_test",
+    boot_data = BOOT_DATA,
+    prelude_app = SERVICE_PRELUDE_APP,
+    prelude_tee = True,
+    package = ARCHIVEFS_UPDATE["package"],
+    generation = ARCHIVEFS_UPDATE["generation"],
+    archive = ARCHIVEFS_UPDATE["archive"],
+    prerequisites = [
+        PCI_UPDATE,
+        UART_UPDATE,
+        NVME_UPDATE,
+        BEXFS_UPDATE,
+    ],
+)
+
+service_update_test(
+    name = "vfsd_update_e2e_test",
+    boot_data = BOOT_DATA,
+    prelude_app = SERVICE_PRELUDE_APP,
+    prelude_tee = True,
+    package = VFSD_UPDATE["package"],
+    generation = VFSD_UPDATE["generation"],
+    archive = VFSD_UPDATE["archive"],
+    prerequisites = [
+        PCI_UPDATE,
+        UART_UPDATE,
+        NVME_UPDATE,
+        BEXFS_UPDATE,
+        ARCHIVEFS_UPDATE,
+    ],
+)
+
+service_update_test(
+    name = "debugd_update_e2e_test",
+    boot_data = BOOT_DATA,
+    prelude_app = SERVICE_PRELUDE_APP,
+    prelude_tee = True,
+    package = DEBUGD_UPDATE["package"],
+    generation = DEBUGD_UPDATE["generation"],
+    archive = DEBUGD_UPDATE["archive"],
+    flags = ["--debugd-partial-upload"],
+    prerequisites = [
+        PCI_UPDATE,
+        UART_UPDATE,
+        NVME_UPDATE,
+        BEXFS_UPDATE,
+        ARCHIVEFS_UPDATE,
+        VFSD_UPDATE,
+    ],
+)
+
+# Exercise debugd's retained upload state independently of the storage-driver chain.
+service_update_test(
+    name = "debugd_state_update_e2e_test",
+    boot_data = BOOT_DATA,
+    prelude_app = SERVICE_PRELUDE_APP,
+    prelude_tee = True,
+    package = DEBUGD_UPDATE["package"],
+    generation = DEBUGD_UPDATE["generation"],
+    archive = DEBUGD_UPDATE["archive"],
+    flags = ["--debugd-partial-upload"],
+)
+
+service_update_test(
+    name = "updated_update_e2e_test",
+    boot_data = BOOT_DATA,
+    prelude_app = SERVICE_PRELUDE_APP,
+    prelude_tee = True,
+    package = UPDATE_ENGINE_UPDATE["package"],
+    generation = UPDATE_ENGINE_UPDATE["generation"],
+    archive = UPDATE_ENGINE_UPDATE["archive"],
+    flags = [
+        "--update-engine-faults",
+        "$(location :reject_archive)",
+        "$(location :incompatible_archive)",
+        "$(location :failure_archive)",
+        "$(location :timeout_archive)",
+    ],
+    data = [
+        ":reject_archive",
+        ":incompatible_archive",
+        ":failure_archive",
+        ":timeout_archive",
+    ],
+    prerequisites = [
+        PCI_UPDATE,
+        UART_UPDATE,
+        NVME_UPDATE,
+        BEXFS_UPDATE,
+        ARCHIVEFS_UPDATE,
+        VFSD_UPDATE,
+        DEBUGD_UPDATE,
+    ],
+)
+
+service_update_test(
+    name = "teed_update_e2e_test",
+    boot_data = BOOT_DATA,
+    prelude_app = SERVICE_PRELUDE_APP,
+    prelude_tee = True,
+    package = TEED_UPDATE["package"],
+    generation = TEED_UPDATE["generation"],
+    archive = TEED_UPDATE["archive"],
+    prerequisites = [
+        PCI_UPDATE,
+        UART_UPDATE,
+        NVME_UPDATE,
+        BEXFS_UPDATE,
+        ARCHIVEFS_UPDATE,
+        VFSD_UPDATE,
+        DEBUGD_UPDATE,
+        UPDATE_ENGINE_UPDATE,
+    ],
+)
+
+service_update_test(
+    name = "appd_update_e2e_test",
+    boot_data = BOOT_DATA,
+    prelude_app = SERVICE_PRELUDE_APP,
+    prelude_tee = True,
+    package = "bexos.platform.appd",
+    generation = 20,
+    archive = "//services/appd:replacement_archive",
+)
+
+service_update_test(
+    name = "update_e2e_test",
+    boot_data = BOOT_DATA,
+    prelude_app = SERVICE_PRELUDE_APP,
+    prelude_tee = True,
+    package = "bexos.platform.appd",
+    generation = 20,
+    archive = "//services/appd:replacement_archive",
+    prerequisites = [
+        PCI_UPDATE,
+        UART_UPDATE,
+        NVME_UPDATE,
+        BEXFS_UPDATE,
+        ARCHIVEFS_UPDATE,
+        VFSD_UPDATE,
+        DEBUGD_UPDATE,
+        UPDATE_ENGINE_UPDATE,
+        TEED_UPDATE,
+    ],
+)
+
+update_e2e_test(
+    name = "app_package_update_e2e_test",
+    boot_data = BOOT_DATA,
+    scenario_args = [
+        "app_package",
+        "$(rootpath //testing/e2e/qemu/bexfs:registry_test_archive)",
+    ],
+    data = ["//testing/e2e/qemu/bexfs:registry_test_archive"],
+)
+
+[
+    update_e2e_test(
+        name = "firmware_" + mode + "_e2e_test",
+        boot_data = BOOT_DATA,
+        scenario_args = ["firmware_" + mode] + ["$(rootpath //boot/efi:cached/" + part + ")" for part in [
+            "hypervisor.fault.fw", "hypervisor.hang.fw", "hypervisor.replacement.fw", "hypervisor.successor.fw", "trusty.replacement.fw", "hypervisor.successor_fault.fw",
+        ]],
+        data = ["//boot/efi:cached/" + part for part in [
+            "hypervisor.fault.fw", "hypervisor.hang.fw", "hypervisor.replacement.fw", "hypervisor.successor.fw", "trusty.replacement.fw", "hypervisor.successor_fault.fw",
+        ]],
+        architectures = ["x86_64"],
+    ) for mode in ["live", "reboot"]
+]
+
+update_e2e_test(
+    name = "firmware_staging_e2e_test",
+    boot_data = BOOT_DATA,
+    scenario_args = ["firmware_staging", "$(rootpath //boot/efi:cached/trusty.replacement.fw)"],
+    data = ["//boot/efi:cached/trusty.replacement.fw"],
+    architectures = ["x86_64"],
+)
+
+update_e2e_test(
+    name = "tee_image_update_e2e_test",
+    boot_data = BOOT_DATA,
+    scenario_args = ["tee_image"],
+)
+
+update_e2e_test(
+    name = "kernel_platform_update_e2e_test",
+    boot_data = BOOT_DATA,
+    scenario_args = [
+        "kernel_platform",
+        "$(rootpath //kernel:update_kernel)",
+    ],
+    data = ["//kernel:update_kernel"],
+)
+
+app_manifest(
+    name = "rejected_manifest",
+    src = "rejected_candidate.prototxt",
+)
+
+userspace_binary(
+    name = "candidate_reject",
+    srcs = ["rejected_candidate.rs"],
+    crate_name = "candidate_reject",
+    deps = [
+        "//idl:migration_fidl_rust",
+        "//lib/migration",
+    ],
+    rustc_flags = [
+        "--cfg",
+        "candidate_reject",
+    ],
+)
+
+app_archive(
+    name = "reject_archive",
+    manifest = ":rejected_manifest",
+    entries = {"bin/updated": ":candidate_reject"},
+    compression = "zstd",
+)
+
+userspace_binary(
+    name = "candidate_incompatible",
+    srcs = ["rejected_candidate.rs"],
+    crate_name = "candidate_incompatible",
+    deps = [
+        "//idl:migration_fidl_rust",
+        "//lib/migration",
+    ],
+    rustc_flags = [
+        "--cfg",
+        "candidate_incompatible",
+    ],
+)
+
+app_archive(
+    name = "incompatible_archive",
+    manifest = ":rejected_manifest",
+    entries = {"bin/updated": ":candidate_incompatible"},
+    compression = "zstd",
+)
+
+userspace_binary(
+    name = "candidate_failure",
+    srcs = ["rejected_candidate.rs"],
+    crate_name = "candidate_failure",
+    deps = [
+        "//idl:migration_fidl_rust",
+        "//lib/migration",
+    ],
+    rustc_flags = [
+        "--cfg",
+        "candidate_failure",
+    ],
+)
+
+app_archive(
+    name = "failure_archive",
+    manifest = ":rejected_manifest",
+    entries = {"bin/updated": ":candidate_failure"},
+    compression = "zstd",
+)
+
+userspace_binary(
+    name = "candidate_timeout",
+    srcs = ["rejected_candidate.rs"],
+    crate_name = "candidate_timeout",
+    deps = [
+        "//idl:migration_fidl_rust",
+        "//lib/migration",
+    ],
+    rustc_flags = [
+        "--cfg",
+        "candidate_timeout",
+    ],
+)
+
+app_archive(
+    name = "timeout_archive",
+    manifest = ":rejected_manifest",
+    entries = {"bin/updated": ":candidate_timeout"},
+    compression = "zstd",
+)
+
+app_manifest(
+    name = "rpmb_console_timeout_manifest",
+    src = "rpmb_console_timeout.prototxt",
+)
+
+app_manifest(
+    name = "rpmb_teed_timeout_manifest",
+    src = "rpmb_teed_timeout.prototxt",
+)
+
+rpmb_service_update_test(
+    name = "rpmb_console_update_e2e_test",
+    boot_data = BOOT_DATA,
+    package = "bexos.driver.serial.virtio_console",
+    generation = 21,
+    archive = "//drivers/d1/serial/virtio/console:replacement_archive",
+    manifest = "//drivers/d1/serial/virtio/console:package_manifest",
+    timeout_manifest = ":rpmb_console_timeout_manifest",
+    executable = "bin/virtio_console_driver",
+)
+
+rpmb_service_update_test(
+    name = "rpmb_teed_update_e2e_test",
+    boot_data = BOOT_DATA,
+    package = "bexos.service.teed",
+    generation = 22,
+    archive = "//services/teed:replacement_archive",
+    manifest = "//services/teed:package_manifest",
+    timeout_manifest = ":rpmb_teed_timeout_manifest",
+    executable = "bin/teed",
+)
+
+
+qemu_development_e2e_test(
+    name = "kernel_platform_development_test",
+    src = "debugd_updated_e2e_test.rs",
+    extra_srcs = ["firmware_staging.rs", "firmware_activation.rs"],
+    crate_name = "kernel_platform_development_test",
+    extra_data = ["//kernel:update_kernel"],
+    extra_args = ["kernel_platform", "$(rootpath //kernel:update_kernel)"],
+    deps = [
+        "//idl:tee_manager_fidl_rust", "//idl:update_manager_fidl_rust", "//host/debug_client",
+        "//lib/debug_wire", "//lib/crypto",
+            "//lib/secure_firmware", "//lib/update:update_host", "//testing/e2e", "//tools/qemu:qemu_test",
+    ],
+)
+
+# Each fixture retains the storage client across its cutover. Keeping replacement
+# archives in separate images avoids multiplying BexFS's live volume snapshot.
+development_service_tests(
+    name = "services_development_test",
+    boot_data = QEMU_DEVELOPMENT_BOOT_DATA,
+    services = [
+        PCI_UPDATE, NVME_UPDATE, BEXFS_UPDATE, ARCHIVEFS_UPDATE, VFSD_UPDATE,
+        DEBUGD_UPDATE, UPDATE_ENGINE_UPDATE,
+        {"package": "bexos.driver.serial.virtio_console", "generation": 12, "archive": "//drivers/d1/serial/virtio/console:replacement_archive"},
+        {"package": "bexos.driver.rtc.cmos", "generation": 23, "archive": "//drivers/d1/rtc/pc/cmos:replacement_archive"},
+        {"package": "bexos.driver.network.virtio_net", "generation": 24, "archive": "//drivers/d1/nic/virtio/net:replacement_archive"},
+        {"package": "bexos.service.netstackd", "generation": 25, "archive": "//services/netstack:replacement_archive"},
+        {"package": "bexos.platform.appd", "generation": 30, "archive": "//services/appd:replacement_archive"},
+        {"package": "bexos.service.teed", "generation": 31, "archive": "//services/teed:replacement_software_archive"},
+        {"package": "bexos.service.timed", "generation": 32, "archive": "//services/timed:replacement_archive"},
+        {"package": "bexos.service.keychaind", "generation": 33, "archive": "//services/keychaind:replacement_archive"},
+        {"package": "bexos.service.jobd", "generation": 34, "archive": "//services/jobd:replacement_archive"},
+        {"package": "bexos.service.usersd", "generation": 35, "archive": "//services/usersd:replacement_archive"},
+        {"package": "bexos.service.powerd", "generation": 36, "archive": "//services/powerd:replacement_archive"},
+        {"package": "bexos.service.traced", "generation": 37, "archive": "//services/traced:replacement_archive"},
+        {"package": "bexos.service.trustd", "generation": 38, "archive": "//services/trustd:replacement_archive"},
+        {"package": "bexos.driver.storage.memfs", "generation": 39, "archive": "//drivers/d1/storage/bexos/memfs:replacement_archive"},
+        {"package": "bexos.driver.storage.user_bexfs", "generation": 40, "archive": "//drivers/d1/storage/bexos/bexfs:user_replacement_archive"},
+        {"package": "bexos.driver.storage.diskimage", "generation": 41, "archive": "//drivers/d1/storage/bexos/diskimage:replacement_archive"},
+    ],
+)
+
+qemu_suites()

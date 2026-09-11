@@ -1,0 +1,11 @@
+package_name: "bexos.test.wasm.trap"
+name: "WASM trap fixture"
+processes {
+ name: "trap"
+ runner: "wasm"
+ service: false
+ lifecycle { update_strategy: RESTART }
+ runner_options {
+  [type.googleapis.com/bexos.app.WasmRunnerOptions] { path: "/pkg/bin/trap.wasm" }
+ }
+}

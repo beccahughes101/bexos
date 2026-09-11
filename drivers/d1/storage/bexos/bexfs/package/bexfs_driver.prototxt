@@ -1,0 +1,34 @@
+package_name: "bexos.driver.storage.bexfs"
+name: "bexfs_driver"
+library_dependencies {
+ package_name: "bexos.lib.crypto"
+ mount_alias: "bexos.lib.crypto"
+ abi_version: 1
+}
+library_dependencies {
+ package_name: "bexos.lib.net"
+ mount_alias: "bexos.lib.net"
+ abi_version: 1
+}
+processes {
+ name: "bexfs_driver"
+ runner: "elf"
+  lifecycle { update_strategy: HEART_TRANSPLANT preparation_timeout_ms: 600000 }
+ service: true
+ wave: 2
+ runner_options {
+  [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/bexfs_driver" }
+ }
+}
+services_exposed {
+ name: "bexos.fs.Filesystem"
+ protocol: "Filesystem"
+ lifecycle: SINGLETON
+ visibility: PUBLIC
+ capabilities {
+  capability: "Public"
+  method_ordinals: 30
+  method_ordinals: 31
+  method_ordinals: 32
+ }
+}

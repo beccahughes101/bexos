@@ -1,0 +1,9 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+package(default_visibility = ["//visibility:public"])
+rust_library(
+    name = "virtio_hal",
+    srcs = glob(["src/*.rs"]),
+    crate_name = "bexos_virtio_hal",
+    edition = "2024",
+    deps = ["//lib/migration", "//lib/userspace", "@crates//:virtio-drivers"],
+)

@@ -1,0 +1,30 @@
+package_name: "com.example:camera_client"
+name: "Camera Client"
+permissions {
+  name: "CAMERA"
+  values: "front"
+  values: "back"
+  requirement: PERMISSION_OPTIONAL
+  usage_description: "Display camera previews."
+}
+processes {
+  name: "default"
+  runner: "elf"
+  permissions {
+    name: "CAMERA"
+    values: "front"
+    values: "back"
+    requirement: PERMISSION_OPTIONAL
+    usage_description: "Display camera previews."
+  }
+}
+services_consumed {
+  name: "bexos.hardware.Camera"
+  link_type: REQUIRED
+  filter: "supports_capture == 'true'"
+  capabilities {
+    capability: "Camera"
+    methods { ordinal: 2 link_type: REQUIRED }
+    methods { ordinal: 3 link_type: OPTIONAL }
+  }
+}

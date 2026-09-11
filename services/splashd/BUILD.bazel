@@ -1,0 +1,11 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+package(default_visibility = ["//visibility:public"])
+rust_library(name = "splashd", srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]), crate_name = "bexos_splashd", edition = "2024", deps = ["//lib/graphics", "//lib/graphics_runtime", "//lib/userspace", "//lib/migration", "//idl:graphics_fidl_rust", "//idl:kernel_fidl_rust"])
+app_manifest(name = "package_manifest", src = "package/splashd.prototxt")
+std_service_binary(name = "splashd_elf", srcs = ["src/main.rs"], crate_name = "bexos_splashd_elf", deps = [":splashd"])
+std_service_binary(name = "replacement_elf", srcs = ["src/main.rs"], crate_name = "bexos_replacement_elf", deps = [":splashd"])
+app_archive(name = "replacement_archive", manifest = ":package_manifest", entries = {"bin/splashd": ":replacement_elf"}, compression = "zstd")
+
+rust_test(name = "tests", srcs = ["tests/migration_tests.rs"], edition = "2024", deps = [":splashd", "//lib/graphics", "//lib/graphics_runtime", "//lib/userspace"])

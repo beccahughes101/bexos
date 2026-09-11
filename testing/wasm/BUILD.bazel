@@ -1,0 +1,60 @@
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary", "wasm_runner_options")
+load("//build/rules:app_archive.bzl", "app_archive")
+package(default_visibility = ["//visibility:public"])
+[
+ genrule(name = name + "_wasm", srcs = [name + ".wat"], outs = [name + ".wasm"], tools = ["//tools/wasm:wat"], cmd = "$(execpath //tools/wasm:wat) $(location " + name + ".wat) $@")
+ for name in ["command", "trap"]
+]
+[
+ app_manifest(name = name + "_manifest", src = "package/" + name + ".prototxt")
+ for name in ["command", "trap", "service"]
+]
+[
+ app_archive(name = name + "_archive", manifest = ":" + name + "_manifest", entries = ({"bin/command.wasm": ":command_wasm", "fixture.txt": "fixture.txt"} if name == "command" else {"bin/" + name + ".wasm": ":" + name + "_wasm"}), compression = "none")
+ for name in ["command", "trap", "service"]
+]
+app_archive(name = "replacement_archive", manifest = ":service_manifest", entries = {"bin/service.wasm": ":service_wasm"}, compression = "zstd")
+
+exports_files(["service_component.wat", "command.wat", "file_service.wat", "network.wat"])
+
+std_service_binary(name = "client_elf", srcs = ["client.rs"], crate_name = "wasm_client", deps = [])
+app_manifest(name = "client_manifest", src = "package/client.prototxt")
+app_archive(name = "client_archive", manifest = ":client_manifest", entries = {"bin/client": ":client_elf"}, compression = "zstd")
+genrule(name = "rejected_restore_wasm", srcs = ["rejected_restore.wat"], outs = ["rejected_restore.wasm"], tools = ["//tools/wasm:wat"], cmd = "$(execpath //tools/wasm:wat) $(location rejected_restore.wat) $@")
+app_archive(name = "rejected_restore_archive", manifest = ":service_manifest", entries = {"bin/service.wasm": ":rejected_restore_wasm"}, compression = "zstd")
+
+genrule(name = "child_wasm", srcs = ["child.wat"], outs = ["child.wasm"], tools = ["//tools/wasm:wat"], cmd = "$(execpath //tools/wasm:wat) $(location child.wat) $@")
+wasm_runner_options(name = "child_options", src = "child_options.prototxt")
+genrule(name = "children_wasm", srcs = [":child_wasm", ":child_options"], outs = ["children.wasm"], tools = ["//tools/wasm:child_fixture"], cmd = "$(execpath //tools/wasm:child_fixture) $(location :child_wasm) $(location :child_options) $@")
+app_manifest(name = "children_manifest", src = "package/children.prototxt")
+app_archive(name = "children_archive", manifest = ":children_manifest", entries = {"bin/children.wasm": ":children_wasm"}, compression = "none")
+
+genrule(name = "child_service_wasm", srcs = ["child_service.wat"], outs = ["child_service.wasm"], tools = ["//tools/wasm:wat"], cmd = "$(execpath //tools/wasm:wat) $(location child_service.wat) $@")
+genrule(name = "service_wasm", srcs = ["service.wat", ":child_service_wasm", ":child_options"], outs = ["service.wasm"], tools = ["//tools/wasm:service_fixture"], cmd = "$(execpath //tools/wasm:service_fixture) $(location service.wat) $(location :child_service_wasm) $(location :child_options) $@")
+
+app_archive(name = "runner_replacement_archive", manifest = ":service_manifest", entries = {"bin/service.wasm": ":service_wasm", ".bexos/wasm_runner.bex": "//services/wasm_runner:replacement_archive"}, compression = "zstd")
+
+app_manifest(name = "boot_manifest", src = "package/boot.prototxt")
+alias(name = "boot_wasm", actual = ":command_wasm")
+
+genrule(name = "file_service_wasm", srcs = ["file_service.wat"], outs = ["file_service.wasm"], tools = ["//tools/wasm:wat"], cmd = "$(execpath //tools/wasm:wat) $(location file_service.wat) $@")
+app_manifest(name = "file_service_manifest", src = "package/file_service.prototxt")
+app_archive(name = "file_service_archive", manifest = ":file_service_manifest", entries = {"bin/file_service.wasm": ":file_service_wasm", "sequence.txt": "sequence.txt"}, compression = "zstd")
+app_archive(name = "file_replacement_archive", manifest = ":file_service_manifest", entries = {"bin/file_service.wasm": ":file_service_wasm", "sequence.txt": "sequence.txt"}, compression = "zstd")
+std_service_binary(name = "file_client_elf", srcs = ["client.rs"], crate_name = "wasm_file_client", deps = [], rustc_flags = ["--cfg=file_client"])
+app_manifest(name = "file_client_manifest", src = "package/file_client.prototxt")
+app_archive(name = "file_client_archive", manifest = ":file_client_manifest", entries = {"bin/client": ":file_client_elf"}, compression = "zstd")
+
+[
+ genrule(name = name + "_wasm", srcs = [name + ".wat"], outs = [name + ".wasm"], tools = ["//tools/wasm:wat"], cmd = "$(execpath //tools/wasm:wat) $(location " + name + ".wat) $@")
+ for name in ["memory", "network"]
+]
+[
+ app_manifest(name = name + "_manifest", src = "package/" + name + ".prototxt")
+ for name in ["memory", "network_denied", "network_granted"]
+]
+app_archive(name = "memory_archive", manifest = ":memory_manifest", entries = {"bin/memory.wasm": ":memory_wasm"}, compression = "none")
+[
+ app_archive(name = name + "_archive", manifest = ":" + name + "_manifest", entries = {"bin/" + name + ".wasm": ":network_wasm", "fixture.txt": "fixture.txt"}, compression = "none")
+ for name in ["network_denied", "network_granted"]
+]

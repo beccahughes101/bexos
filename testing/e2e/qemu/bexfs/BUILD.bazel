@@ -1,0 +1,186 @@
+load("@rules_rust//rust:defs.bzl", "rust_test")
+load("//testing/e2e/qemu:architecture_test.bzl", "qemu_suites")
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("//testing/e2e/qemu:qemu_e2e.bzl", "QEMU_BOOT_DATA", "qemu_e2e_test", "qemu_development_e2e_test")
+
+package(default_visibility = ["//visibility:public"])
+
+app_manifest(
+    name = "registry_test_manifest",
+    src = "registry_test_app.prototxt",
+)
+
+app_manifest(
+    name = "user_storage_probe_manifest",
+    src = "user_storage_probe.prototxt",
+)
+
+std_service_binary(
+    name = "user_storage_probe",
+    srcs = ["user_storage_probe.rs"],
+    crate_name = "user_storage_probe",
+    deps = [
+        "//idl:fs_fidl_rust",
+    ],
+)
+
+app_archive(
+    name = "registry_test_archive",
+    manifest = ":registry_test_manifest",
+    compression = "none",
+)
+
+app_archive(
+    name = "user_storage_probe_archive",
+    manifest = ":user_storage_probe_manifest",
+    entries = {"bin/user_storage_probe": ":user_storage_probe"},
+    compression = "none",
+)
+
+qemu_e2e_test(
+    name = "debugd_app_registry_e2e_test",
+    src = "debugd_app_registry_e2e_test.rs",
+    crate_name = "debugd_app_registry_e2e_test",
+    boot_data = QEMU_BOOT_DATA,
+    extra_data = [":registry_test_archive"],
+    extra_args = ["$(rootpath :registry_test_archive)"],
+    deps = [
+        "//host/debug_client",
+        "//testing/e2e",
+        "//tools/qemu:qemu_test",
+    ],
+    env = {"BEXOS_QEMU_TIMEOUT_SECONDS": "600"},
+)
+
+qemu_e2e_test(
+    name = "debugd_trace_e2e_test",
+    src = "debugd_trace_e2e_test.rs",
+    crate_name = "debugd_trace_e2e_test",
+    boot_data = QEMU_BOOT_DATA,
+    deps = [
+        "//lib/trace",
+        "//testing/e2e",
+        "//tools/qemu:qemu_test",
+    ],
+    env = {"BEXOS_QEMU_TIMEOUT_SECONDS": "600"},
+)
+
+qemu_e2e_test(
+    name = "bexfs_sys_state_e2e_test",
+    src = "bexfs_sys_state_e2e_test.rs",
+    crate_name = "bexfs_sys_state_e2e_test",
+    boot_data = QEMU_BOOT_DATA,
+    deps = [
+        "//lib/trace",
+        "//testing/e2e",
+        "//tools/qemu:qemu_test",
+    ],
+    env = {"BEXOS_QEMU_TIMEOUT_SECONDS": "600"},
+)
+
+qemu_e2e_test(
+    name = "user_storage_isolation_e2e_test",
+    src = "user_storage_isolation_e2e_test.rs",
+    crate_name = "user_storage_isolation_e2e_test",
+    boot_data = QEMU_BOOT_DATA,
+    extra_data = [":user_storage_probe_archive"],
+    extra_args = ["$(rootpath :user_storage_probe_archive)"],
+    deps = [
+        "//host/debug_client",
+        "//lib/crypto",
+        "//lib/user_store:user_store_host",
+        "//testing/e2e",
+        "//tools/qemu:qemu_test",
+    ],
+    env = {"BEXOS_QEMU_TIMEOUT_SECONDS": "600"},
+)
+
+
+app_manifest(
+    name = "shell_fixture_manifest",
+    src = "shell_fixture/manifest.prototxt",
+)
+std_service_binary(
+    name = "shell_fixture",
+    srcs = glob(["shell_fixture/*.rs"]),
+    crate_name = "shell_fixture",
+    deps = ["//idl:shell_fidl_rust", "//lib/migration", "//lib/tty"],
+)
+app_archive(
+    name = "shell_fixture_archive",
+    manifest = ":shell_fixture_manifest",
+    entries = {"bin/terminal": ":shell_fixture"},
+    compression = "none",
+)
+app_archive(
+    name = "debugd_reject_archive",
+    manifest = "//services/debugd:package_manifest",
+    entries = {"bin/debugd": "//testing/e2e/qemu/update:candidate_reject"},
+    compression = "zstd",
+)
+qemu_e2e_test(
+    name = "debugd_shell_e2e_test",
+    src = "debugd_shell_e2e_test.rs",
+    crate_name = "debugd_shell_e2e_test",
+    boot_data = dict(QEMU_BOOT_DATA, disk = "//device/virtual/qemu/nongui:qemu_nvme_shell_fixture_gpt.img"),
+    env = {"BEXOS_DEBUGD_SHELL_FIXTURE_PREINSTALLED": "1"},
+    extra_data = [":shell_fixture_archive", "//services/debugd:replacement_archive", ":debugd_reject_archive"],
+    extra_args = ["$(rootpath :shell_fixture_archive)", "$(rootpath //services/debugd:replacement_archive)", "$(rootpath :debugd_reject_archive)"],
+    deps = ["//host/debug_client", "//lib/debug_wire", "//lib/update:update_host", "//testing/e2e", "//tools/qemu:qemu_test"],
+)
+
+rust_test(
+    name = "shell_fixture_tests",
+    srcs = ["shell_fixture_tests.rs", "shell_fixture/migration.rs"],
+    crate_root = "shell_fixture_tests.rs",
+    edition = "2024",
+    deps = ["//lib/tty", "//lib/userspace", "//lib/migration"],
+)
+
+
+qemu_e2e_test(
+    name = "brush_shell_e2e_test",
+    src = "brush_shell_e2e_test.rs",
+    crate_name = "brush_shell_e2e_test",
+    deps = ["//host/debug_client", "//lib/debug_wire", "//testing/e2e", "//tools/qemu:qemu_test"],
+)
+
+qemu_e2e_test(
+    name = "brush_workstation_shell_e2e_test",
+    src = "brush_shell_e2e_test.rs",
+    crate_name = "brush_workstation_shell_e2e_test",
+    boot_data = {key: value.replace("/nongui:", "/workstation:") for key, value in QEMU_BOOT_DATA.items()},
+    extra_args = ["-device", "virtio-gpu-pci", "-device", "virtio-keyboard-pci", "-device", "virtio-mouse-pci"],
+    architectures = ["aarch64"],
+    deps = ["//host/debug_client", "//lib/debug_wire", "//testing/e2e", "//tools/qemu:qemu_test"],
+)
+
+qemu_development_e2e_test(
+    name = "debugd_app_registry_development_test",
+    src = "debugd_app_registry_e2e_test.rs",
+    crate_name = "debugd_app_registry_development_test",
+    deps = ["//host/debug_client", "//testing/e2e", "//tools/qemu:qemu_test"],
+    extra_data = [":registry_test_archive"],
+    extra_args = ["$(rootpath :registry_test_archive)"],
+)
+
+qemu_development_e2e_test(
+    name = "debugd_trace_development_test",
+    src = "debugd_trace_e2e_test.rs",
+    crate_name = "debugd_trace_development_test",
+    deps = ["//lib/trace", "//testing/e2e", "//tools/qemu:qemu_test"],
+    extra_data = [],
+    extra_args = [],
+)
+
+qemu_development_e2e_test(
+    name = "bexfs_sys_state_development_test",
+    src = "bexfs_sys_state_e2e_test.rs",
+    crate_name = "bexfs_sys_state_development_test",
+    deps = ["//lib/trace", "//testing/e2e", "//tools/qemu:qemu_test"],
+    extra_data = [],
+    extra_args = [],
+)
+
+qemu_suites()

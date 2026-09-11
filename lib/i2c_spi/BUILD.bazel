@@ -1,0 +1,22 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "i2c_spi",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "bexos_i2c_spi",
+    edition = "2024",
+    deps = ["//lib/migration"],
+)
+
+rust_test(
+    name = "tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "i2c_spi_tests",
+    edition = "2024",
+    deps = [
+        ":i2c_spi",
+        "//lib/migration",
+    ],
+)

@@ -1,0 +1,93 @@
+load("//build/platforms:architecture.bzl", "guest_platform", "guest_select")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+KERNEL_RUSTC_FLAGS = [
+    "-C",
+    "panic=abort",
+    "-C",
+    "relocation-model=static",
+    "-C",
+    "force-frame-pointers=yes",
+]
+
+rust_binary(
+    name = "kernel",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "bexos_kernel",
+    edition = "2024",
+    linker_script = guest_select("linker/aarch64-virt.ld", "linker/x86_64-q35.ld"),
+    platform = guest_platform("kernel"),
+    rustc_flags = KERNEL_RUSTC_FLAGS,
+    deps = ["//lib/elf",
+        "@crates__blake3-1.8.2//:blake3_no_std",
+        "@crates//:sha2",
+        "//idl:kernel_fidl_rust",
+        "//idl:bootstrap_fidl_rust",
+        "//lib/crypto",
+        "//lib/boot",
+        "//lib/secure_monitor_abi",
+        "//lib/allocator",
+        "//lib/migration",
+        "//lib/trace",
+        "//kernel/core",
+        "//secure/orchestrator",
+    ],
+)
+
+genrule(
+    name = "kernel_bin",
+    srcs = [":kernel"],
+    outs = ["kernel.bin"],
+    cmd = """
+"$(location @llvm//tools:llvm-objcopy)" \
+  -O binary \
+  -j .text \
+  -j .rodata \
+  -j .eh_frame_hdr \
+  -j .data \
+  "$(location :kernel)" \
+  "$@"
+""",
+    tools = ["@llvm//tools:llvm-objcopy"],
+    tags = ["manual"],
+)
+
+rust_binary(
+    name = "update_kernel",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "bexos_update_kernel",
+    edition = "2024",
+    linker_script = guest_select("linker/aarch64-update.ld", "linker/x86_64-update.ld"),
+    platform = guest_platform("kernel"),
+    rustc_flags = KERNEL_RUSTC_FLAGS + [
+        "-C",
+        "debuginfo=0",
+        "-C",
+        "strip=symbols",
+        "--cfg",
+        "bexos_update_kernel",
+    ],
+    deps = ["//lib/elf",
+        "@crates__blake3-1.8.2//:blake3_no_std",
+        "@crates//:sha2",
+        "//idl:kernel_fidl_rust",
+        "//idl:bootstrap_fidl_rust",
+        "//lib/crypto",
+        "//lib/boot",
+        "//lib/secure_monitor_abi",
+        "//lib/allocator",
+        "//lib/migration",
+        "//lib/trace",
+        "//kernel/core",
+        "//secure/orchestrator",
+    ],
+)
+
+rust_test(
+    name = "image_validation_tests", srcs = ["tests/image_validation.rs"], edition = "2024",
+    deps = ["//lib/elf", "//lib/boot"],
+    data = [":kernel", ":update_kernel"],
+    env = {"KERNEL_ELF": "$(rootpath :kernel)", "REPLACEMENT_ELF": "$(rootpath :update_kernel)"},
+)

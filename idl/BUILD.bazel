@@ -1,0 +1,535 @@
+load("//build/rules:fidl.bzl", "bexos_fidl_rust")
+load("@rules_proto//proto:defs.bzl", "proto_library")
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+package(default_visibility = ["//visibility:public"])
+
+bexos_fidl_rust(
+    name = "camera_fidl_rust_src",
+    src = "bexos/hardware/camera.fidl",
+    out = "camera_fidl.rs",
+)
+
+rust_library(
+    name = "camera_fidl_rust",
+    srcs = [":camera_fidl_rust_src"],
+    crate_name = "camera_fidl",
+    edition = "2024",
+)
+
+bexos_fidl_rust(
+    name = "kernel_fidl_rust_src",
+    srcs = [
+        "bexos/kernel/types.fidl",
+        "bexos/kernel/object.fidl",
+        "bexos/kernel/ipc.fidl",
+        "bexos/kernel/memory.fidl",
+        "bexos/kernel/scheduler.fidl",
+        "bexos/kernel/task.fidl",
+        "bexos/kernel/time.fidl",
+        "bexos/kernel/random.fidl",
+        "bexos/kernel/system.fidl",
+        "bexos/kernel/debug.fidl",
+        "bexos/kernel/tracing.fidl",
+        "bexos/kernel/migration.fidl",
+    ],
+    out = "kernel_fidl.rs",
+)
+
+bexos_fidl_rust(name = "migration_fidl_rust_src", src = "bexos/app/migration.fidl", out = "migration_fidl.rs")
+rust_library(name = "migration_fidl_rust", srcs = [":migration_fidl_rust_src"], crate_name = "migration_fidl", edition = "2024")
+
+bexos_fidl_rust(
+    name = "bootstrap_fidl_rust_src",
+    src = "bexos/app/bootstrap.fidl",
+    out = "bootstrap_fidl.rs",
+)
+rust_library(
+    name = "bootstrap_fidl_rust",
+    srcs = [":bootstrap_fidl_rust_src"],
+    crate_name = "bootstrap_fidl",
+    edition = "2024",
+)
+
+bexos_fidl_rust(name = "app_debug_fidl_rust_src", src = "bexos/app/debug.fidl", out = "app_debug_fidl.rs")
+rust_library(
+    name = "app_debug_fidl_rust",
+    srcs = [":app_debug_fidl_rust_src"],
+    crate_name = "app_debug_fidl",
+    edition = "2024",
+    deps = ["//idl:kernel_fidl_rust"],
+)
+
+bexos_fidl_rust(name = "app_lifecycle_fidl_rust_src", src = "bexos/app/lifecycle.fidl", out = "app_lifecycle_fidl.rs")
+rust_library(
+    name = "app_lifecycle_fidl_rust",
+    srcs = [":app_lifecycle_fidl_rust_src"],
+    crate_name = "app_lifecycle_fidl",
+    edition = "2024",
+    deps = ["//idl:kernel_fidl_rust"],
+)
+
+bexos_fidl_rust(
+    name = "app_manager_fidl_rust_src",
+    src = "bexos/app/manager.fidl",
+    out = "app_manager_fidl.rs",
+)
+
+rust_library(
+    name = "app_manager_fidl_rust",
+    srcs = [":app_manager_fidl_rust_src"],
+    crate_name = "app_manager_fidl",
+    edition = "2024",
+)
+
+bexos_fidl_rust(
+    name = "app_service_directory_fidl_rust_src",
+    src = "bexos/app/service_directory.fidl",
+    out = "app_service_directory_fidl.rs",
+)
+
+rust_library(
+    name = "app_service_directory_fidl_rust",
+    srcs = [":app_service_directory_fidl_rust_src"],
+    crate_name = "app_service_directory_fidl",
+    edition = "2024",
+    deps = ["//idl:kernel_fidl_rust"],
+)
+
+bexos_fidl_rust(name = "update_manager_fidl_rust_src", src = "bexos/update/manager.fidl", out = "update_manager_fidl.rs")
+rust_library(
+    name = "update_manager_fidl_rust",
+    srcs = [":update_manager_fidl_rust_src"],
+    crate_name = "update_manager_fidl",
+    edition = "2024",
+)
+
+bexos_fidl_rust(
+    name = "app_opener_fidl_rust_src",
+    src = "bexos/app/opener.fidl",
+    out = "app_opener_fidl.rs",
+)
+
+rust_library(
+    name = "app_opener_fidl_rust",
+    srcs = [":app_opener_fidl_rust_src"],
+    crate_name = "app_opener_fidl",
+    edition = "2024",
+    deps = ["//idl:kernel_fidl_rust"],
+)
+
+bexos_fidl_rust(
+    name = "app_version_manager_fidl_rust_src",
+    src = "bexos/app/version_manager.fidl",
+    out = "app_version_manager_fidl.rs",
+)
+
+rust_library(
+    name = "app_version_manager_fidl_rust",
+    srcs = [":app_version_manager_fidl_rust_src"],
+    crate_name = "app_version_manager_fidl",
+    edition = "2024",
+)
+
+bexos_fidl_rust(name = "app_worker_fidl_rust_src", src = "bexos/app/worker.fidl", out = "app_worker_fidl.rs")
+rust_library(
+    name = "app_worker_fidl_rust",
+    srcs = [":app_worker_fidl_rust_src"],
+    crate_name = "app_worker_fidl",
+    edition = "2024",
+)
+
+rust_library(
+    name = "kernel_fidl_rust",
+    srcs = [":kernel_fidl_rust_src"],
+    crate_name = "kernel_fidl",
+    edition = "2024",
+)
+
+bexos_fidl_rust(
+    name = "block_fidl_rust_src",
+    src = "bexos/storage/block.fidl",
+    out = "block_fidl.rs",
+)
+
+rust_library(
+    name = "block_fidl_rust",
+    srcs = [":block_fidl_rust_src"],
+    crate_name = "block_fidl",
+    edition = "2024",
+)
+
+bexos_fidl_rust(
+    name = "usb_host_fidl_rust_src",
+    src = "bexos/usb/host.fidl",
+    out = "usb_host_fidl.rs",
+    fidl_deps = [
+        "bexos/kernel/types.fidl",
+    ],
+)
+
+rust_library(
+    name = "usb_host_fidl_rust",
+    srcs = [":usb_host_fidl_rust_src"],
+    crate_name = "usb_host_fidl",
+    edition = "2024",
+    deps = ["//idl:kernel_fidl_rust"],
+)
+
+bexos_fidl_rust(
+    name = "i2c_spi_fidl_rust_src",
+    src = "bexos/hardware/i2c_spi.fidl",
+    out = "i2c_spi_fidl.rs",
+    fidl_deps = [
+        "bexos/kernel/types.fidl",
+    ],
+)
+
+rust_library(
+    name = "i2c_spi_fidl_rust",
+    srcs = [":i2c_spi_fidl_rust_src"],
+    crate_name = "i2c_spi_fidl",
+    edition = "2024",
+    deps = ["//idl:kernel_fidl_rust"],
+)
+
+bexos_fidl_rust(
+    name = "diskimage_fidl_rust_src",
+    src = "bexos/storage/diskimage.fidl",
+    out = "diskimage_fidl.rs",
+)
+
+rust_library(
+    name = "diskimage_fidl_rust",
+    srcs = [":diskimage_fidl_rust_src"],
+    crate_name = "diskimage_fidl",
+    edition = "2024",
+    deps = ["//idl:block_fidl_rust"],
+)
+
+bexos_fidl_rust(
+    name = "archive_fidl_rust_src",
+    src = "bexos/storage/archive.fidl",
+    out = "archive_fidl.rs",
+)
+
+rust_library(
+    name = "archive_fidl_rust",
+    srcs = [":archive_fidl_rust_src"],
+    crate_name = "archive_fidl",
+    edition = "2024",
+)
+
+bexos_fidl_rust(
+    name = "memfs_fidl_rust_src",
+    src = "bexos/storage/memfs.fidl",
+    out = "memfs_fidl.rs",
+)
+
+rust_library(
+    name = "memfs_fidl_rust",
+    srcs = [":memfs_fidl_rust_src"],
+    crate_name = "memfs_fidl",
+    edition = "2024",
+    deps = ["//idl:fs_fidl_rust"],
+)
+
+bexos_fidl_rust(
+    name = "fs_fidl_rust_src",
+    src = "bexos/fs/fs.fidl",
+    out = "fs_fidl.rs",
+)
+
+rust_library(
+    name = "fs_fidl_rust",
+    srcs = [":fs_fidl_rust_src"],
+    crate_name = "fs_fidl",
+    edition = "2024",
+)
+
+bexos_fidl_rust(
+    name = "vfs_manager_fidl_rust_src",
+    src = "bexos/vfs/manager.fidl",
+    out = "vfs_manager_fidl.rs",
+)
+
+rust_library(
+    name = "vfs_manager_fidl_rust",
+    srcs = [":vfs_manager_fidl_rust_src"],
+    crate_name = "vfs_manager_fidl",
+    edition = "2024",
+)
+
+bexos_fidl_rust(
+    name = "user_manager_fidl_rust_src",
+    src = "bexos/user/manager.fidl",
+    out = "user_manager_fidl.rs",
+)
+
+rust_library(
+    name = "user_manager_fidl_rust",
+    srcs = [":user_manager_fidl_rust_src"],
+    crate_name = "user_manager_fidl",
+    edition = "2024",
+)
+
+bexos_fidl_rust(
+    name = "keychain_fidl_rust_src",
+    src = "bexos/security/keychain.fidl",
+    out = "keychain_fidl.rs",
+)
+
+rust_library(
+    name = "keychain_fidl_rust",
+    srcs = [":keychain_fidl_rust_src"],
+    crate_name = "keychain_fidl",
+    edition = "2024",
+)
+
+bexos_fidl_rust(
+    name = "trust_fidl_rust_src",
+    src = "bexos/security/trust.fidl",
+    out = "trust_fidl.rs",
+)
+
+rust_library(
+    name = "trust_fidl_rust",
+    srcs = [":trust_fidl_rust_src"],
+    crate_name = "trust_fidl",
+    edition = "2024",
+)
+
+bexos_fidl_rust(
+    name = "hardware_manager_fidl_rust_src",
+    src = "bexos/hardware/manager.fidl",
+    out = "hardware_manager_fidl.rs",
+)
+
+rust_library(
+    name = "hardware_manager_fidl_rust",
+    srcs = [":hardware_manager_fidl_rust_src"],
+    crate_name = "hardware_manager_fidl",
+    edition = "2024",
+)
+
+bexos_fidl_rust(
+    name = "serial_fidl_rust_src",
+    src = "bexos/hardware/serial.fidl",
+    out = "serial_fidl.rs",
+)
+
+rust_library(
+    name = "serial_fidl_rust",
+    srcs = [":serial_fidl_rust_src"],
+    crate_name = "serial_fidl",
+    edition = "2024",
+)
+
+bexos_fidl_rust(
+    name = "ethernet_fidl_rust_src",
+    src = "bexos/hardware/ethernet.fidl",
+    out = "ethernet_fidl.rs",
+)
+
+rust_library(
+    name = "ethernet_fidl_rust",
+    srcs = [":ethernet_fidl_rust_src"],
+    crate_name = "ethernet_fidl",
+    edition = "2024",
+)
+
+bexos_fidl_rust(
+    name = "net_fidl_rust_src",
+    src = "bexos/net/net.fidl",
+    out = "net_fidl.rs",
+)
+
+rust_library(
+    name = "net_fidl_rust",
+    srcs = [":net_fidl_rust_src"],
+    crate_name = "net_fidl",
+    edition = "2024",
+)
+
+bexos_fidl_rust(
+    name = "time_fidl_rust_src",
+    src = "bexos/time/time.fidl",
+    out = "time_fidl.rs",
+)
+
+rust_library(
+    name = "time_fidl_rust",
+    srcs = [":time_fidl_rust_src"],
+    crate_name = "time_fidl",
+    edition = "2024",
+)
+
+bexos_fidl_rust(
+    name = "power_fidl_rust_src",
+    src = "bexos/power/power.fidl",
+    out = "power_fidl.rs",
+)
+
+rust_library(
+    name = "power_fidl_rust",
+    srcs = [":power_fidl_rust_src"],
+    crate_name = "power_fidl",
+    edition = "2024",
+)
+
+bexos_fidl_rust(
+    name = "job_fidl_rust_src",
+    src = "bexos/job/scheduler.fidl",
+    out = "job_fidl.rs",
+)
+
+rust_library(
+    name = "job_fidl_rust",
+    srcs = [":job_fidl_rust_src"],
+    crate_name = "job_fidl",
+    edition = "2024",
+)
+
+bexos_fidl_rust(
+    name = "tracing_fidl_rust_src",
+    src = "bexos/tracing/trace.fidl",
+    fidl_deps = ["bexos/kernel/types.fidl"],
+    out = "tracing_fidl.rs",
+)
+
+rust_library(
+    name = "tracing_fidl_rust",
+    srcs = [":tracing_fidl_rust_src"],
+    crate_name = "tracing_fidl",
+    edition = "2024",
+    deps = [":kernel_fidl_rust"],
+)
+
+bexos_fidl_rust(
+    name = "tee_manager_fidl_rust_src",
+    src = "bexos/tee/manager.fidl",
+    out = "tee_manager_fidl.rs",
+)
+
+rust_library(
+    name = "tee_manager_fidl_rust",
+    srcs = [":tee_manager_fidl_rust_src"],
+    crate_name = "tee_manager_fidl",
+    edition = "2024",
+)
+
+proto_library(
+    name = "debug_service_proto",
+    srcs = ["bexos/debug/v1/debug_service.proto"],
+)
+
+filegroup(
+    name = "debug_service_proto_src",
+    srcs = ["bexos/debug/v1/debug_service.proto"],
+)
+
+proto_library(
+    name = "user_proto",
+    srcs = ["bexos/user/v1/user.proto"],
+)
+
+filegroup(
+    name = "user_proto_src",
+    srcs = ["bexos/user/v1/user.proto"],
+)
+
+proto_library(
+    name = "trust_proto",
+    srcs = ["bexos/security/trust.proto"],
+)
+
+filegroup(
+    name = "trust_proto_src",
+    srcs = ["bexos/security/trust.proto"],
+)
+
+proto_library(
+    name = "version_proto",
+    srcs = ["bexos/version/version.proto"],
+)
+
+filegroup(
+    name = "version_proto_src",
+    srcs = ["bexos/version/version.proto"],
+)
+
+proto_library(
+    name = "app_manifest_proto",
+    srcs = ["bexos/app/manifest.proto"],
+    deps = [
+        ":version_proto",
+        "@protobuf//:any_proto",
+    ],
+)
+
+filegroup(
+    name = "app_manifest_proto_src",
+    srcs = [
+        "bexos/app/manifest.proto",
+        "bexos/version/version.proto",
+    ],
+)
+
+filegroup(
+    name = "domain_association_proto_src",
+    srcs = ["bexos/domain/association.proto"],
+)
+
+proto_library(
+    name = "platform_config_proto",
+    srcs = [
+        "bexos/platform/assembly.proto",
+        "bexos/platform/config.proto",
+        "bexos/platform/device.proto",
+    ],
+    deps = [":app_manifest_proto"],
+)
+
+proto_library(
+    name = "i2c_spi_topology_proto",
+    srcs = ["bexos/hardware/i2c_spi_topology.proto"],
+)
+
+filegroup(
+    name = "i2c_spi_topology_proto_src",
+    srcs = ["bexos/hardware/i2c_spi_topology.proto"],
+)
+
+filegroup(
+    name = "platform_config_proto_src",
+    srcs = [
+        "bexos/platform/assembly.proto",
+        "bexos/platform/config.proto",
+        "bexos/platform/device.proto",
+    ],
+)
+
+bexos_fidl_rust(name = "rpmb_fidl_rust_src", src = "bexos/hardware/rpmb.fidl", out = "rpmb_fidl.rs")
+rust_library(
+    name = "rpmb_fidl_rust",
+    srcs = [":rpmb_fidl_rust_src"],
+    crate_name = "rpmb_fidl",
+    edition = "2024",
+)
+
+bexos_fidl_rust(name = "tty_fidl_rust_src", src = "bexos/tty/pty.fidl", fidl_deps = ["bexos/kernel/types.fidl"], out = "tty_fidl.rs")
+rust_library(name = "tty_fidl_rust", srcs = [":tty_fidl_rust_src"], crate_name = "tty_fidl", edition = "2024", deps = [":kernel_fidl_rust"])
+bexos_fidl_rust(name = "shell_fidl_rust_src", src = "bexos/shell/provider.fidl", fidl_deps = ["bexos/kernel/types.fidl", "bexos/tty/pty.fidl"], out = "shell_fidl.rs")
+rust_library(name = "shell_fidl_rust", srcs = [":shell_fidl_rust_src"], crate_name = "shell_fidl", edition = "2024", deps = [":kernel_fidl_rust", ":tty_fidl_rust"])
+
+bexos_fidl_rust(name = "graphics_fidl_rust_src", src = "bexos/ui/graphics.fidl", out = "graphics_fidl.rs")
+rust_library(name = "graphics_fidl_rust", srcs = [":graphics_fidl_rust_src"], crate_name = "graphics_fidl", edition = "2024")
+
+bexos_fidl_rust(name = "input_fidl_rust_src", src = "bexos/ui/input.fidl", out = "input_fidl.rs")
+rust_library(name = "input_fidl_rust", srcs = [":input_fidl_rust_src"], crate_name = "input_fidl", edition = "2024")
+
+bexos_fidl_rust(name = "preferences_fidl_rust_src", src = "bexos/preferences/preferences.fidl", out = "preferences_fidl.rs")
+rust_library(name = "preferences_fidl_rust", srcs = [":preferences_fidl_rust_src"], crate_name = "preferences_fidl", edition = "2024")
+
+bexos_fidl_rust(name = "shell_session_fidl_rust_src", src = "bexos/shell/session.fidl", out = "shell_session_fidl.rs")
+rust_library(name = "shell_session_fidl_rust", srcs = [":shell_session_fidl_rust_src"], crate_name = "shell_session_fidl", edition = "2024")

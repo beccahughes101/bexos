@@ -1,0 +1,17 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_binary(
+    name = "ecosystem_bundle",
+    srcs = ["src/main.rs"],
+    crate_name = "ecosystem_bundle",
+    edition = "2024",
+)
+
+rust_test(
+    name = "ecosystem_bundle_tests",
+    srcs = ["tests/ecosystem_bundle_tests.rs"],
+    crate_name = "ecosystem_bundle_tests",
+    edition = "2024",
+)

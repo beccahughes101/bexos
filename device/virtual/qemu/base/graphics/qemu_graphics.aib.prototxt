@@ -1,0 +1,3 @@
+name: "qemu_graphics"
+packages { label: "//drivers/d1/display/virtio/gpu:gpu_driver" package_id: "bexos.driver.display.virtio_gpu" placement: BOOTFS }
+packages { label: "//drivers/d1/input/virtio:input_driver" package_id: "bexos.driver.input.virtio" placement: BOOTFS }

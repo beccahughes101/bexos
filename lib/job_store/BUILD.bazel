@@ -1,0 +1,45 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "job_store",
+    srcs = ["src/lib.rs"],
+    crate_name = "bexos_job_store",
+    edition = "2024",
+)
+
+rust_library(
+    name = "job_store_host",
+    srcs = ["src/lib.rs"],
+    crate_features = ["std", "redb_backend"],
+    crate_name = "bexos_job_store",
+    edition = "2024",
+    deps = [
+        "//lib/redb:redb_host",
+        "@crates//:redb",
+    ],
+)
+
+rust_library(
+    name = "job_store_bexos_std",
+    srcs = ["src/lib.rs"],
+    crate_features = ["std", "redb_backend"],
+    crate_name = "bexos_job_store",
+    edition = "2024",
+    deps = [
+        "//lib/redb:redb_bexos_std",
+        "@crates//:redb",
+    ],
+)
+
+rust_test(
+    name = "job_store_tests",
+    srcs = ["tests/job_store_tests.rs"],
+    crate_name = "job_store_tests",
+    edition = "2024",
+    deps = [
+        ":job_store_host",
+        "//lib/redb:redb_host",
+    ],
+)

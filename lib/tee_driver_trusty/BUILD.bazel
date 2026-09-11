@@ -1,0 +1,57 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_shared_library")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+std_shared_library(
+    name = "tee_driver_trusty_shared",
+    srcs = [
+        "src/ql_proto.rs",
+        "src/ql_tipc.rs",
+        "src/ql_monitor.rs",
+        "src/shared.rs",
+        "src/firmware.rs",
+    ],
+    crate_root = "src/shared.rs",
+    crate_features = ["bexos_libc_runtime"],
+    crate_name = "bexos_tee_driver_trusty",
+    soname = "libbexos_tee_driver.so",
+    deps = [
+        "@crates__blake3-1.8.2//:blake3_no_std",
+        "//lib/secure_monitor_abi",
+        "//lib/tee_driver_client",
+    ],
+)
+
+rust_library(
+    name = "ql_proto",
+    srcs = ["src/ql_lib.rs", "src/ql_proto.rs"],
+    crate_root = "src/ql_lib.rs",
+    crate_name = "bexos_tee_driver_trusty_ql_proto",
+    edition = "2024",
+)
+
+rust_test(
+    name = "tee_driver_trusty_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "tee_driver_trusty_tests",
+    edition = "2024",
+    deps = [":ql_proto"],
+)
+
+app_manifest(name = "package_manifest", src = "package/tee_driver_trusty.prototxt")
+
+app_archive(
+    name = "tee_driver_trusty_archive",
+    manifest = ":package_manifest",
+    entries = {"lib/libbexos_tee_driver.so": ":tee_driver_trusty_shared"},
+    compression = "zstd",
+)
+
+app_archive(
+    name = "replacement_archive",
+    manifest = ":package_manifest",
+    entries = {"lib/libbexos_tee_driver.so": ":tee_driver_trusty_shared"},
+    compression = "zstd",
+)

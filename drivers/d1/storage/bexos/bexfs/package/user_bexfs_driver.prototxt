@@ -1,0 +1,22 @@
+package_name: "bexos.driver.storage.user_bexfs"
+name: "user_bexfs_driver"
+library_dependencies {
+ package_name: "bexos.lib.crypto"
+ mount_alias: "bexos.lib.crypto"
+ abi_version: 1
+}
+library_dependencies {
+ package_name: "bexos.lib.net"
+ mount_alias: "bexos.lib.net"
+ abi_version: 1
+}
+processes {
+ name: "user_bexfs_driver"
+ runner: "elf"
+ lifecycle { update_strategy: HEART_TRANSPLANT preparation_timeout_ms: 600000 }
+ service: true
+ wave: 2
+ runner_options {
+  [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/user_bexfs_driver" }
+ }
+}

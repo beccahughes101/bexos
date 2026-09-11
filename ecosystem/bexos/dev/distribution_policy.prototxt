@@ -1,0 +1,14 @@
+profile: "dev"
+deployable: true
+direct_web_installs: true
+metadata_base_url: "https://distribution.bexos.org/metadata"
+targets_base_url: "https://distribution.bexos.org/targets"
+allowed_tuf_origins: "https://distribution.bexos.org"
+revocation_target: "trust/revocation.pb"
+well_known_path: "/.well-known/bexos-manifest.json"
+max_metadata_bytes: 1048576
+max_target_bytes: 67108864
+max_redirects: 5
+minimum_trusted_unix_time: 1700000000
+reserved_package_prefixes: "bexos."
+reserved_package_prefixes: "com.bexos."

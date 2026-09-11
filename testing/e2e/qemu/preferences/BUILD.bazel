@@ -1,0 +1,62 @@
+load("//build/rules:assembly.bzl", "app_config", "component_config_rust", "bexos_product", "product_app_config_policy")
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("//testing/e2e/qemu:qemu_e2e.bzl", "qemu_e2e_test", "QEMU_BOOT_DATA")
+load("//testing/e2e/qemu:architecture_test.bzl", "qemu_suites")
+load("@rules_rust//rust:defs.bzl", "rust_library")
+package(default_visibility = ["//visibility:public"])
+app_manifest(name = "manifest", src = "probe.prototxt")
+app_config(name = "config", manifest = ":manifest")
+bexos_product(name = "probe_product", src = "product.prototxt", bundles = [], manifests = {})
+product_app_config_policy(
+    name = "policy",
+    manifest = ":manifest",
+    product = ":probe_product_bin",
+    package_id = "com.example.preferences_probe",
+)
+
+component_config_rust(name = "config_source", manifest = ":manifest")
+rust_library(
+    name = "probe_config",
+    srcs = [":config_source"],
+    crate_name = "probe_config",
+    edition = "2024",
+    deps = ["//lib/userspace"],
+)
+
+std_service_binary(
+    name = "probe",
+    crate_name = "preferences_probe",
+    srcs = ["probe.rs"],
+    deps = [":probe_config"],
+)
+
+app_archive(
+    name = "probe_archive",
+    manifest = ":manifest",
+    entries = {"bin/probe": ":probe"},
+    config = ":config",
+    config_policy = ":policy",
+)
+
+genrule(
+    name = "test_disk",
+    srcs = [QEMU_BOOT_DATA["disk"], QEMU_BOOT_DATA["key"], "//services/prefsd:replacement_archive", "//services/appd:replacement_archive"],
+    outs = ["preferences_nvme.img"],
+    tools = ["//tools/image:bexfs_image"],
+    cmd = "cp $(location " + QEMU_BOOT_DATA["disk"] + ") $@ && chmod u+w $@ && $(location //tools/image:bexfs_image) --inspect --image $@ --partition STORAGE --label STORAGE --key-file $(location " + QEMU_BOOT_DATA["key"] + ") --entry updates/prefsd-70.bex=$(location //services/prefsd:replacement_archive) --entry updates/appd-71.bex=$(location //services/appd:replacement_archive)",
+)
+PREFERENCES_BOOT_DATA = dict(QEMU_BOOT_DATA, disk = ":test_disk")
+qemu_e2e_test(
+    name = "preferences_e2e_test",
+    src = "preferences_e2e_test.rs",
+    crate_name = "preferences_e2e_test",
+    boot_data = PREFERENCES_BOOT_DATA,
+    env = {"BEXOS_QEMU_TIMEOUT_SECONDS": "900"},
+    timeout = "eternal",
+    extra_data = [":probe_archive", "//services/prefsd:replacement_archive", "//services/appd:replacement_archive"],
+    extra_args = ["$(rootpath :probe_archive)", "$(rootpath //services/prefsd:replacement_archive)", "$(rootpath //services/appd:replacement_archive)"],
+    deps = ["//host/debug_client", "//lib/debug_wire", "//lib/component_config", "//testing/e2e", "//tools/qemu:qemu_test"],
+)
+
+qemu_suites()

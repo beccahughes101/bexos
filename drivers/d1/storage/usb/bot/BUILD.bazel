@@ -1,0 +1,71 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "usb_bot_lib",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_name = "bexos_usb_bot",
+    edition = "2024",
+    deps = [
+        "//idl:block_fidl_rust",
+        "//idl:hardware_manager_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//idl:usb_host_fidl_rust",
+        "//lib/migration",
+        "//lib/usb_host",
+        "//lib/userspace",
+        "//lib/userspace_async",
+        "@crates//:tokio",
+    ],
+)
+
+std_service_binary(
+    name = "usb_bot_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_usb_bot_elf",
+    deps = [
+        ":usb_bot_lib",
+        "@crates//:tokio",
+    ],
+)
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_usb_bot_replacement",
+    deps = [
+        ":usb_bot_lib",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "usb_bot_tests",
+    edition = "2024",
+    deps = [
+        ":usb_bot_lib",
+        "//idl:block_fidl_rust",
+        "//lib/userspace",
+    ],
+)
+
+app_manifest(name = "package_manifest", src = "package/usb_bot.prototxt")
+
+app_archive(
+    name = "usb_bot",
+    manifest = ":package_manifest",
+    entries = {"bin/usb_bot": ":usb_bot_elf"},
+    compression = "zstd",
+)
+
+app_archive(
+    name = "replacement_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/usb_bot": ":replacement_elf"},
+    compression = "zstd",
+)

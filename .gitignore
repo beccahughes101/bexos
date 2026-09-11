@@ -1,0 +1,8 @@
+bazel-*
+/third_party/trusty/image.bin
+/third_party/trusty/authmgr_acceptance_image.bin
+
+/third_party/trusty/x86_64_image.bin
+/third_party/trusty/x86_64_acceptance_image.bin
+/boot/efi/standard_firmware.bin
+/boot/efi/acceptance_firmware.bin

@@ -1,0 +1,2 @@
+package_name: "bexos.platform.wasm_runner"
+name: "Trusted WebAssembly runner"

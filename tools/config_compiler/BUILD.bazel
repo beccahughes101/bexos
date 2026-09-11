@@ -1,0 +1,41 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "config_compiler_lib",
+    srcs = ["src/lib.rs"],
+    crate_name = "bexos_config_compiler",
+    edition = "2024",
+    deps = [
+        "@crates//:anyhow",
+        "@crates//:starlark",
+    ],
+)
+
+rust_binary(
+    name = "config_compiler",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_config_compiler_bin",
+    edition = "2024",
+    deps = [":config_compiler_lib"],
+)
+
+rust_test(
+    name = "config_compiler_tests",
+    srcs = ["tests/config_compiler_tests.rs"],
+    crate_name = "config_compiler_tests",
+    edition = "2024",
+    deps = [":config_compiler_lib"],
+)
+
+rust_test(
+    name = "config_compiler_unit_tests",
+    srcs = ["src/lib.rs"],
+    crate_name = "config_compiler_unit_tests",
+    edition = "2024",
+    deps = [
+        "@crates//:anyhow",
+        "@crates//:starlark",
+    ],
+)

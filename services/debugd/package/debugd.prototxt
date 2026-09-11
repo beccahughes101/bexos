@@ -1,0 +1,75 @@
+package_name: "bexos.driver.debugd"
+name: "debugd"
+library_dependencies {
+ package_name: "bexos.lib.crypto"
+ mount_alias: "bexos.lib.crypto"
+ abi_version: 1
+}
+library_dependencies {
+ package_name: "bexos.lib.net"
+ mount_alias: "bexos.lib.net"
+ abi_version: 1
+}
+permissions {
+ name: "DEBUG_API_ACCESS"
+ usage_description: "Serve the developer debug API."
+}
+permissions {
+ name: "TEE_MANAGER_ACCESS"
+ requirement: PERMISSION_REQUIRED
+ usage_description: "Proxy TEE management requests for development diagnostics."
+}
+permissions {
+ name: "TRACE_CONTROL"
+ requirement: PERMISSION_REQUIRED
+ usage_description: "Control trace sessions for development diagnostics."
+}
+processes {
+ name: "debugd"
+ runner: "elf"
+ lifecycle { update_strategy: HEART_TRANSPLANT }
+ service: true
+ permissions {
+  name: "DEBUG_API_ACCESS"
+  usage_description: "Serve the developer debug API."
+ }
+ permissions {
+  name: "TEE_MANAGER_ACCESS"
+  requirement: PERMISSION_REQUIRED
+  usage_description: "Proxy TEE management requests for development diagnostics."
+ }
+ permissions {
+  name: "TRACE_CONTROL"
+  requirement: PERMISSION_REQUIRED
+  usage_description: "Control trace sessions for development diagnostics."
+ }
+ wave: 3
+ runner_options {
+  [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/debugd" }
+ }
+}
+services_consumed {
+ name: "tee_manager"
+ link_type: OPTIONAL
+ capabilities {
+  capability: "Public"
+  methods { ordinal: 1 link_type: OPTIONAL }
+  methods { ordinal: 2 link_type: OPTIONAL }
+  methods { ordinal: 3 link_type: OPTIONAL }
+  methods { ordinal: 4 link_type: OPTIONAL }
+  methods { ordinal: 5 link_type: OPTIONAL }
+  methods { ordinal: 6 link_type: OPTIONAL }
+  methods { ordinal: 7 link_type: OPTIONAL }
+  methods { ordinal: 9 link_type: OPTIONAL }
+ }
+}
+services_consumed {
+ name: "bexos.tracing.TraceController"
+ link_type: OPTIONAL
+ capabilities {
+  capability: "Public"
+  methods { ordinal: 1 link_type: OPTIONAL }
+  methods { ordinal: 2 link_type: OPTIONAL }
+  methods { ordinal: 3 link_type: OPTIONAL }
+ }
+}

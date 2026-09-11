@@ -1,0 +1,68 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "traced",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_name = "bexos_traced",
+    edition = "2024",
+    deps = [
+        "//idl:kernel_fidl_rust",
+        "//idl:tracing_fidl_rust",
+        "//lib/migration",
+        "//lib/trace",
+        "//lib/userspace",
+        "@crates//:tokio",
+    ],
+)
+
+std_service_binary(
+    name = "traced_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_traced_elf",
+    deps = [
+        ":traced",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "traced_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "traced_tests",
+    edition = "2024",
+    deps = [
+        ":traced",
+        "//lib/trace",
+        "//lib/userspace",
+    ],
+)
+
+app_manifest(name = "package_manifest", src = "package/traced.prototxt")
+
+app_archive(
+    name = "traced_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/traced": ":traced_elf"},
+    compression = "none",
+)
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_traced_replacement_elf",
+    deps = [
+        ":traced",
+        "@crates//:tokio",
+    ],
+)
+
+app_archive(
+    name = "replacement_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/traced": ":replacement_elf"},
+    compression = "zstd",
+)

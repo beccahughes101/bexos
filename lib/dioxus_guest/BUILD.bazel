@@ -1,0 +1,18 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "dioxus_guest",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "bexos_dioxus_guest",
+    edition = "2024",
+    compile_data = ["@wasmtime_wasi_wit//:wit", "//lib/wasm_runtime:guest_wit"],
+    rustc_env = {"CARGO_MANIFEST_DIR": "."},
+    deps = [
+        "//idl:graphics_fidl_rust",
+        "//lib/dioxus_dom",
+        "//lib/dioxus_scene",
+        "@brush_crates//:wit-bindgen",
+    ],
+)

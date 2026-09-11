@@ -1,0 +1,25 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+package(default_visibility = ["//visibility:public"])
+rust_library(
+    name = "trusty_boot",
+    srcs = ["src/lib.rs", "src/ql.rs", "src/ql_state.rs", "src/avb.rs", "src/avb_state.rs", "src/approval.rs", "src/approval_wire.rs", "src/storage.rs", "src/journal.rs", "src/selection.rs", "src/recovery.rs"],
+    crate_name = "bexos_trusty_boot",
+    edition = "2024",
+    deps = ["//lib/tee_driver_trusty:ql_proto", "//lib/secure_firmware"],
+)
+rust_test(name = "tests", crate = ":trusty_boot")
+
+rust_test(
+    name = "recovery_tests",
+    srcs = ["integration/recovery.rs"],
+    edition = "2024",
+    deps = [":trusty_boot", "//lib/secure_firmware"],
+    data = ["//secure/orchestrator/trusty:boot_selection_fixture"],
+    compile_data = ["//secure/orchestrator/trusty:boot_selection_records", "//lib/secure_firmware:storage_test.fw", "//lib/secure_firmware:storage_test.avbpubkey"],
+    rustc_env = {
+        "SELECTION_AUTHORITY": "$(rootpath //secure/orchestrator/trusty:boot_selection_fixture)",
+        "SELECTION_RECORDS": "$(execpath //secure/orchestrator/trusty:boot_selection_records)",
+        "TEST_FIRMWARE": "$(execpath //lib/secure_firmware:storage_test.fw)",
+        "TEST_ROOT": "$(execpath //lib/secure_firmware:storage_test.avbpubkey)",
+    },
+)

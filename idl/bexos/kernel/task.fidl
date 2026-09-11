@@ -1,0 +1,78 @@
+library bexos.kernel;
+
+/// Thread execution and lightweight synchronization (Futex)
+protocol TaskControl {
+    /// Spawn an execution thread within the current address space
+    CreateThread(resource struct {
+        entry_vaddr uint64,
+        stack_top_vaddr uint64,
+        arg_handle handle:OPTIONAL
+    }) -> (resource struct {
+        status Status,
+        thread_handle handle:THREAD
+    });
+
+    /// Terminate calling thread
+    ExitThread(struct { exit_code int32 });
+
+    /// Fast userspace mutual exclusion wait (futex). timeout_nanos is a
+    /// relative monotonic duration, -1 for indefinite, or 0 for a poll.
+    /// OK after sleeping permits spurious and deadline wakeups: recheck both
+    /// the predicate and deadline. A raced value reports ERR_RESOURCE_EXHAUSTED.
+    FutexWait(struct {
+        uaddr uint64,
+        expected_val uint32,
+        timeout_nanos int64,
+        owner_thread handle:OPTIONAL
+    }) -> (struct {
+        status Status
+    });
+
+    /// Wake threads sleeping on a futex address
+    FutexWake(struct {
+        uaddr uint64,
+        wake_count uint32
+    }) -> (struct {
+        status Status,
+        woken_count uint32
+    });
+
+    /// Wait on signals across multiple handles simultaneously
+    WaitMany(resource struct {
+        items vector<struct {
+            h handle,
+            signals Signals
+        }>,
+        deadline_nanos int64
+    }) -> (struct {
+        status Status,
+        satisfied_index uint32,
+        observed_signals Signals
+    });
+
+    /// Attach a validated scheduling profile to a thread.
+    SetProfile(resource struct {
+        thread handle:THREAD,
+        profile handle:PROFILE
+    }) -> (struct { status Status });
+
+    /// Restrict thread execution to CPUs present in the configured topology.
+    SetCpuAffinity(resource struct {
+        thread handle:THREAD,
+        affinity CpuMask
+    }) -> (struct { status Status });
+
+    /// Yield normally or donate the current timeslice to a ready thread.
+    YieldThread(resource struct {
+        target_thread handle:OPTIONAL
+    }) -> (struct { status Status });
+    /// Inspect only the calling thread and its process. Scheduled CPU time
+    /// includes kernel execution, excludes blocked time, and retains exited
+    /// thread contributions. Counters begin at boot or legacy snapshot adoption.
+    GetRuntimeStats() -> (struct {
+        status Status;
+        thread_cpu_ns uint64;
+        process_cpu_ns uint64;
+    });
+
+};

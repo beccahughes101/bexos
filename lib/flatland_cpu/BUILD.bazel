@@ -1,0 +1,12 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//lib/flatland_text:BUILD.fonts.bzl", "FONT_DATA", "FONT_ENV")
+package(default_visibility = ["//visibility:public"])
+rust_library(
+    name = "flatland_cpu",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "bexos_flatland_cpu",
+    edition = "2024",
+    deps = ["//lib/flatland", "//lib/flatland_text", "@graphics_crates//:vello_cpu"],
+)
+rust_test(name = "tests", srcs = ["tests/text.rs"], edition = "2024", deps = [":flatland_cpu", "//lib/flatland_text", "//lib/flatland"], compile_data = FONT_DATA, rustc_env = FONT_ENV)
+rust_binary(name = "benchmark", srcs = ["bench/text.rs"], edition = "2024", deps = [":flatland_cpu", "//lib/flatland_text", "//lib/flatland"], compile_data = FONT_DATA, rustc_env = FONT_ENV)

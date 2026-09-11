@@ -1,0 +1,125 @@
+load(":architecture.bzl", "architecture", "trusty_variant")
+
+package(default_visibility = ["//visibility:public"])
+
+# Guest platform flags otherwise survive into native bootstrap/proc-macro
+# configurations. Native executables must link the host libc through clang.
+platform(
+    name = "native_host",
+    parents = ["@platforms//host"],
+    flags = ["--@rules_rust//rust/settings:toolchain_linker_preference=cc"],
+)
+
+platform(
+    name = "kernel_aarch64",
+    flags = ["--@rules_rust//rust/settings:toolchain_linker_preference=rust"],
+    constraint_values = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:none",
+        "//build/platforms/constraints:tier_d0_kernel",
+    ],
+)
+
+platform(
+    name = "userspace_freestanding_aarch64",
+    flags = ["--@rules_rust//rust/settings:toolchain_linker_preference=rust"],
+    constraint_values = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:none",
+        "//build/platforms/constraints:bexos_userspace_abi",
+        "//build/platforms/constraints:tier_d1_native",
+    ],
+)
+
+platform(
+    name = "userspace_aarch64",
+    flags = ["--@rules_rust//rust/settings:toolchain_linker_preference=rust"],
+    constraint_values = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:linux",
+        "//build/platforms/constraints:bexos_userspace_abi",
+        "//build/platforms/constraints:tier_d1_native",
+    ],
+)
+
+platform(
+    name = "wasm32_guest",
+    constraint_values = [
+        "@platforms//cpu:wasm32",
+        "@platforms//os:none",
+        "//build/platforms/constraints:tier_d2_wasm",
+    ],
+)
+
+platform(
+    name = "secure_aarch64",
+    flags = ["--@rules_rust//rust/settings:toolchain_linker_preference=rust"],
+    constraint_values = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:none",
+        "//build/platforms/constraints:tier_secure_world",
+    ],
+)
+
+architecture(name = "guest_arch", build_setting_default = "aarch64")
+trusty_variant(name = "trusty_variant", build_setting_default = "standard")
+config_setting(name = "trusty_acceptance", flag_values = {":trusty_variant": "acceptance"})
+
+config_setting(name = "is_x86_64", flag_values = {":guest_arch": "x86_64"})
+config_setting(name = "is_aarch64", flag_values = {":guest_arch": "aarch64"})
+
+platform(
+    name = "kernel_x86_64",
+    flags = ["--@rules_rust//rust/settings:toolchain_linker_preference=rust"],
+    constraint_values = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:none",
+        "//build/platforms/constraints:tier_d0_kernel",
+    ],
+)
+
+platform(
+    name = "userspace_freestanding_x86_64",
+    flags = ["--@rules_rust//rust/settings:toolchain_linker_preference=rust"],
+    constraint_values = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:none",
+        "//build/platforms/constraints:bexos_userspace_abi",
+        "//build/platforms/constraints:tier_d1_native",
+    ],
+)
+
+platform(
+    name = "userspace_x86_64",
+    flags = ["--@rules_rust//rust/settings:toolchain_linker_preference=rust"],
+    constraint_values = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+        "//build/platforms/constraints:bexos_userspace_abi",
+        "//build/platforms/constraints:tier_d1_native",
+    ],
+)
+
+platform(
+    name = "secure_x86_64",
+    flags = ["--@rules_rust//rust/settings:toolchain_linker_preference=rust"],
+    constraint_values = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:none",
+        "//build/platforms/constraints:tier_secure_world",
+    ],
+)
+
+platform(
+    name = "wasip2_guest",
+    # Native guest platforms select the Rust linker. Reset this explicitly so
+    # components reached from host archives and guest embedded caches are equal.
+    flags = ["--@rules_rust//rust/settings:toolchain_linker_preference=rust"],
+    constraint_values = [
+        "@platforms//cpu:wasm32",
+        "@platforms//os:wasi",
+        "@rules_rust//rust/platform:wasi_preview_2",
+        "//build/platforms/constraints:tier_d2_wasm",
+    ],
+)
+config_setting(name = "is_bexos_userspace", constraint_values = ["//build/platforms/constraints:bexos_userspace_abi"])

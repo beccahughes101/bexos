@@ -1,0 +1,21 @@
+library bexos.kernel;
+
+protocol KernelTraceControl {
+    @permission("BEXOS_SYSTEM_PRIVILEGED")
+    1: AttachKernelProducer(resource struct {
+        buffer handle;
+        mapped_len uint64;
+        producer_id uint64;
+        cpu_id uint32;
+    }) -> (struct {
+        status Status;
+    });
+
+    @permission("BEXOS_SYSTEM_PRIVILEGED")
+    2: DetachKernelProducer() -> (resource struct {
+        status Status;
+        buffer handle;
+        producer_id uint64;
+        mapped_len uint64;
+    });
+};

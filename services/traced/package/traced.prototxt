@@ -1,0 +1,59 @@
+package_name: "bexos.service.traced"
+name: "traced"
+library_dependencies {
+ package_name: "bexos.lib.crypto"
+ mount_alias: "bexos.lib.crypto"
+ abi_version: 1
+}
+library_dependencies {
+ package_name: "bexos.lib.net"
+ mount_alias: "bexos.lib.net"
+ abi_version: 1
+}
+permissions {
+ name: "TRACE_CONTROL"
+ requirement: PERMISSION_REQUIRED
+ usage_description: "Start, stop, and export system trace sessions."
+}
+processes {
+ name: "traced"
+ runner: "elf"
+ lifecycle { update_strategy: HEART_TRANSPLANT }
+ service: true
+ permissions {
+  name: "TRACE_CONTROL"
+  requirement: PERMISSION_REQUIRED
+  usage_description: "Start, stop, and export system trace sessions."
+ }
+ wave: 2
+ resource_group: "system"
+ runner_options {
+  [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/traced" }
+ }
+}
+services_exposed {
+ name: "bexos.tracing.TraceController"
+ protocol: "TraceController"
+ lifecycle: SINGLETON
+ visibility: PUBLIC
+ bind_permission: "TRACE_CONTROL"
+ capabilities {
+  capability: "Public"
+ method_ordinals: 1
+ method_ordinals: 2
+ method_ordinals: 3
+ }
+}
+services_exposed {
+ name: "bexos.tracing.TraceRegistry"
+ protocol: "TraceRegistry"
+ lifecycle: SINGLETON
+ visibility: PUBLIC
+ bind_permission: "SYSTEM_PRIVILEGED"
+ capabilities {
+  capability: "SystemPrivileged"
+  method_ordinals: 1
+  method_ordinals: 2
+  method_ordinals: 3
+ }
+}

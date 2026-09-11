@@ -1,0 +1,45 @@
+library bexos.app.manager;
+
+type AppManagerStatus = strict enum : int32 {
+    OK = 0,
+    NOT_FOUND = -1,
+    INVALID_ARGS = -8,
+    ACCESS_DENIED = -10,
+    STORAGE = -20,
+    VERIFY_FAILED = -21,
+    NETWORK = -30,
+};
+
+type AssociationStatus = strict enum : uint8 {
+    VERIFIED = 1,
+    DOMAIN_UNREACHABLE = 2,
+    SIGNING_KEY_MISMATCH = 3,
+    ORIGIN_MISMATCH = 4,
+};
+
+protocol AppManager {
+    1: InstallAppFromUrl(struct {
+        url string:2048;
+    }) -> (struct {
+        status AppManagerStatus;
+        allocated_package_id string:128;
+        association AssociationStatus;
+    });
+
+    2: ReloadWellKnownForDomain(struct {
+        domain string:255;
+    }) -> (struct {
+        status AppManagerStatus;
+        association AssociationStatus;
+        updated_handlers_count uint32;
+    });
+
+    3: GetDomainAssociation(struct {
+        package_id string:128;
+    }) -> (struct {
+        status AppManagerStatus;
+        domain string:255;
+        association AssociationStatus;
+        last_verified_timestamp uint64;
+    });
+};

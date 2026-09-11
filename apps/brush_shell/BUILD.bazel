@@ -1,0 +1,52 @@
+load("@rules_rust//rust:defs.bzl", "rust_test")
+load("//build/rules:optimized_artifact.bzl", "optimized_test")
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest")
+load("//build/rules:wasm.bzl", "wasi_component")
+package(default_visibility = ["//visibility:public"])
+wasi_component(
+    name = "wasm",
+    crate_name = "brush_shell",
+    srcs = glob(["src/**/*.rs"]),
+    deps = ["@brush_crates//:brush-core", "@brush_crates//:brush-builtins", "@brush_crates//:tokio", "//lib/wasm_guest", "//lib/tty:tty_wasm", "//lib/migration", "//idl:shell_fidl_rust", "//idl:app_opener_fidl_rust", "//idl:kernel_fidl_rust", "@brush_crates//:serde_json"],
+)
+
+app_manifest(name = "manifest", src = "package/manifest.prototxt")
+app_archive(name = "brush_shell", manifest = ":manifest", entries = {"bin/brush.wasm": ":wasm", "bin/utilities.wasm": ":utilities_wasm"}, compression = "zstd")
+app_archive(name = "replacement_archive", manifest = ":manifest", entries = {"bin/brush.wasm": ":wasm", "bin/utilities.wasm": ":utilities_wasm"}, compression = "zstd")
+
+rust_test(
+    name = "component_test_binary",
+    tags = ["manual"],
+    srcs = ["tests/component.rs"],
+    edition = "2024",
+    data = [":wasm", ":utilities_wasm"],
+    rustc_env = {"BRUSH_WASM": "$(rootpath :wasm)", "UTILITIES_WASM": "$(rootpath :utilities_wasm)"},
+    deps = ["//lib/wasm_runtime", "//lib/wasm_abi", "@crates//:wasmtime", "//idl:kernel_fidl_rust", "//idl:shell_fidl_rust", "//idl:tty_fidl_rust", "//idl:app_opener_fidl_rust"],
+)
+
+test_suite(name = "tests", tests = [":component_tests", ":component_heap_tests", ":path_tests", "//lib/cli_utilities:tests"])
+
+wasi_component(
+    name = "utilities_wasm",
+    crate_name = "brush_utilities",
+    srcs = glob(["utilities/*.rs"]),
+    deps = ["//lib/cli_utilities", "//lib/wasm_guest", "//idl:app_opener_fidl_rust"],
+)
+
+optimized_test(name = "component_tests", src = ":component_test_binary", timeout = "moderate")
+
+rust_test(
+    name = "component_heap_test_binary",
+    tags = ["manual"],
+    srcs = ["tests/component.rs", "tests/heap.rs"],
+    crate_root = "tests/component.rs",
+    edition = "2024",
+    crate_features = ["bexos_heap"],
+    data = [":wasm", ":utilities_wasm"],
+    rustc_env = {"BRUSH_WASM": "$(rootpath :wasm)", "UTILITIES_WASM": "$(rootpath :utilities_wasm)"},
+    deps = ["//lib/allocator", "//lib/wasm_runtime", "//lib/wasm_abi", "@crates//:wasmtime", "//idl:kernel_fidl_rust", "//idl:shell_fidl_rust", "//idl:tty_fidl_rust", "//idl:app_opener_fidl_rust"],
+)
+optimized_test(name = "component_heap_tests", src = ":component_heap_test_binary", timeout = "long")
+
+rust_test(name="path_tests", srcs=["src/path.rs"], edition="2024")

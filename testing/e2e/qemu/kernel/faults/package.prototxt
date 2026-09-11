@@ -1,0 +1,20 @@
+package_name: "bexos.platform.fault_probe"
+name: "Page permission validation"
+processes {
+ name: "readonly"
+ runner: "elf"
+ lifecycle { update_strategy: RESTART }
+ runner_options { [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/fault_probe" } }
+}
+processes {
+ name: "nonexecuting"
+ runner: "elf"
+ lifecycle { update_strategy: RESTART }
+ runner_options { [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/fault_probe" } }
+}
+processes {
+ name: "unmapped"
+ runner: "elf"
+ lifecycle { update_strategy: RESTART }
+ runner_options { [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/fault_probe" } }
+}

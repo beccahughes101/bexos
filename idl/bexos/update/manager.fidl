@@ -1,0 +1,110 @@
+library bexos.update;
+
+type UpdateStatus = strict enum : int32 {
+    OK = 0,
+    ERR_NOT_FOUND = -1,
+    ERR_ACCESS_DENIED = -2,
+    ERR_ALREADY_EXISTS = -7,
+    ERR_INVALID_ARGS = -8,
+    ERR_VERIFY_FAILED = -21,
+    ERR_TRANSPORT = -60,
+    ERR_UNAVAILABLE = -95,
+};
+
+type UpdateStream = strict enum : uint8 {
+    MANIFEST = 1,
+    ARTIFACT = 2,
+};
+
+type FirmwareActivationMode = strict enum : uint8 {
+    LIVE_NOW = 1,
+    ON_REBOOT = 2,
+};
+
+type UpdateSelectorKind = strict enum : uint8 {
+    ALL = 1,
+    PACKAGE = 2,
+    KERNEL = 3,
+    TEE = 4,
+    HYPERVISOR = 5,
+};
+
+type UpdateTargetKind = strict enum : uint8 {
+    APP_PACKAGE = 1,
+    MICROKERNEL = 2,
+    TEE_IMAGE = 3,
+    HYPERVISOR = 4,
+};
+
+struct UpdateSelector {
+    kind UpdateSelectorKind;
+    target string:128;
+};
+
+struct UpdateCandidate {
+    target string:128;
+    path string:256;
+    url string:2048;
+    kind UpdateTargetKind;
+    generation uint64;
+    length uint64;
+};
+
+@discoverable
+protocol UpdateManager {
+    1: BeginUpload(struct {
+        upload_id uint64;
+        manifest_len uint64;
+        artifact_len uint64;
+    }) -> (struct { status UpdateStatus; message string:256; });
+
+    2: WriteChunk(struct {
+        upload_id uint64;
+        stream UpdateStream;
+        offset uint64;
+        bytes vector<uint8>:65536;
+    }) -> (struct { status UpdateStatus; message string:256; });
+
+    3: CommitUpload(struct {
+        upload_id uint64;
+    }) -> (struct { status UpdateStatus; message string:256; });
+
+    4: ApplyApp() -> (struct { status UpdateStatus; message string:256; });
+    5: ApplyService() -> (struct { status UpdateStatus; message string:256; });
+    6: ApplyPlatform() -> (struct { status UpdateStatus; message string:256; });
+
+    7: GetStatus() -> (struct {
+        status UpdateStatus;
+        message string:256;
+        minimum_generation uint64;
+        pending_platform_generation uint64;
+        has_upload bool;
+        has_staged bool;
+    });
+
+    8: CheckForUpdates(struct {
+        selector UpdateSelector;
+        all bool;
+    }) -> (struct {
+        status UpdateStatus;
+        message string:256;
+        candidates vector<UpdateCandidate>:32;
+    });
+
+    9: StageFromFeed(struct {
+        selector UpdateSelector;
+    }) -> (struct { status UpdateStatus; message string:256; });
+
+    10: ApplyFromFeed(struct {
+        selector UpdateSelector;
+    }) -> (struct { status UpdateStatus; message string:256; });
+
+    11: ApplyFirmware(struct {
+        activation FirmwareActivationMode;
+    }) -> (struct { status UpdateStatus; message string:256; });
+
+    12: ApplyFirmwareFromFeed(struct {
+        selector UpdateSelector;
+        activation FirmwareActivationMode;
+    }) -> (struct { status UpdateStatus; message string:256; });
+};

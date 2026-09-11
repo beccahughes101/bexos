@@ -1,0 +1,11 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+package(default_visibility = ["//visibility:public"])
+rust_library(
+    name = "venus_transport",
+    srcs = glob(["src/*.rs"]),
+    crate_name = "bexos_venus_transport",
+    edition = "2024",
+    deps = ["//lib/graphics_runtime", "//lib/userspace", "//lib/virtio_gpu_protocol", "//idl:graphics_fidl_rust", "@graphics_crates//:ash"],
+    link_deps = ["//third_party/mesa:venus"],
+    target_compatible_with = ["//build/platforms/constraints:bexos_userspace_abi"],
+)

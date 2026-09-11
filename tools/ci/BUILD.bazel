@@ -1,0 +1,21 @@
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["repositories.bzl"])
+
+sh_test(
+    name = "workflow_test",
+    size = "small",
+    srcs = ["lint.sh"],
+    args = ["$(location @ci_actionlint//:actionlint)", "$(locations //.github:workflows)", "--scripts"] + [
+        "$(location setup.sh)",
+        "$(location firmware.sh)",
+        "$(location cleanup.sh)",
+    ],
+    data = [
+        "@ci_actionlint//:actionlint",
+        "//.github:workflows",
+        "setup.sh",
+        "firmware.sh",
+        "cleanup.sh",
+    ],
+)

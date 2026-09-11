@@ -1,0 +1,4 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+package(default_visibility=["//visibility:public"])
+rust_library(name="virtio_gpu_protocol", srcs=glob(["src/**/*.rs"]), crate_name="bexos_virtio_gpu_protocol", edition="2024", deps=["//lib/migration"])
+rust_test(name="tests", srcs=["tests/discovery.rs"], edition="2024", deps=[":virtio_gpu_protocol", "//lib/migration"])

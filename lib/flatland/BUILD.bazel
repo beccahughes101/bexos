@@ -1,0 +1,26 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+package(default_visibility = ["//visibility:public"])
+rust_library(
+    name = "flatland",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "bexos_flatland",
+    edition = "2024",
+)
+rust_test(name = "tests", srcs = ["tests/flatland_tests.rs"], edition = "2024", deps = [":flatland"])
+rust_test(name = "cache_allocations", srcs = ["tests/cache_allocations.rs"], edition = "2024", deps = [":flatland"])
+rust_test(name = "accessibility_tests", srcs = ["tests/accessibility.rs"], edition = "2024", deps = [":flatland"])
+rust_test(name = "world_tests", srcs = ["tests/world.rs"], edition = "2024", deps = [":flatland"])
+rust_test(name = "blur_tests", srcs = ["tests/blur.rs"], edition = "2024", deps = [":flatland"])
+rust_binary(name="benchmark",crate_root="bench/compose.rs",srcs=["bench/compose.rs", "bench/allocations.rs", "bench/measurement.rs"],edition="2024",deps=[":flatland"])
+
+rust_binary(name="blur_benchmark",crate_root="bench/blur.rs",srcs=["bench/blur.rs", "bench/allocations.rs", "bench/measurement.rs"],edition="2024",deps=[":flatland"])
+
+rust_library(name="kawase_reference",srcs=["test_support/kawase.rs"],crate_name="bexos_kawase_reference",edition="2024",deps=[":flatland"])
+rust_test(name="kawase_tests",srcs=["tests/kawase.rs"],edition="2024",deps=[":flatland",":kawase_reference"])
+
+rust_test(name="scanout_tests",srcs=["tests/scanout.rs"],edition="2024",deps=[":flatland"])
+
+rust_library(name="reference_scene",srcs=["test_support/reference.rs"],crate_name="bexos_flatland_reference",edition="2024",deps=[":flatland"])
+
+rust_test(name="metrics_tests",srcs=["tests/metrics.rs"],edition="2024",deps=[":flatland"])
+rust_test(name="blend_tests",crate_root="tests/blend.rs",srcs=["tests/blend.rs", "src/blend.rs"],edition="2024")

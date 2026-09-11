@@ -1,0 +1,4 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+package(default_visibility = ["//visibility:public"])
+rust_library(name = "shell_guest", srcs = glob(["src/**/*.rs"]), crate_name = "bexos_shell_guest", edition = "2024", deps = ["//lib/dioxus_guest", "//lib/migration", "//idl:shell_session_fidl_rust", "//idl:app_service_directory_fidl_rust", "//idl:app_opener_fidl_rust"])
+rust_test(name = "tests", crate = ":shell_guest")

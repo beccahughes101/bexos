@@ -1,0 +1,4 @@
+uuid: "2b45584f-5306-4002-8000-000000000006"
+app_name: "bexos_orchestrator"
+min_heap: 16384
+min_stack: 4096

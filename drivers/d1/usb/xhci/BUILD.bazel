@@ -1,0 +1,71 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "xhcid_lib",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_name = "bexos_d1_usb_xhcid",
+    edition = "2024",
+    deps = [
+        "//idl:hardware_manager_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//idl:usb_host_fidl_rust",
+        "//lib/migration",
+        "//lib/usb_host",
+        "//lib/userspace",
+        "//lib/userspace_async",
+        "@crates//:tokio",
+    ],
+)
+
+std_service_binary(
+    name = "xhcid_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_d1_usb_xhcid_elf",
+    deps = [
+        ":xhcid_lib",
+        "@crates//:tokio",
+    ],
+)
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_d1_usb_xhcid_replacement",
+    deps = [
+        ":xhcid_lib",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "xhcid_tests",
+    edition = "2024",
+    deps = [
+        ":xhcid_lib",
+        "//lib/usb_host",
+        "//idl:usb_host_fidl_rust",
+        "//lib/userspace",
+    ],
+)
+
+app_manifest(name = "package_manifest", src = "package/xhcid.prototxt")
+
+app_archive(
+    name = "xhcid",
+    manifest = ":package_manifest",
+    entries = {"bin/xhcid": ":xhcid_elf"},
+    compression = "zstd",
+)
+
+app_archive(
+    name = "replacement_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/xhcid": ":replacement_elf"},
+    compression = "zstd",
+)

@@ -1,0 +1,85 @@
+package_name: "bexos.test.userui"
+name: "BexOS userui"
+package_version { major: 0 minor: 1 patch: 0 }
+library_dependencies {
+  package_name: "com.bexos.lib.dioxus"
+  version_requirement: "0.2"
+  mount_alias: "com.bexos.lib.dioxus"
+  abi_version: 1
+}
+processes {
+  name: "userui"
+  runner: "wasm"
+  shell_role: SHELL_USER
+  service: true
+  lifecycle {
+    update_strategy: HEART_TRANSPLANT
+    migration_timeout_ms: 5000
+    preparation_timeout_ms: 600000
+  }
+  runner_options {
+    [type.googleapis.com/bexos.app.WasmRunnerOptions] {
+      path: "/pkg/bin/userui.wasm"
+      limits {
+        max_module_bytes: 33554432
+        max_memory_pages: 2048
+        max_stack_bytes: 1048576
+        max_handles: 512
+      }
+      component_imports {
+        package_name: "com.bexos.lib.dioxus"
+        export_name: "bexos:wasm/dioxus@1.0.0"
+        abi_version: 1
+        instance_name: "bexos:wasm/dioxus@1.0.0"
+      }
+    }
+  }
+}
+services_consumed {
+  name: "bexos.ui.scened.FlatlandSession"
+  link_type: REQUIRED
+  capabilities {
+    capability: "Public"
+    methods { ordinal: 1 link_type: REQUIRED }
+    methods { ordinal: 2 link_type: REQUIRED }
+    methods { ordinal: 8 link_type: REQUIRED }
+    methods { ordinal: 14 link_type: REQUIRED }
+    methods { ordinal: 15 link_type: REQUIRED }
+    methods { ordinal: 16 link_type: REQUIRED }
+    methods { ordinal: 20 link_type: REQUIRED }
+    methods { ordinal: 24 link_type: REQUIRED }
+    methods { ordinal: 3 link_type: REQUIRED }
+    methods { ordinal: 4 link_type: REQUIRED }
+    methods { ordinal: 5 link_type: REQUIRED }
+    methods { ordinal: 6 link_type: REQUIRED }
+    methods { ordinal: 7 link_type: REQUIRED }
+    methods { ordinal: 10 link_type: REQUIRED }
+    methods { ordinal: 11 link_type: REQUIRED }
+    methods { ordinal: 13 link_type: REQUIRED }
+    methods { ordinal: 17 link_type: REQUIRED }
+    methods { ordinal: 18 link_type: REQUIRED }
+    methods { ordinal: 19 link_type: REQUIRED }
+    methods { ordinal: 25 link_type: REQUIRED }
+    methods { ordinal: 26 link_type: REQUIRED }
+
+  }
+}
+services_consumed {
+  name: "bexos.hardware.display.DisplayCoordinator"
+  link_type: OPTIONAL
+  capabilities {
+    capability: "GpuTransport"
+    methods { ordinal: 7 link_type: OPTIONAL }
+    methods { ordinal: 8 link_type: OPTIONAL }
+    methods { ordinal: 9 link_type: OPTIONAL }
+    methods { ordinal: 10 link_type: OPTIONAL }
+    methods { ordinal: 11 link_type: OPTIONAL }
+    methods { ordinal: 12 link_type: OPTIONAL }
+    methods { ordinal: 13 link_type: OPTIONAL }
+    methods { ordinal: 14 link_type: OPTIONAL }
+    methods { ordinal: 15 link_type: OPTIONAL }
+  }
+}
+
+services_consumed { name: "ServiceDirectory" link_type: REQUIRED capabilities { capability: "Public" methods { ordinal: 3 link_type: REQUIRED } } }
+services_consumed { name: "Opener" link_type: REQUIRED capabilities { capability: "Public" methods { ordinal: 3 link_type: REQUIRED } } }

@@ -1,0 +1,84 @@
+library bexos.hardware.ethernet;
+
+/// Status mirror for the raw Ethernet wire ABI.
+type Status = strict enum : int32 {
+    OK = 0,
+    ERR_INVALID_HANDLE = -1,
+    ERR_ACCESS_DENIED = -2,
+    ERR_NO_MEMORY = -3,
+    ERR_BUFFER_TOO_SMALL = -4,
+    ERR_PEER_CLOSED = -5,
+    ERR_TIMED_OUT = -6,
+    ERR_ALREADY_EXISTS = -7,
+    ERR_INVALID_ARGS = -8,
+    ERR_SHOULD_WAIT = -9,
+};
+
+type DeviceFeatures = strict bits : uint32 {
+    PROMISCUOUS = 0x00000001,
+    CHECKSUM_OFFLOAD = 0x00000002,
+    DMA_64BIT = 0x00000004,
+};
+
+struct MacAddress {
+    octets array<uint8, 6>;
+};
+
+struct EthernetInfo {
+    mac MacAddress;
+    mtu uint32;
+    features DeviceFeatures;
+};
+
+type FrameOpcode = strict enum : uint8 {
+    RX_SUPPLY = 1,
+    RX_COMPLETE = 2,
+    TX_SEND = 3,
+    TX_COMPLETE = 4,
+};
+
+type FrameFlags = strict bits : uint16 {
+    TRUNCATED = 0x0001,
+};
+
+struct FrameEntry {
+    req_id uint64;
+    opcode FrameOpcode;
+    vmo_id uint32;
+    offset uint32;
+    length uint16;
+    flags FrameFlags;
+};
+
+protocol Device {
+    1: GetInfo() -> (struct {
+        info EthernetInfo;
+    });
+
+    2: RegisterBuffer(resource struct {
+        vmo handle:VMO;
+        size_bytes uint32;
+    }) -> (struct {
+        status Status;
+        vmo_id uint32;
+    });
+
+    3: UnregisterBuffer(struct {
+        vmo_id uint32;
+    }) -> (struct {
+        status Status;
+    });
+
+    4: GetFifo() -> (resource struct {
+        status Status;
+        fifo_handle handle:CHANNEL;
+    });
+
+    5: Start() -> (struct {
+        status Status;
+    });
+
+    6: Stop() -> (struct {
+        status Status;
+    });
+};

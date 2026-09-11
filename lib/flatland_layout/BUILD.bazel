@@ -1,0 +1,6 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+package(default_visibility=["//visibility:public"])
+rust_library(name="flatland_layout", srcs=glob(["src/**/*.rs"]), crate_name="bexos_flatland_layout", edition="2024", deps=["@graphics_crates//:taffy", "//lib/flatland"])
+rust_test(name="tests", srcs=["tests/layout.rs"], edition="2024", deps=[":flatland_layout"])
+
+rust_test(name="transaction_tests", srcs=["tests/transactions.rs"], edition="2024", deps=[":flatland_layout", "//lib/flatland"])

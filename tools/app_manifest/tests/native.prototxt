@@ -1,0 +1,9 @@
+package_name: "bexos.test.architecture"
+processes {
+ name: "probe"
+ runner: "elf"
+ runner_options {
+  [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/probe" }
+ }
+}
+commands { command_name: "probe" process_name: "probe" }

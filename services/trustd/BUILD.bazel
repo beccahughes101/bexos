@@ -1,0 +1,79 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "trustd",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_name = "bexos_trustd",
+    edition = "2024",
+    deps = [
+        "//idl:kernel_fidl_rust",
+        "//idl:trust_fidl_rust",
+        "//lib/boot",
+        "//lib/migration",
+        "//lib/redb:redb_bexos_std",
+        "//lib/trust_store:trust_store_bexos_std",
+        "//lib/userspace",
+        "@crates//:blake3",
+        "@crates//:ed25519-dalek",
+        "@crates//:p256",
+        "@crates//:tokio",
+    ],
+)
+
+std_service_binary(
+    name = "trustd_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_trustd_elf",
+    deps = [
+        ":trustd",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "trustd_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "trustd_tests",
+    edition = "2024",
+    deps = [
+        ":trustd",
+        "//idl:trust_fidl_rust",
+        "//lib/redb:redb_host",
+        "//lib/trust_store:trust_store_bexos_std",
+        "@crates//:blake3",
+        "@crates//:ed25519-dalek",
+        "@crates//:p256",
+        "@crates//:redb",
+        "@crates//:tokio",
+    ],
+)
+
+app_manifest(name = "package_manifest", src = "package/trustd.prototxt")
+
+app_archive(
+    name = "trustd_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/trustd": ":trustd_elf"},
+    compression = "none",
+)
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_trustd_replacement_elf",
+    deps = [
+        ":trustd",
+        "@crates//:tokio",
+    ],
+)
+
+app_archive(
+    name = "replacement_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/trustd": ":replacement_elf"},
+    compression = "zstd",
+)

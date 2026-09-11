@@ -1,0 +1,4 @@
+app_name: "authmgr_fe_app"
+uuid: "9b3c1e9e-1808-4b98-8fa9-8592dff3a337"
+min_heap: 65536
+min_stack: 65536

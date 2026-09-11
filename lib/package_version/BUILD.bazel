@@ -1,0 +1,18 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "package_version",
+    srcs = ["src/lib.rs"],
+    crate_name = "bexos_package_version",
+    edition = "2024",
+)
+
+rust_test(
+    name = "package_version_tests",
+    srcs = ["tests/package_version_tests.rs"],
+    crate_name = "package_version_tests",
+    edition = "2024",
+    deps = [":package_version"],
+)

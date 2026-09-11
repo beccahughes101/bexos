@@ -1,0 +1,48 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "userspace_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "rtc",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_name = "bexos_d1_cmos",
+    edition = "2024",
+)
+
+userspace_binary(
+    name = "cmos",
+    srcs = ["src/main.rs"] + glob(["src/guest/**/*.rs"]),
+    crate_name = "bexos_d1_cmos",
+    deps = [
+        ":rtc",
+        "//idl:time_fidl_rust",
+        "//lib/migration",
+    ],
+)
+
+rust_test(
+    name = "cmos_tests",
+    crate = ":rtc",
+)
+
+app_manifest(name = "package_manifest", src = "package/cmos.prototxt")
+
+userspace_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"] + glob(["src/guest/**/*.rs"]),
+    crate_name = "bexos_d1_cmos_replacement",
+    deps = [
+        ":rtc",
+        "//idl:time_fidl_rust",
+        "//lib/migration",
+    ],
+)
+
+app_archive(
+    name = "replacement_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/cmos": ":replacement_elf"},
+    compression = "zstd",
+)

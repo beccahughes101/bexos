@@ -1,0 +1,137 @@
+library bexos.vfs.manager;
+
+protocol VfsManager {
+    50: InitializePackageStore(resource struct {
+        block handle:CHANNEL;
+        bexfs handle:CHANNEL;
+        user_bexfs handle:CHANNEL;
+        diskimage handle:CHANNEL;
+        archivefs handle:CHANNEL;
+        key_vmo handle:VMO;
+        storage_label string:36;
+    }) -> (struct {
+        status int32;
+    });
+
+    51: GetPackageDirectory(struct {
+        package_id string:128;
+    }) -> (resource struct {
+        status int32;
+        dir handle:CHANNEL;
+    });
+
+    52: ReadPackageArchive(struct {
+        package_id string:128;
+    }) -> (resource struct {
+        status int32;
+        archive handle:VMO;
+        archive_len uint64;
+    });
+
+    53: WritePackageArchive(resource struct {
+        package_id string:128;
+        archive handle:VMO;
+        archive_len uint64;
+    }) -> (struct {
+        status int32;
+    });
+
+    54: DeletePackageArchive(struct {
+        package_id string:128;
+    }) -> (struct {
+        status int32;
+    });
+
+    55: ListPackageArchives() -> (struct {
+        status int32;
+        package_ids vector<string:128>:1024;
+    });
+
+    56: GetUserDataDirectory(struct {
+        uid uint64;
+        package_id string:128;
+    }) -> (resource struct {
+        status int32;
+        dir handle:CHANNEL;
+    });
+
+    57: CreateUserFilesystem(struct {
+        uid uint64;
+    }) -> (struct {
+        status int32;
+    });
+
+    58: RemoveUserFilesystem(struct {
+        uid uint64;
+    }) -> (struct {
+        status int32;
+    });
+
+    59: UnlockUserFilesystem(resource struct {
+        uid uint64;
+        ukek_vmo handle:VMO;
+    }) -> (struct {
+        status int32;
+    });
+
+    60: LockUserFilesystem(struct {
+        uid uint64;
+    }) -> (struct {
+        status int32;
+    });
+
+    61: GetSystemDataDirectory(struct {
+        package_id string:128;
+    }) -> (resource struct {
+        status int32;
+        dir handle:CHANNEL;
+    });
+
+    62: GetUserHomeDirectory(struct {
+        uid uint64;
+    }) -> (resource struct {
+        status int32;
+        dir handle:CHANNEL;
+    });
+
+    63: InitializeTmpManager(resource struct {
+        memfs handle:CHANNEL;
+    }) -> (struct {
+        status int32;
+    });
+
+    64: GetTmpDirectory(struct {
+        uid uint64;
+        package_id string:128;
+        process_name string:64;
+    }) -> (resource struct {
+        status int32;
+        dir handle:CHANNEL;
+    });
+
+    65: GetSharedVaultDirectory(struct {
+        uid uint64;
+        domain string:255;
+        vault_name string:64;
+        system bool;
+    }) -> (resource struct {
+        status int32;
+        dir handle:CHANNEL;
+    });
+
+    66: ReadUpdateArchive(struct {
+        archive_id string:128;
+    }) -> (resource struct {
+        status int32;
+        archive handle:VMO;
+        archive_len uint64;
+    });
+
+    67: GetPackageArchiveAttributes(struct {
+        package_id string:128;
+    }) -> (struct {
+        status int32;
+        logical_size_bytes uint64;
+        storage_allocated_bytes uint64;
+    });
+};

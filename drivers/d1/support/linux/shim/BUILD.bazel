@@ -1,0 +1,42 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "linux_shim",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "bexos_d1_linux_shim",
+    edition = "2024",
+)
+
+rust_library(
+    name = "linux_shim_std",
+    srcs = glob(["src/**/*.rs"]),
+    crate_features = ["std"],
+    crate_name = "bexos_d1_linux_shim",
+    edition = "2024",
+    deps = [
+        "//idl:kernel_fidl_rust",
+        "//lib/userspace",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "linux_shim_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "linux_shim_tests",
+    edition = "2024",
+    deps = [":linux_shim"],
+)
+
+rust_test(
+    name = "linux_shim_std_tests",
+    srcs = ["tests/linux_shim_std_tests.rs"],
+    crate_name = "linux_shim_std_tests",
+    edition = "2024",
+    deps = [
+        ":linux_shim_std",
+        "@crates//:tokio",
+    ],
+)

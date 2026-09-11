@@ -1,0 +1,22 @@
+package_name: "bexos.test.wasm.network_granted"
+name: "WASM network_granted fixture"
+processes {
+ name: "network_granted"
+ runner: "wasm"
+ service: false
+ lifecycle { update_strategy: RESTART }
+ runner_options {
+  [type.googleapis.com/bexos.app.WasmRunnerOptions] { path: "/pkg/bin/network_granted.wasm" }
+ }
+}
+
+services_consumed {
+ name: "bexos.net.Netstack"
+ link_type: REQUIRED
+ capabilities { capability: "Public"
+  methods { ordinal: 1 link_type: REQUIRED }
+  methods { ordinal: 2 link_type: REQUIRED }
+  methods { ordinal: 3 link_type: REQUIRED }
+  methods { ordinal: 4 link_type: REQUIRED }
+ }
+}

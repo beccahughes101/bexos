@@ -1,0 +1,444 @@
+syntax = "proto3";
+
+package bexos.debug.v1;
+
+// Core debug service exposed by target debugd.
+//
+// QEMU Socket v1 uses this protobuf contract over the BXD1 framed serial
+// socket transport. Full ConnectRPC over HTTP/2, AF_VSOCK, USB CDC-NCM, TCP,
+// bidirectional streaming, screenshots, input injection, and
+// storage reset are follow-up transport and service milestones.
+service DebugService {
+  rpc ShellOpen(ShellRequest) returns (ShellResponse);
+  rpc ShellExchange(ShellRequest) returns (ShellResponse);
+  rpc ShellResize(ShellRequest) returns (ShellResponse);
+  rpc ShellMode(ShellRequest) returns (ShellResponse);
+  rpc ShellSignal(ShellRequest) returns (ShellResponse);
+  rpc ShellClose(ShellRequest) returns (ShellResponse);
+
+  rpc BeginTestAppUpload(TestAppUploadBeginRequest) returns (DebugStatusResponse);
+  rpc WriteTestAppChunk(TestAppChunkRequest) returns (DebugStatusResponse);
+  rpc CommitTestAppUpload(TestAppUploadCommitRequest) returns (DebugStatusResponse);
+  rpc LaunchTestApp(TestAppLaunchRequest) returns (DebugStatusResponse);
+  rpc ListApps(ListAppsRequest) returns (ListAppsResponse);
+  rpc BeginAppBundleUpload(AppBundleUploadBeginRequest) returns (DebugStatusResponse);
+  rpc WriteAppBundleChunk(AppBundleChunkRequest) returns (DebugStatusResponse);
+  rpc CommitAppBundleUpload(AppBundleUploadCommitRequest) returns (DebugStatusResponse);
+  rpc UninstallApp(AppUninstallRequest) returns (DebugStatusResponse);
+  rpc LaunchApp(AppLaunchRequest) returns (DebugStatusResponse);
+  rpc InstallAppFromUrl(AppInstallFromUrlRequest) returns (DebugStatusResponse);
+  rpc ReloadWellKnown(WellKnownReloadRequest) returns (DebugStatusResponse);
+  rpc GetComponentConfig(ComponentConfigGetRequest) returns (ComponentConfigGetResponse);
+  rpc SetComponentConfig(ComponentConfigSetRequest) returns (ComponentConfigMutationResponse);
+  rpc ResetComponentConfig(ComponentConfigResetRequest) returns (ComponentConfigMutationResponse);
+  rpc BeginUpdateUpload(UpdateUploadBeginRequest) returns (DebugStatusResponse);
+  rpc WriteUpdateChunk(UpdateChunkRequest) returns (DebugStatusResponse);
+  rpc CommitUpdateUpload(UpdateUploadCommitRequest) returns (DebugStatusResponse);
+  rpc CheckUpdates(UpdateCheckRequest) returns (UpdateCheckResponse);
+  rpc StageUpdateFromFeed(UpdateCheckRequest) returns (DebugStatusResponse);
+  rpc ApplyUpdateFromFeed(UpdateCheckRequest) returns (DebugStatusResponse);
+  rpc TeeInfo(HealthCheckRequest) returns (TeeInfoResponse);
+  rpc TeeListApps(HealthCheckRequest) returns (TeeAppListResponse);
+  rpc TeeInstallApp(TeeInstallAppRequest) returns (TeeInstallAppResponse);
+  rpc TeeUninstallApp(TeeUuidRequest) returns (DebugStatusResponse);
+  rpc TeeOpenSession(TeeUuidRequest) returns (TeeOpenSessionResponse);
+  rpc TeeCloseSession(TeeSessionRequest) returns (DebugStatusResponse);
+  rpc TeeInvoke(TeeInvokeRequest) returns (TeeInvokeResponse);
+  rpc TeeUpdateCore(TeeUpdateCoreRequest) returns (TeeUpdateCoreResponse);
+  rpc TeeUpdateStatus(HealthCheckRequest) returns (TeeUpdateStatusResponse);
+
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+  rpc ExecCommand(ExecRequest) returns (ExecResponse);
+  rpc ListProcesses(ListProcessesRequest) returns (ListProcessesResponse);
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+  rpc CreateUser(CreateUserRequest) returns (DebugStatusResponse);
+  rpc UpdateUser(UpdateUserRequest) returns (DebugStatusResponse);
+  rpc DeleteUser(DeleteUserRequest) returns (DebugStatusResponse);
+  rpc UnlockUser(UnlockUserRequest) returns (DebugStatusResponse);
+  rpc LockUser(LockUserRequest) returns (DebugStatusResponse);
+  // Future transport milestone; no BXD1 implementation yet.
+  rpc StreamLogs(LogFilter) returns (stream LogEntry);
+  rpc StartTrace(StartTraceRequest) returns (DebugStatusResponse);
+  rpc GetTraceStatus(TraceStatusRequest) returns (TraceStatusResponse);
+  rpc StopTrace(StopTraceRequest) returns (StopTraceResponse);
+}
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  string service_name = 1;
+  string status = 2;
+  string version = 3;
+}
+
+message ExecRequest {
+  string component_id = 1;
+  repeated string args = 2;
+}
+
+message ExecResponse {
+  int32 exit_code = 1;
+  string stdout = 2;
+  string stderr = 3;
+}
+
+message DebugStatusResponse {
+  int32 status = 1;
+  string message = 2;
+}
+
+message ListProcessesRequest {}
+
+message ListProcessesResponse {
+  repeated ProcessInfo processes = 1;
+}
+
+message ProcessInfo {
+  uint64 pid = 1;
+  string name = 2;
+  string state = 3;
+  string package_id = 4;
+  uint64 main_thread_id = 5;
+  optional uint32 resource_group_id = 6;
+  string resource_group_name = 7;
+  optional uint32 parent_resource_group_id = 8;
+  string parent_resource_group_name = 9;
+}
+
+message UserInfo {
+  uint64 uid = 1;
+  string name = 2;
+  string display_name = 3;
+  bool disabled = 4;
+  string home_path = 5;
+  bool unlocked = 6;
+}
+
+message ListUsersRequest {}
+
+message ListUsersResponse {
+  int32 status = 1;
+  repeated UserInfo users = 2;
+}
+
+message GetUserRequest {
+  uint64 uid = 1;
+}
+
+message GetUserResponse {
+  int32 status = 1;
+  UserInfo user = 2;
+}
+
+message CreateUserRequest {
+  uint64 uid = 1;
+  string name = 2;
+  string display_name = 3;
+  string password = 4;
+}
+
+message UpdateUserRequest {
+  uint64 uid = 1;
+  string name = 2;
+  string display_name = 3;
+  bool disabled = 4;
+  string current_password = 5;
+  string new_password = 6;
+}
+
+message DeleteUserRequest {
+  uint64 uid = 1;
+}
+
+message UnlockUserRequest {
+  uint64 uid = 1;
+  string password = 2;
+}
+
+message LockUserRequest {
+  uint64 uid = 1;
+}
+
+message LogFilter {
+  uint32 min_severity = 1;
+  string process_filter = 2;
+  bool follow = 3;
+}
+
+message LogEntry {
+  uint64 monotonic_timestamp_ns = 1;
+  uint32 pid = 2;
+  string component_name = 3;
+  string message = 4;
+}
+
+message StartTraceRequest {
+  uint32 categories = 1;
+  uint32 buffer_mode = 2;
+  uint32 buffer_size_kb = 3;
+  uint32 output_format = 4;
+}
+
+message TraceStatusRequest {}
+
+message TraceStatusResponse {
+  int32 status = 1;
+  uint32 state = 2;
+  uint32 categories = 3;
+  uint32 buffer_mode = 4;
+  uint32 buffer_size_kb = 5;
+  uint32 output_format = 6;
+  uint32 producer_count = 7;
+  uint64 event_count = 8;
+  uint64 dropped_count = 9;
+}
+
+message StopTraceRequest {
+  uint64 offset = 1;
+  uint32 max_bytes = 2;
+}
+
+message StopTraceResponse {
+  int32 status = 1;
+  uint64 offset = 2;
+  uint64 total_len = 3;
+  bytes bytes = 4;
+  bool complete = 5;
+  uint32 output_format = 6;
+}
+
+
+message TestAppUploadBeginRequest {
+  uint64 upload_id = 1;
+  string package_id = 2;
+  uint64 manifest_len = 3;
+  uint64 elf_len = 4;
+}
+
+message TestAppChunkRequest {
+  uint64 upload_id = 1;
+  uint32 stream = 2;
+  uint64 offset = 3;
+  bytes bytes = 4;
+}
+
+message TestAppUploadCommitRequest {
+  uint64 upload_id = 1;
+}
+
+message TestAppLaunchRequest {
+  string package_id = 1;
+  string process_name = 2;
+  uint64 arg0 = 3;
+}
+
+message AppBundleUploadBeginRequest {
+  uint64 upload_id = 1;
+  uint64 archive_len = 2;
+}
+
+message AppBundleChunkRequest {
+  uint64 upload_id = 1;
+  uint64 offset = 2;
+  bytes bytes = 3;
+}
+
+message AppBundleUploadCommitRequest {
+  uint64 upload_id = 1;
+}
+
+message AppUninstallRequest {
+  string package_id = 1;
+}
+
+message AppLaunchRequest {
+  string package_id = 1;
+  string process_name = 2;
+  uint64 arg0 = 3;
+  uint64 uid = 4;
+}
+
+message AppInstallFromUrlRequest {
+  string url = 1;
+}
+
+message ComponentConfigGetRequest {
+  string package_id = 1;
+}
+
+message ComponentConfigGetResponse {
+  int32 status = 1;
+  uint64 generation = 2;
+  bytes config = 3;
+}
+
+message ComponentConfigSetRequest {
+  string package_id = 1;
+  uint64 expected_generation = 2;
+  bytes config = 3;
+}
+
+message ComponentConfigResetRequest {
+  string package_id = 1;
+  uint64 expected_generation = 2;
+}
+
+message WellKnownReloadRequest {
+  string domain = 1;
+}
+
+message TeeInfoResponse {
+  int32 status = 1;
+  bool present = 2;
+  string kind = 3;
+  uint32 secure_os_version = 4;
+  uint32 anti_rollback_version = 5;
+}
+
+message TeeAppListResponse {
+  int32 status = 1;
+  repeated TeeAppInfo apps = 2;
+}
+
+message TeeInstallAppRequest {
+  bytes payload = 1;
+}
+
+message TeeInstallAppResponse {
+  int32 status = 1;
+  bytes uuid = 2;
+}
+
+message TeeUuidRequest {
+  bytes uuid = 1;
+}
+
+message TeeSessionRequest {
+  uint64 session_id = 1;
+}
+
+message TeeOpenSessionResponse {
+  int32 status = 1;
+  uint64 session_id = 2;
+}
+
+message TeeInvokeRequest {
+  uint64 session_id = 1;
+  uint32 command_id = 2;
+  bytes payload = 3;
+}
+
+message TeeInvokeResponse {
+  int32 status = 1;
+  bytes response = 2;
+}
+
+message TeeUpdateCoreRequest {
+  uint64 generation = 1;
+  string target = 2;
+  bytes artifact_hash = 3;
+  bytes image = 4;
+}
+
+message TeeUpdateCoreResponse {
+  int32 status = 1;
+  uint32 new_version = 2;
+  string message = 3;
+}
+
+message TeeUpdateStatusResponse {
+  int32 status = 1;
+  string update_status = 2;
+  uint64 generation = 3;
+  string message = 4;
+}
+
+message UpdateUploadBeginRequest {
+  uint64 upload_id = 1;
+  uint64 manifest_len = 2;
+  uint64 artifact_len = 3;
+}
+
+message UpdateChunkRequest {
+  uint64 upload_id = 1;
+  uint32 stream = 2;
+  uint64 offset = 3;
+  bytes bytes = 4;
+}
+
+message UpdateUploadCommitRequest {
+  uint64 upload_id = 1;
+}
+
+message UpdateCheckRequest {
+  uint32 selector_kind = 1;
+  string target = 2;
+  bool all = 3;
+  bool stage = 4;
+  bool apply = 5;
+}
+
+message UpdateCheckResponse {
+  int32 status = 1;
+  string message = 2;
+  repeated UpdateCandidateInfo candidates = 3;
+}
+
+message UpdateCandidateInfo {
+  string target = 1;
+  string path = 2;
+  string url = 3;
+  uint32 kind = 4;
+  uint64 generation = 5;
+  uint64 length = 6;
+}
+
+message TeeAppInfo {
+  bytes uuid = 1;
+  uint32 version = 2;
+  uint32 active_sessions = 3;
+  string entry_point_name = 4;
+  uint64 storage_bytes_used = 5;
+  string package_id = 6;
+  bool protected = 7;
+  bool package_managed = 8;
+}
+
+message ListAppsRequest {}
+message ListAppsResponse { repeated AppInfo apps = 1; }
+message AppInfo { string package_id = 1; string name = 2; string state = 3; string source = 4; bool protected = 5; }
+
+
+// All shell methods use bounded request/response polling over BXD1, not raw UART takeover.
+message ShellRequest {
+  bool system = 1;
+  uint64 uid = 2;
+  string user = 3;
+  string password = 4;
+  uint64 session_id = 5;
+  bytes input = 6;
+  bool eof = 7;
+  uint32 rows = 8;
+  uint32 cols = 9;
+  uint32 pixel_width = 10;
+  uint32 pixel_height = 11;
+  uint32 mode = 12;
+  uint32 signal = 13;
+}
+message ShellResponse {
+  int32 status = 1;
+  string message = 2;
+  uint64 session_id = 3;
+  bytes stdout = 4;
+  bytes stderr = 5;
+  uint32 consumed = 6;
+  bool exited = 7;
+  int32 exit_code = 8;
+  uint64 uid = 9;
+  string provider = 10;
+}
+message ComponentConfigMutationResponse { int32 status = 1; uint64 generation = 2; string message = 3; }
+
+message PreferencesRequest { string package_id = 1; uint64 uid = 2; uint32 operation = 3; uint64 expected_generation = 4; bytes config = 5; repeated string names = 6; }
+message PreferencesResponse { int32 status = 1; uint64 generation = 2; bytes config = 3; bytes schema = 4; repeated string locks = 5; string message = 6; }

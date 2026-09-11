@@ -1,0 +1,194 @@
+package bexos:wasm@1.0.0;
+
+/// Resource identifiers are local to an instance; zero denotes absence.
+interface kernel {
+  use wasi:filesystem/types@0.2.12.{descriptor};
+  /// Duplicate a granted directory capability for explicit command CWD delegation.
+  export-directory: func(directory: borrow<descriptor>) -> result<u32>;
+  record message { data: list<u8>, resources: list<u32> }
+  enum stream-error { would-block, closed, failed }
+  channel-pair: func() -> result<tuple<u32, u32>>;
+  resource-clone: func(id: u32) -> result<u32>;
+  socket-pair: func() -> result<tuple<u32, u32>>;
+  socket-read: func(id: u32, max-bytes: u32) -> result<list<u8>, stream-error>;
+  socket-write: func(id: u32, bytes: list<u8>) -> result<u32, stream-error>;
+  socket-ready: func(id: u32, write: bool) -> result<bool>;
+  socket-shutdown: func(id: u32, read: bool, write: bool) -> result;
+  /// Decline the current checkpoint without trapping or mutating live execution.
+  checkpoint-defer: func();
+  enum resource-kind { channel, directory, file, socket, opaque }
+  record resource-info { kind: resource-kind, rights: u32 }
+  /// Inspect local capability metadata without external I/O; valid during restore.
+  inspect-resource: func(id: u32) -> option<resource-info>;
+  resource-find: func(name: string) -> option<u32>;
+  resource-close: func(id: u32) -> result;
+  channel-write: func(id: u32, message: message) -> result;
+  channel-read: func(id: u32, max-bytes: u32, max-resources: u32) -> result<message>;
+  channel-read-checked: func(id: u32, max-bytes: u32, max-resources: u32) -> result<message, stream-error>;
+  monotonic-ns: func() -> u64;
+}
+
+interface sandbox {
+  enum state { running, paused, terminated }
+  /// Options encode bexos.app.WasmRunnerOptions. A nonempty signature must
+  /// validate over these exact payload bytes; it never falls back to unsigned.
+  spawn: func(payload: list<u8>, options: list<u8>, signature: list<u8>, grants: list<u32>) -> result<u32>;
+  invoke: func(child: u32, export-name: string, input: s32) -> result<s32>;
+  status: func(child: u32) -> result<state>;
+  pause: func(child: u32) -> result;
+  resume: func(child: u32) -> result;
+  terminate: func(child: u32) -> result;
+  parent-send: func(message: list<u8>) -> result;
+  receive: func(child: u32) -> result<option<list<u8>>>;
+}
+
+interface ui {
+  record input-event {
+    kind: u32,
+    device: u64,
+    id: u32,
+    phase: u32,
+    x: f64,
+    y: f64,
+    buttons: u32,
+    scroll-x: f32,
+    scroll-y: f32,
+    code: u32,
+    key-state: u32,
+    modifiers: u32,
+    unicode: u32,
+  }
+  record presentation-status {
+    accepted-sequence: u64,
+    pending-count: u32,
+    latched-time-ticks: u64,
+    scene-generation: u64,
+  }
+  record backend-status {
+    backend: string,
+    failure: option<string>,
+  }
+  create-view: func(flatland-resource: u32, display-resource: u32, width: u32, height: u32) -> result<u32, string>;
+  configure-view: func(view: u32, width: u32, height: u32, scale: f32) -> result<_, string>;
+  register-asset: func(view: u32, asset: u32, kind: u32, bytes: list<u8>) -> result<_, string>;
+  release-asset: func(view: u32, asset: u32) -> result<_, string>;
+  submit-scene: func(view: u32, batch: list<u8>) -> result<_, string>;
+  set-node-scene: func(view: u32, node: u64, batch: list<u8>) -> result<_, string>;
+  poll-input: func(view: u32) -> result<list<input-event>, string>;
+  get-presentation-status: func(view: u32) -> result<presentation-status, string>;
+  get-active-backend: func(view: u32) -> result<backend-status, string>;
+  close-view: func(view: u32) -> result<_, string>;
+}
+
+interface dioxus {
+  record input-event {
+    kind: u32,
+    device: u64,
+    id: u32,
+    phase: u32,
+    x: f64,
+    y: f64,
+    buttons: u32,
+    scroll-x: f32,
+    scroll-y: f32,
+    code: u32,
+    key-state: u32,
+    modifiers: u32,
+    unicode: u32,
+  }
+  record presentation-status {
+    accepted-sequence: u64,
+    pending-count: u32,
+    latched-time-ticks: u64,
+    scene-generation: u64,
+  }
+  record backend-status {
+    backend: string,
+    failure: option<string>,
+  }
+  create-view: func(flatland-resource: u32, display-resource: u32, width: u32, height: u32) -> result<u32, string>;
+  configure-view: func(view: u32, width: u32, height: u32, scale: f32) -> result<_, string>;
+  register-asset: func(view: u32, asset: u32, kind: u32, bytes: list<u8>) -> result<_, string>;
+  release-asset: func(view: u32, asset: u32) -> result<_, string>;
+  submit-scene: func(view: u32, batch: list<u8>) -> result<_, string>;
+  /// Submit an encoded BexOS Dioxus document tree. The shared UI component
+  /// resolves selectors, layout, and text before emitting a validated scene.
+  submit-document: func(view: u32, document: list<u8>) -> result<_, string>;
+  set-node-scene: func(view: u32, node: u64, batch: list<u8>) -> result<_, string>;
+  poll-input: func(view: u32) -> result<list<input-event>, string>;
+  get-presentation-status: func(view: u32) -> result<presentation-status, string>;
+  get-active-backend: func(view: u32) -> result<backend-status, string>;
+  close-view: func(view: u32) -> result<_, string>;
+}
+
+interface lifecycle {
+  /// Dispatch resource 0 for a scheduler tick; other IDs identify new clients.
+  dispatch: func(resource-id: u32);
+  checkpoint: func() -> list<u8>;
+  restore: func(checkpoint: list<u8>) -> result;
+  activate: func();
+  abort: func();
+}
+
+world service {
+  import wasi:filesystem/preopens@0.2.12;
+  import kernel;
+  import sandbox;
+  import ui;
+  import checkpoint-resources;
+  export lifecycle;
+}
+
+world dioxus-library {
+  import ui;
+  export dioxus;
+}
+
+world dioxus-app {
+  import wasi:filesystem/preopens@0.2.12;
+  import kernel;
+  import sandbox;
+  import dioxus;
+  import checkpoint-resources;
+  export lifecycle;
+}
+
+/// Stable, typed checkpoint tokens; adoption is permitted only during restore.
+interface checkpoint-resources {
+  use wasi:filesystem/types@0.2.12.{descriptor};
+  use wasi:filesystem/types@0.2.12.{directory-entry-stream};
+  use wasi:io/streams@0.2.12.{input-stream};
+  use wasi:io/streams@0.2.12.{output-stream};
+  use wasi:io/poll@0.2.12.{pollable};
+  use wasi:io/error@0.2.12.{error};
+  use wasi:sockets/network@0.2.12.{network};
+  use wasi:sockets/tcp@0.2.12.{tcp-socket};
+  use wasi:sockets/udp@0.2.12.{udp-socket};
+  use wasi:sockets/udp@0.2.12.{incoming-datagram-stream};
+  use wasi:sockets/udp@0.2.12.{outgoing-datagram-stream};
+  use wasi:sockets/ip-name-lookup@0.2.12.{resolve-address-stream};
+  identify-descriptor: func(value: borrow<descriptor>) -> u32;
+  adopt-descriptor: func(token: u32) -> result<descriptor>;
+  identify-directory-stream: func(value: borrow<directory-entry-stream>) -> u32;
+  adopt-directory-stream: func(token: u32) -> result<directory-entry-stream>;
+  identify-input: func(value: borrow<input-stream>) -> u32;
+  adopt-input: func(token: u32) -> result<input-stream>;
+  identify-output: func(value: borrow<output-stream>) -> u32;
+  adopt-output: func(token: u32) -> result<output-stream>;
+  identify-pollable: func(value: borrow<pollable>) -> u32;
+  adopt-pollable: func(token: u32) -> result<pollable>;
+  identify-error: func(value: borrow<error>) -> u32;
+  adopt-error: func(token: u32) -> result<error>;
+  identify-network: func(value: borrow<network>) -> u32;
+  adopt-network: func(token: u32) -> result<network>;
+  identify-tcp: func(value: borrow<tcp-socket>) -> u32;
+  adopt-tcp: func(token: u32) -> result<tcp-socket>;
+  identify-udp: func(value: borrow<udp-socket>) -> u32;
+  adopt-udp: func(token: u32) -> result<udp-socket>;
+  identify-incoming: func(value: borrow<incoming-datagram-stream>) -> u32;
+  adopt-incoming: func(token: u32) -> result<incoming-datagram-stream>;
+  identify-outgoing: func(value: borrow<outgoing-datagram-stream>) -> u32;
+  adopt-outgoing: func(token: u32) -> result<outgoing-datagram-stream>;
+  identify-addresses: func(value: borrow<resolve-address-stream>) -> u32;
+  adopt-addresses: func(token: u32) -> result<resolve-address-stream>;
+}

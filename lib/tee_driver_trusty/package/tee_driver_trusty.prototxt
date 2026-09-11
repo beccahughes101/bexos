@@ -1,0 +1,10 @@
+package_name: "bexos.lib.tee_driver.trusty"
+name: "tee-driver-trusty"
+package_kind: LIBRARY
+library_exports {
+ name: "tee_driver"
+ path: "/pkg/lib/libbexos_tee_driver.so"
+ symbol_prefix: "bexos_tee_driver_"
+ abi_version: 1
+ soname: "libbexos_tee_driver.so"
+}

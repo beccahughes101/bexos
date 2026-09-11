@@ -1,0 +1,14 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "crypto_client",
+    srcs = ["src/lib.rs"],
+    crate_name = "bexos_crypto",
+    edition = "2024",
+    deps = [
+        "//lib/boot",
+        "//lib/userspace",
+    ],
+)

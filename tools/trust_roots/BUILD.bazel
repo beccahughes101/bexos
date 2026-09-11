@@ -1,0 +1,25 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_binary(
+    name = "trust_roots",
+    srcs = [
+        "src/main.rs",
+        "src/tool.rs",
+    ],
+    crate_name = "trust_roots",
+    edition = "2024",
+    deps = ["//lib/trust_store:trust_store_host"],
+)
+
+rust_test(
+    name = "trust_roots_tests",
+    srcs = [
+        "src/tool.rs",
+        "tests/trust_roots_tests.rs",
+    ],
+    crate_name = "trust_roots_tests",
+    edition = "2024",
+    deps = ["//lib/trust_store:trust_store_host"],
+)

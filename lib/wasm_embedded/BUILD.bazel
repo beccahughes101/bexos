@@ -1,0 +1,55 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load(":precompiled.bzl", "dioxus_precompiled")
+
+dioxus_precompiled("sysui", "//apps/sysui:wasm")
+dioxus_precompiled("userui", "//apps/userui:wasm")
+dioxus_precompiled("dioxus_demo", "//apps/dioxus_demo:wasm")
+
+rust_library(
+    name = "wasm_embedded",
+    srcs = ["lib.rs", "packed.rs"],
+    crate_name = "bexos_wasm_embedded",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    compile_data = [
+        ":brush_code",
+        ":brush_digest",
+        ":dioxus_demo_code",
+        ":dioxus_demo_composed",
+        ":dioxus_demo_digest",
+        ":sysui_code",
+        ":sysui_composed",
+        ":sysui_digest",
+        ":userui_code",
+        ":userui_composed",
+        ":userui_digest",
+        "//apps/brush_shell:wasm",
+    ],
+    rustc_env = {
+        "BRUSH_PULLEY_CODE": "$(execpath :brush_code)",
+        "BRUSH_PULLEY_DIGEST": "$(execpath :brush_digest)",
+        "BRUSH_RAW_WASM": "$(execpath //apps/brush_shell:wasm)",
+        "DIOXUS_DEMO_COMPOSED": "$(execpath :dioxus_demo_composed)",
+        "DIOXUS_DEMO_PULLEY_CODE": "$(execpath :dioxus_demo_code)",
+        "DIOXUS_DEMO_PULLEY_DIGEST": "$(execpath :dioxus_demo_digest)",
+        "SYSUI_COMPOSED": "$(execpath :sysui_composed)",
+        "SYSUI_PULLEY_CODE": "$(execpath :sysui_code)",
+        "SYSUI_PULLEY_DIGEST": "$(execpath :sysui_digest)",
+        "USERUI_COMPOSED": "$(execpath :userui_composed)",
+        "USERUI_PULLEY_CODE": "$(execpath :userui_code)",
+        "USERUI_PULLEY_DIGEST": "$(execpath :userui_digest)",
+    },
+    deps = ["@crates//:wasmtime", "@crates//:sha2", "@crates//:ruzstd"],
+)
+
+genrule(
+    name = "brush_precompiled",
+    srcs = ["//apps/brush_shell:wasm"],
+    outs = ["brush.cwasm.packed", "brush.sha256"],
+    tools = ["//tools/wasm:precompile"],
+    cmd = "$(execpath //tools/wasm:precompile) $(location //apps/brush_shell:wasm) $(location brush.cwasm.packed) $(location brush.sha256)",
+)
+filegroup(name = "brush_code", srcs = ["brush.cwasm.packed"])
+filegroup(name = "brush_digest", srcs = ["brush.sha256"])
+
+rust_test(name = "tests", crate = ":wasm_embedded", deps = ["//lib/wasm_engine", "//lib/wasm_abi"])

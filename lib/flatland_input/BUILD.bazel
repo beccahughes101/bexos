@@ -1,0 +1,5 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+package(default_visibility=["//visibility:public"])
+rust_library(name="flatland_input", srcs=glob(["src/**/*.rs"]), crate_name="bexos_flatland_input", edition="2024", deps=["//lib/flatland", "//lib/migration"])
+rust_test(name="tests", srcs=["tests/input.rs"], edition="2024", deps=[":flatland_input", "//lib/flatland", "//lib/migration"])
+rust_test(name="gestures_tests", srcs=["tests/gestures.rs"], edition="2024", deps=[":flatland_input", "//lib/migration"])

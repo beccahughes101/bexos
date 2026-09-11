@@ -1,0 +1,27 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "userspace_async",
+    srcs = ["src/lib.rs"],
+    crate_name = "bexos_userspace_async",
+    edition = "2024",
+    deps = [
+        "//idl:kernel_fidl_rust",
+        "//lib/userspace",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "userspace_async_tests",
+    srcs = ["tests/userspace_async_tests.rs"],
+    crate_name = "userspace_async_tests",
+    edition = "2024",
+    deps = [
+        ":userspace_async",
+        "//lib/userspace",
+        "@crates//:tokio",
+    ],
+)

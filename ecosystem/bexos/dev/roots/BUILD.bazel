@@ -1,0 +1,17 @@
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "pki_roots_redb",
+    srcs = ["//ecosystem/bexos/dev/roots/pki:roots"],
+    outs = ["tls_roots.redb"],
+    cmd = "tmp=$$(mktemp -d); cp $(locations //ecosystem/bexos/dev/roots/pki:roots) $$tmp/; $(location //tools/trust_roots:trust_roots) --kind tls --input-dir $$tmp --out $@",
+    tools = ["//tools/trust_roots:trust_roots"],
+)
+
+genrule(
+    name = "app_signing_roots_redb",
+    srcs = ["//ecosystem/bexos/dev/roots/apps:roots"],
+    outs = ["app_signing_roots.redb"],
+    cmd = "tmp=$$(mktemp -d); cp $(locations //ecosystem/bexos/dev/roots/apps:roots) $$tmp/; $(location //tools/trust_roots:trust_roots) --kind app --input-dir $$tmp --out $@",
+    tools = ["//tools/trust_roots:trust_roots"],
+)

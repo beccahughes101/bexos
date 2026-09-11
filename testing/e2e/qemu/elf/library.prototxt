@@ -1,0 +1,10 @@
+package_name: "bexos.lib.elf_fixture"
+name: "ELF validation library"
+package_kind: LIBRARY
+library_exports {
+ name: "elf_fixture"
+ path: "/pkg/lib/libbexos_elf_fixture.so"
+ symbol_prefix: "bexos_fixture_"
+ abi_version: 1
+ soname: "libbexos_elf_fixture.so"
+}

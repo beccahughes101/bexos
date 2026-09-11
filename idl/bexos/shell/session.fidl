@@ -1,0 +1,26 @@
+library bexos.shell.session;
+
+type Status = strict enum : int32 { OK = 0; NOT_FOUND = -1; ACCESS_DENIED = -2; BUSY = -5; INVALID_ARGS = -8; FAILED = -14; };
+type SessionState = strict enum : uint8 { LOGIN = 0; ACTIVE_FOCUSED = 1; LOCKED = 2; };
+struct User { uid uint64; name string:128; };
+struct App { package_id string:128; name string:128; };
+
+// Appd binds the caller identity and restricts login to the selected SysUI.
+// No credential is retained in session state or migration records.
+protocol SessionManager {
+    1: GetState() -> (struct { status Status; state SessionState; uid uint64; diagnostic string:256; users vector<User>:64; apps vector<App>:128; });
+    2: Login(struct { uid uint64; password string:256; }) -> (struct { status Status; });
+    3: LockCurrentSession() -> (struct { status Status; });
+    4: ShowLoginScreen() -> (struct { status Status; });
+    5: Logout() -> (struct { status Status; });
+    6: CloseApp(struct { package_id string:128; }) -> (struct { status Status; });
+    // Only the selected UserUI may register its callback endpoint.
+    7: RegisterUserShell(resource struct { endpoint handle:CHANNEL; }) -> (struct { status Status; });
+    // Only SysUI may transfer the attached desktop reference. Display 1 is the primary display.
+    8: AttachUserDisplay(resource struct { display_id uint64; view_token handle:CHANNEL; }) -> (struct { status Status; });
+};
+
+protocol UserShell {
+    1: AttachDisplayView(resource struct { display_id uint64; view_token handle:CHANNEL; }) -> (struct { status Status; });
+    2: SetSessionState(struct { state SessionState; });
+};

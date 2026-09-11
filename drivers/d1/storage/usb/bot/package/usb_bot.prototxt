@@ -1,0 +1,28 @@
+package_name: "bexos.driver.storage.usb_bot"
+name: "usb_bot"
+library_dependencies { package_name: "bexos.lib.crypto" mount_alias: "bexos.lib.crypto" abi_version: 1 }
+library_dependencies { package_name: "bexos.lib.net" mount_alias: "bexos.lib.net" abi_version: 1 }
+driver_info { name: "usb_scsi_bot_d1_driver" package_id: "bexos.driver.storage.usb_bot" version: "1.0.0" }
+bind_rules { priority: 30 condition { bus: BUS_USB property { key: "usb.class" value: 0x08 } property { key: "usb.subclass" value: 0x06 } property { key: "usb.protocol" value: 0x50 } } }
+processes {
+ name: "usb_bot"
+ runner: "elf"
+ lifecycle { update_strategy: HEART_TRANSPLANT preparation_timeout_ms: 30000 }
+ service: true
+ wave: 3
+ runner_options { [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/usb_bot" } }
+}
+services_exposed {
+ name: "bexos.storage.block.BlockDevice"
+ protocol: "BlockDevice"
+ lifecycle: MULTIPLE_INSTANCE
+ visibility: PUBLIC
+ capabilities {
+  capability: "Public"
+  method_ordinals: 1
+  method_ordinals: 2
+  method_ordinals: 3
+  method_ordinals: 4
+  method_ordinals: 5
+ }
+}

@@ -1,0 +1,32 @@
+--- a/src/text.rs
++++ b/src/text.rs
+@@ -67,7 +67,10 @@
+     ) -> Self {
+         Self {
+             glyph_atlas: GlyphAtlas::with_config(eviction_config),
+-            image_cache: ImageCache::new_with_config(AtlasConfig::default()),
++            image_cache: ImageCache::new_with_config(AtlasConfig {
++                atlas_size: (u32::from(page_width), u32::from(page_height)),
++                ..AtlasConfig::default()
++            }),
+             glyph_renderer: Box::new(RenderContext::new_with(
+                 page_width,
+                 page_height,
+@@ -100,6 +103,17 @@
+ }
+ 
+ impl Resources {
++    /// Create resources with bounded glyph atlas pages. Page dimensions and
++    /// packing coordinates must agree. The default remains unchanged.
++    pub fn with_glyph_atlas_size(width: u16, height: u16, level: Level) -> Self {
++        assert!(width > 0 && height > 0 && width <= 4096 && height <= 4096);
++        let mut resources = Self::new();
++        resources.glyph_resources = Some(GlyphAtlasResources::with_config(
++            width, height, level, GlyphCacheConfig::default(),
++        ));
++        resources
++    }
++
+     pub(crate) fn prepare_glyph_cache(&mut self, render_mode: RenderMode) {
+         if self.glyph_resources.is_some() {
+             self.sync_glyph_cache(render_mode);

@@ -1,0 +1,167 @@
+library bexos.app.lifecycle;
+
+type AppLifecycleStatus = strict enum : int32 {
+    OK = 0,
+    NOT_FOUND = -1,
+    INVALID_ARGS = -8,
+    ACCESS_DENIED = -10,
+    STORAGE = -20,
+    VERIFY_FAILED = -21,
+    LAUNCH_FAILED = -22,
+};
+
+type AppInstallSource = strict enum : uint8 {
+    BOOTFS = 1,
+    SYSTEM_IMAGE = 2,
+    DEBUGD = 3,
+};
+
+type AppLifecycleState = strict enum : uint8 {
+    INSTALLED = 1,
+    LAUNCHING = 2,
+    RUNNING = 3,
+    STOPPED = 4,
+    UNAVAILABLE = 5,
+};
+
+type PermissionState = strict enum : uint8 {
+    GRANTED = 1,
+    DENIED = 2,
+    RESTRICTED = 3,
+};
+
+type ComponentConfigStatus = strict enum : int32 {
+    OK = 0,
+    NOT_FOUND = -1,
+    INVALID_ARGS = -8,
+    CONFLICT = -9,
+    BUSY = -11,
+    REJECTED = -12,
+    TIMEOUT = -13,
+    STORAGE = -20,
+};
+
+struct AppInfo {
+    package_id string:128;
+    name string:128;
+    state AppLifecycleState;
+    source AppInstallSource;
+    protected bool;
+};
+
+protocol AppLifecycleControl {
+    // Debugd only: terminate the currently selected shell to exercise secure recovery.
+    17: TerminateSelectedShellForDebug(struct {
+        package_id string:128;
+        uid uint64;
+    }) -> (struct { status AppLifecycleStatus; });
+    // Debugd only: typed operator management and explicit-UID preference access.
+    16: Preferences(struct { request vector<uint8>:65536; }) -> (struct { response vector<uint8>:65536; });
+    // Only accepted on debugd's privileged lifecycle channel, never updated's.
+    15: BindDebugOpener(resource struct { uid uint64; opener handle:CHANNEL; }) -> (struct { status AppLifecycleStatus; });
+    7: GetProcessProgress(struct { package_id string:128; }) -> (struct { status AppLifecycleStatus; completed uint64; errors uint64; });
+    5: BeginMigration(resource struct {
+        archive handle:VMO;
+        archive_len uint64;
+        generation uint64;
+        target string:128;
+    }) -> (struct { status AppLifecycleStatus; message string:256; });
+    6: GetMigrationStatus(struct { target string:128; }) -> (struct {
+        status AppLifecycleStatus;
+        generation uint64;
+        pending bool;
+        message string:256;
+    });
+    1: ListApps() -> (struct {
+        status AppLifecycleStatus;
+        apps vector<AppInfo>:1024;
+    });
+
+    2: InstallBundle(resource struct {
+        archive handle:VMO;
+        archive_len uint64;
+    }) -> (struct {
+        status AppLifecycleStatus;
+        package_id string:128;
+    });
+
+    3: Uninstall(struct {
+        package_id string:128;
+    }) -> (struct {
+        status AppLifecycleStatus;
+    });
+
+    4: Launch(struct {
+        package_id string:128;
+        process_name string:64;
+        arg0 uint64;
+        uid uint64;
+    }) -> (struct {
+        status AppLifecycleStatus;
+    });
+
+    8: RequestPermission(struct {
+        package_id string:128;
+        process_name string:64;
+        uid uint64;
+        permission_name string:128;
+        service_name string:128;
+        capability string:128;
+        requested_values vector<string:128>:16;
+    }) -> (resource struct {
+        status AppLifecycleStatus;
+        state PermissionState;
+        granted_values vector<string:128>:16;
+        granted_handle handle:OPTIONAL;
+    });
+
+    9: BeginMigrationFromStoredArchive(struct {
+        archive_id string:128;
+        generation uint64;
+        target string:128;
+    }) -> (struct { status AppLifecycleStatus; message string:256; });
+
+    10: GetComponentConfig(struct {
+        package_id string:128;
+    }) -> (resource struct {
+        status ComponentConfigStatus;
+        generation uint64;
+        config handle:VMO;
+        config_len uint64;
+    });
+
+    11: SetComponentConfig(resource struct {
+        package_id string:128;
+        expected_generation uint64;
+        config handle:VMO;
+        config_len uint64;
+    }) -> (struct {
+        status ComponentConfigStatus;
+        generation uint64;
+        message string:256;
+    });
+
+    12: ResetComponentConfig(struct {
+        package_id string:128;
+        expected_generation uint64;
+    }) -> (struct {
+        status ComponentConfigStatus;
+        generation uint64;
+        message string:256;
+    });
+
+    13: GetGenerationFloor(struct {
+        target string:32;
+    }) -> (struct {
+        status AppLifecycleStatus;
+        generation uint64;
+    });
+
+    14: CommitGenerationFloor(struct {
+        target string:32;
+        generation uint64;
+    }) -> (struct {
+        status AppLifecycleStatus;
+        generation uint64;
+    });
+};

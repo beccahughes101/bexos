@@ -1,0 +1,24 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "tee_driver_client",
+    srcs = ["src/lib.rs"],
+    crate_name = "bexos_tee_driver_client",
+    edition = "2024",
+    deps = [
+        "//lib/userspace",
+    ],
+)
+
+rust_test(
+    name = "tee_driver_client_tests",
+    srcs = ["tests/tee_driver_client_tests.rs"],
+    crate_name = "tee_driver_client_tests",
+    edition = "2024",
+    deps = [
+        ":tee_driver_client",
+        "//lib/userspace",
+    ],
+)

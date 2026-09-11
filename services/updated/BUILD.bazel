@@ -1,0 +1,67 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "updated",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_name = "bexos_updated",
+    edition = "2024",
+    deps = [
+        "//idl:app_lifecycle_fidl_rust",
+        "//idl:app_manager_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//idl:tee_manager_fidl_rust",
+        "//idl:update_manager_fidl_rust",
+        "//lib/debug_wire",
+        "//lib/migration",
+        "//lib/tuf",
+        "//lib/update:update",
+        "//lib/userspace",
+        "@crates//:blake3",
+        "@crates//:tokio",
+    ],
+)
+
+std_service_binary(
+    name = "updated_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_updated_elf",
+    deps = [
+        ":updated",
+        "@crates//:tokio",
+    ],
+)
+
+app_manifest(
+    name = "package_manifest",
+    src = "package/updated.prototxt",
+)
+
+rust_test(
+    name = "updated_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "updated_tests",
+    edition = "2024",
+    deps = [
+        ":updated",
+        "//idl:update_manager_fidl_rust",
+        "//lib/debug_wire",
+        "//lib/tuf",
+        "//lib/update:update_host",
+        "@crates//:tokio",
+    ],
+)
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_updated_elf_replacement",
+    deps = [
+        ":updated",
+        "@crates//:tokio",
+    ],
+)
+app_archive(name = "replacement_archive", manifest = ":package_manifest", entries = {"bin/updated": ":replacement_elf"}, compression = "zstd")

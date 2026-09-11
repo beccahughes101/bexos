@@ -1,0 +1,9 @@
+load("//build/rules:assembly.bzl", "assembly_input_bundle")
+load("//tools/qemu:config.bzl", "qemu_launch_config")
+
+package(default_visibility = ["//visibility:public"])
+
+assembly_input_bundle(name = "qemu_graphics_aib", src = "qemu_graphics.aib.prototxt")
+alias(name = "qemu_graphics", actual = ":qemu_graphics_aib_bin")
+
+qemu_launch_config(name = "launch_config", src = "launch.prototxt")

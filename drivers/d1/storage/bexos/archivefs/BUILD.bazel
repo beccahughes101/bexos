@@ -1,0 +1,90 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "archivefs",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = [
+            "src/main.rs",
+            "src/guest.rs",
+            "src/guest/**/*.rs",
+        ],
+    ),
+    crate_name = "bexos_archivefs",
+    edition = "2024",
+    deps = [
+        "//lib/app_archive",
+        "//lib/migration",
+        "@crates//:ruzstd",
+    ],
+)
+
+rust_library(
+    name = "archivefs_std",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_features = [
+        "guest",
+        "std",
+    ],
+    crate_name = "bexos_archivefs",
+    edition = "2024",
+    deps = [
+        "//idl:archive_fidl_rust",
+        "//idl:fs_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//lib/app_archive:app_archive_host",
+        "//lib/boot",
+        "//lib/migration",
+        "//lib/userspace",
+        "@crates//:ruzstd",
+        "@crates//:tokio",
+    ],
+)
+
+std_service_binary(
+    name = "archivefs_driver",
+    srcs = ["src/main.rs"],
+    crate_name = "archivefs_driver",
+    deps = [
+        ":archivefs_std",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "archivefs_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "archivefs_tests",
+    edition = "2024",
+    deps = [
+        "//lib/migration",
+        ":archivefs",
+        "//lib/app_archive:app_archive_host",
+        "//idl:fs_fidl_rust",
+    ],
+)
+
+rust_test(
+    name = "archivefs_async_tests",
+    srcs = ["tests/archivefs_async_tests.rs"],
+    crate_name = "archivefs_async_tests",
+    edition = "2024",
+    deps = [":archivefs_std"],
+)
+
+app_manifest(name = "package_manifest", src = "package/archivefs_driver.prototxt")
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "replacement_elf_replacement",
+    deps = [
+        ":archivefs_std",
+        "@crates//:tokio",
+    ],
+)
+app_archive(name = "replacement_archive", manifest = ":package_manifest", entries = {"bin/archivefs_driver": ":replacement_elf"}, compression = "zstd")

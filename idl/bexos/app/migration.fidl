@@ -1,0 +1,62 @@
+library bexos.app.migration;
+
+type MigrationPhase = strict enum : uint32 {
+    STAGED = 1,
+    BULK = 2,
+    CATCH_UP = 3,
+    QUIESCED = 4,
+    READY = 5,
+    COMMITTED = 6,
+    RECLAIMED = 7,
+    ABORTED = 8,
+};
+
+/// Dedicated control channel, never multiplexed onto a production endpoint.
+/// All state bytes use the versioned migration record codec. Resources stay
+/// with their old owner until the kernel handover transaction commits.
+protocol Migratable {
+    1: Prepare(resource struct {
+        candidate handle:CHANNEL;
+        generation uint64;
+        version uint64;
+        preparation_timeout_ms uint32;
+        cutover_timeout_ms uint32;
+    }) -> (struct { status int32; base_sequence uint64; });
+
+    2: NextBulk() -> (struct {
+        status int32;
+        done bool;
+        record vector<uint8>:32768;
+    });
+
+    3: NextDelta() -> (struct {
+        status int32;
+        caught_up bool;
+        sequence uint64;
+        record vector<uint8>:32768;
+    });
+
+    4: Quiesce() -> (struct { status int32; final_sequence uint64; });
+    5: CommitAndExit() -> (struct { status int32; });
+    6: Abort() -> (struct { status int32; });
+    7: GetStatus() -> (struct {
+        status int32;
+        phase MigrationPhase;
+        generation uint64;
+        sequence uint64;
+    });
+};
+
+protocol StateReceiver {
+    1: Initialize(struct {
+        generation uint64;
+        version uint64;
+        base_sequence uint64;
+    }) -> (struct { status int32; });
+    2: AdoptBulk(struct { record vector<uint8>:32768; }) -> (struct { status int32; });
+    3: CompleteBulk() -> (struct { status int32; });
+    4: AdoptDelta(struct { record vector<uint8>:32768; }) -> (struct { status int32; });
+    5: Validate(struct { final_sequence uint64; }) -> (struct { status int32; });
+    6: Activate() -> (struct { status int32; marker0 uint64; marker1 uint64; marker2 uint64; });
+    7: Abort() -> (struct { status int32; });
+};

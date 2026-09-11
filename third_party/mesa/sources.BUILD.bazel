@@ -1,0 +1,66 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+package(default_visibility = ["//visibility:public"])
+filegroup(name = "root", srcs = ["meson.build"])
+filegroup(name = "sources", srcs = ["VERSION"] + glob(["src/virtio/**", "src/vulkan/**", "src/util/**", "src/compiler/**", "src/c11/**", "include/**"]))
+filegroup(name = "licenses", srcs = ["docs/license.rst"] + glob(["licenses/**"]))
+cc_library(
+    name = "headers",
+    hdrs = glob(["include/**/*.h", "src/util/**/*.h", "src/c11/**/*.h", "src/compiler/**/*.h", "src/vulkan/**/*.h", "src/virtio/**/*.h"]),
+    includes = ["include", "src", "src/util", "src/util/format", "src/virtio", "src/virtio/vulkan", "src/vulkan/runtime", "src/vulkan/util", "src/vulkan/wsi"],
+    copts = ["-std=c11", "-ffunction-sections", "-fdata-sections", "-fvisibility=hidden"],
+    defines = ["BEXOS_VENUS", "BEXOS_GNU_HEADERS", "_GNU_SOURCE", "HAVE_PTHREAD", "HAVE_SYSCONF", "HAVE_SECURE_GETENV", "HAVE_ENDIAN_H", "HAVE_STRUCT_TIMESPEC", "HAVE_TIMESPEC_GET", "HAVE_FUNC_ATTRIBUTE_PACKED", "HAVE_FUNC_ATTRIBUTE_PURE", "HAVE_FUNC_ATTRIBUTE_CONST", "HAVE_FUNC_ATTRIBUTE_MALLOC", "HAVE_FUNC_ATTRIBUTE_WARN_UNUSED_RESULT", "HAVE_FUNC_ATTRIBUTE_FORMAT", "HAVE_FUNC_ATTRIBUTE_UNUSED", "HAVE_FUNC_ATTRIBUTE_NORETURN", "USE_GCC_ATOMIC_BUILTINS"],
+    deps = ["@//third_party/mesa:generated_headers", "@mesa_linux_uapi//:headers"] + select({
+        "@platforms//cpu:aarch64": ["@mesa_gnu_headers_aarch64//:headers"],
+        "@platforms//cpu:x86_64": ["@mesa_gnu_headers_x86_64//:headers"],
+    }),
+    target_compatible_with = ["@//build/platforms/constraints:bexos_userspace_abi"],
+)
+
+cc_library(
+    name = "venus_objects",
+    alwayslink = True,
+    srcs = glob(["src/virtio/vulkan/vn_*.c"], exclude = ["src/virtio/vulkan/vn_android.c", "src/virtio/vulkan/vn_wsi.c", "src/virtio/vulkan/vn_renderer_virtgpu.c", "src/virtio/vulkan/vn_renderer_vtest.c"]),
+    copts = ["-std=c11", "-ffunction-sections", "-fdata-sections", "-fvisibility=hidden"],
+    deps = [":headers"],
+)
+cc_library(
+    name = "runtime_objects",
+    srcs = ["src/vulkan/runtime/" + name + ".c" for name in [
+        "rmv/vk_rmv_common", "rmv/vk_rmv_exporter", "vk_blend", "vk_buffer", "vk_buffer_view",
+        "vk_cmd_copy", "vk_cmd_enqueue", "vk_command_buffer", "vk_command_pool",
+        "vk_debug_report", "vk_debug_utils", "vk_deferred_operation", "vk_descriptor_set_layout",
+        "vk_descriptors", "vk_descriptor_update_template", "vk_device", "vk_device_generated_commands",
+        "vk_device_memory", "vk_fence", "vk_framebuffer", "vk_graphics_state", "vk_image", "vk_instance",
+        "vk_log", "vk_meta_object_list", "vk_object", "vk_physical_device", "vk_pipeline_layout",
+        "vk_query_pool", "vk_queue", "vk_render_pass", "vk_sampler", "vk_semaphore",
+        "vk_standard_sample_locations", "vk_sync", "vk_sync_binary", "vk_sync_dummy", "vk_sync_timeline",
+        "vk_synchronization", "vk_video", "vk_ycbcr_conversion",
+    ]],
+    copts = ["-std=c11", "-ffunction-sections", "-fdata-sections", "-fvisibility=hidden", "-DVK_LITE_RUNTIME_INSTANCE=1"],
+    deps = [":headers"],
+    alwayslink = True,
+)
+
+# The upstream Vulkan lite runtime uses these portable utility implementations.
+# XML drirc and disk shader caches are disabled; BexOS configuration is supplied
+# by the service's prototxt and there is no ambient host filesystem access.
+cc_library(
+    name = "util_objects",
+    srcs = ["src/util/" + name + ".c" for name in [
+        "bitscan", "blob", "cnd_monotonic", "crc32", "double", "futex", "half_float",
+        "hash_table", "log", "mesa-sha1", "sha1/sha1", "os_misc", "os_time", "os_file", "u_printf",
+        "ralloc", "rand_xor", "set", "simple_mtx", "sparse_array", "string_buffer",
+        "strndup", "strtod", "u_atomic", "u_call_once", "u_debug", "u_dynarray",
+        "u_idalloc", "u_math", "u_string", "u_thread", "u_vector", "u_process", "xmlconfig",
+    ]] + ["src/c11/impl/threads_posix.c", "src/c11/impl/time.c"],
+    copts = ["-std=c11", "-ffunction-sections", "-fdata-sections", "-fvisibility=hidden", "-DWITH_XMLCONFIG=0", "-DNO_REGEX"],
+    deps = [":headers"],
+)
+
+cc_library(
+    name = "format_objects",
+    srcs = ["src/vulkan/util/vk_alloc.c", "src/vulkan/util/vk_format.c", "src/vulkan/util/vk_util.c"] +
+        ["src/util/format/" + name + ".c" for name in ["u_format", "u_format_bptc", "u_format_etc", "u_format_fxt1", "u_format_latc", "u_format_other", "u_format_rgtc", "u_format_s3tc", "u_format_unpack_neon", "u_format_yuv", "u_format_zs"]],
+    copts = ["-include", "git_sha1.h", "-std=c11", "-ffunction-sections", "-fdata-sections", "-fvisibility=hidden"],
+    deps = [":headers"],
+)

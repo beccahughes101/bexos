@@ -1,0 +1,22 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "wasm_runtime",
+    rustc_flags = select({"//build/platforms:is_bexos_userspace": ["--cfg=bexos_guest"], "//conditions:default": []}),
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "bexos_wasm_runtime",
+    edition = "2024",
+    compile_data = ["@wasmtime_wasi_wit//:wit", "//testing/wasm:service_component.wat", "//testing/wasm:command.wat", "//testing/wasm:file_service.wat", "//testing/wasm:network.wat"] + glob(["wit/*.wit"]),
+    rustc_env = {"CARGO_MANIFEST_DIR": "."},
+    deps = ["@crates//:wasmtime", "//lib/dioxus_scene", "//lib/wasm_embedded", "//lib/wasm_engine", "//lib/wasm_abi", "//lib/userspace"],
+)
+
+rust_test(
+    name = "wasm_runtime_tests",
+    crate = ":wasm_runtime",
+    deps = ["@crates//:wat"],
+)
+
+filegroup(name = "guest_wit", srcs = glob(["wit/*.wit"]))

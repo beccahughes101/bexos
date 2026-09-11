@@ -1,0 +1,45 @@
+--- a/external/lk/dev/interrupt/arm_gic/arm_gic_common.h
++++ b/external/lk/dev/interrupt/arm_gic/arm_gic_common.h
+@@ -179,9 +179,13 @@
+ #define GICC_MIN_SIZE           (GICC_LIMIT - GICC_OFFSET)
+ 
+ #if WITH_LIB_SM
+-#define GICC_PRIMARY_HPPIR      GICC_AHPPIR
+-#define GICC_PRIMARY_IAR        GICC_AIAR
+-#define GICC_PRIMARY_EOIR       GICC_AEOIR
++/* QEMU's GICv2 does not implement AIAR/AEOIR/AHPPIR. With AckCtl
++ * enabled below, secure accesses to the main interface can acknowledge
++ * Group 1. Group 0 still routes as FIQ; the IRQ path must not consume it.
++ * This compatibility patch is applied only to the QEMU firmware build. */
++#define GICC_PRIMARY_HPPIR      GICC_HPPIR
++#define GICC_PRIMARY_IAR        GICC_IAR
++#define GICC_PRIMARY_EOIR       GICC_EOIR
+ #else
+ #define GICC_PRIMARY_HPPIR      GICC_HPPIR
+ #define GICC_PRIMARY_IAR        GICC_IAR
+--- a/external/lk/dev/interrupt/arm_gic/arm_gic.c
++++ b/external/lk/dev/interrupt/arm_gic/arm_gic.c
+@@ -418,7 +418,7 @@
+ #else
+     /* GICv2 */
+ #if WITH_LIB_SM
+-    GICCREG_WRITE(0, GICC_CTLR, 0xb); // enable GIC0 and select fiq mode for secure
++    GICCREG_WRITE(0, GICC_CTLR, 0xf); // Group 0 FIQ, Group 1 IRQ, secure AckCtl
+     GICDREG_WRITE(0, GICD_IGROUPR(0), ~0U); /* GICD_IGROUPR0 is banked */
+ #else
+     GICCREG_WRITE(0, GICC_CTLR, 1); // enable GIC0
+@@ -791,7 +791,13 @@
+     }
+ #endif
+ 
+-    LTRACEF("ahppir %d\n", ahppir);
++    LTRACEF("pending irq %d\n", ahppir);
++    /* Group 0 is delivered separately through platform_fiq(). */
++    if (pending_irq < MAX_INT &&
++        !(GICDREG_READ(0, GICD_IGROUPR(pending_irq / 32)) &
++          (1U << (pending_irq % 32)))) {
++        return INT_NO_RESCHEDULE;
++    }
+     if (pending_irq < MAX_INT && has_int_handler(pending_irq, cpu)) {
+         enum handler_return ret = 0;
+         uint32_t irq;

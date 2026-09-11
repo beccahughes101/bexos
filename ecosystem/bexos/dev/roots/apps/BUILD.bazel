@@ -1,0 +1,6 @@
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "roots",
+    srcs = glob(["*.prototxt"], allow_empty = True),
+)

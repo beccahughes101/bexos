@@ -1,0 +1,141 @@
+library bexos.ui;
+type Status = strict enum : int32 { OK = 0; ERR_ACCESS_DENIED = -2; ERR_NO_MEMORY = -3; ERR_BUSY = -5; ERR_TIMED_OUT = -6; ERR_INVALID_ARGS = -8; ERR_IO = -14; };
+/// Formats: 1=BGRA8 premultiplied, 2=RGBA8 premultiplied, 3=BGRX8, 4=RGBX8.
+struct Surface { width uint32; height uint32; stride uint32; format uint32; };
+struct Damage { x uint32; y uint32; width uint32; height uint32; };
+resource struct DisplayFrame { buffer handle:VMO; surface Surface; generation uint64; };
+struct DisplayMode { scanout uint32; x uint32; y uint32; width uint32; height uint32; enabled bool; flags uint32; };
+struct GpuCapsetInfo { id uint32; max_version uint32; max_size uint32; };
+resource struct GpuSharedMemory { buffer handle:VMO; host_visible bool; };
+/// Presentation ownership is bound to a granted endpoint, never a caller-supplied identity.
+@discoverable
+protocol DisplayCoordinator {
+    1: GetInfo() -> (struct { status Status; surface Surface; client_id uint64; generation uint64; owner_id uint64; transfer_pending bool; });
+    2: Acquire() -> (struct { status Status; generation uint64; });
+    3: Present(resource struct { generation uint64; buffer handle:VMO; surface Surface; damage Damage; }) -> (struct { status Status; fence uint64; });
+    4: Transfer(struct { generation uint64; next_client uint64; }) -> (struct { status Status; generation uint64; });
+    5: Snapshot() -> (resource struct { status Status; frame DisplayFrame?; });
+    6: Rollback(struct { generation uint64; }) -> (struct { status Status; generation uint64; });
+    /// Offered device features do not imply an active compositor backend.
+    /// This driver has no hardware VSYNC source; command fences are separate.
+    7: GetCapabilities() -> (struct { status Status; offered_features uint64; negotiated_features uint64; hardware_vsync bool; direct_scanout bool; capsets vector<GpuCapsetInfo>:16; });
+    8: GetDisplayModes() -> (struct { status Status; modes vector<DisplayMode>:16; });
+    9: GetCapset(struct { id uint32; version uint32; }) -> (struct { status Status; data vector<uint8>:4096; });
+    /// Private GpuTransport capability. IDs are local to this granted endpoint;
+    /// no client may submit against or release another endpoint's context.
+    10: CreateGpuContext() -> (struct { status Status; context uint32; });
+    11: DestroyGpuContext(struct { context uint32; }) -> (struct { status Status; });
+    /// Queue completion is returned asynchronously on this endpoint. Only one
+    /// request may be outstanding per endpoint. Ring 0 is the CPU timeline.
+    12: SubmitGpuCommand(struct { context uint32; ring uint32; data vector<uint8>:3992; }) -> (struct { status Status; fence uint64; });
+    /// Page-aligned, bounded, device-visible memory. The returned VMO is shared
+    /// with the renderer; synchronization is the client's responsibility.
+    13: CreateGpuSharedMemory(struct { context uint32; size uint64; }) -> (resource struct { status Status; resource uint32; memory GpuSharedMemory?; });
+    /// Host-visible memory returns ERR_BUSY until all client VMO mappings and
+    /// handles have been released. The aperture cannot alias a live old VMO.
+    14: ReleaseGpuResource(struct { context uint32; resource uint32; }) -> (struct { status Status; });
+    /// Import an allocation created by Venus in this context. Blob ID zero
+    /// requests shared command memory. Unmapped device memory returns no VMO.
+    15: CreateGpuBlob(struct { context uint32; size uint64; blob_id uint64; host_visible bool; }) -> (resource struct { status Status; resource uint32; memory GpuSharedMemory?; });
+    /// Tightly packed opaque buffers supported by the active scanout. Format
+    /// bit N corresponds to Surface.format N. No hardware VSYNC is implied.
+    16: GetScanoutCapabilities() -> (struct { status Status; formats uint32; max_buffers uint32; });
+    /// Import retains a read-only VMO and device DMA pin until ReleaseScanout.
+    /// Imports belong to the granted display endpoint and current generation.
+    17: ImportScanout(resource struct { generation uint64; buffer handle:VMO; surface Surface; }) -> (struct { status Status; resource uint32; });
+    /// Pixels must be acquired and immutable before submission. Completion is a
+    /// command fence; retirement is signalled on release only after replacement.
+    18: PresentScanout(resource struct { generation uint64; resource uint32; sequence uint64; release handle:CHANNEL; damage Damage; }) -> (struct { status Status; fence uint64; });
+    /// A currently scanned or in-flight resource returns ERR_BUSY.
+    19: ReleaseScanout(struct { generation uint64; resource uint32; }) -> (struct { status Status; });
+
+};
+type BootStage = strict enum : uint8 { KERNEL_BOOTSTRAP = 1; STORAGE_UNLOCKED = 2; DRIVERS_INITIALIZED = 3; SYSTEM_APPS_ONLINE = 4; READY_FOR_COMPOSITOR = 5; };
+@discoverable
+protocol ProgressTracker {
+    1: ReportStage(struct { stage BootStage; progress_pct uint8; status_message string:64; }) -> (struct { status Status; });
+    2: HandoverToCompositor(resource struct { next_client uint64; ack_channel handle:CHANNEL; }) -> (resource struct { status Status; frame DisplayFrame?; });
+};
+struct NormalizedInputEvent { kind uint32; device uint64; id uint32; phase uint32; x float64; y float64; buttons uint32; scroll_x float32; scroll_y float32; code uint32; key_state uint32; modifiers uint32; unicode uint32; };
+/// Sent once when buffers are no longer read for this presentation.
+/// Retirement is distinct from hardware VSYNC and GPU completion.
+struct PresentationRelease { sequence uint64; status Status; };
+struct Rect { x float64; y float64; width float64; height float64; };
+struct ViewGeometry { view_id uint64; view_generation uint64; scene_generation uint64; x float64; y float64; scale_x float64; scale_y float64; clip Rect; visible bool; };
+resource struct ViewReference { token handle:CHANNEL; view_id uint64; };
+resource struct ShellView { token handle:CHANNEL; view_id uint64; package_id string:128; width uint32; height uint32; focused bool; };
+@discoverable
+protocol FlatlandSession {
+    // Selected shells only. View ownership comes from authenticated appd grants.
+    25: GetShellViews() -> (resource struct { status Status; width uint32; height uint32; views vector<ShellView>:16; });
+    26: FocusShellView(resource struct { token handle:CHANNEL; }) -> (struct { status Status; });
+
+    1: CreateTransform(struct { node_id uint64; }) -> (struct { status Status; });
+    2: SetRoot(struct { node_id uint64; }) -> (struct { status Status; });
+    3: AddChild(struct { parent uint64; child uint64; }) -> (struct { status Status; });
+    4: SetTranslation(struct { node_id uint64; x int32; y int32; }) -> (struct { status Status; });
+    5: SetScale(struct { node_id uint64; x float32; y float32; }) -> (struct { status Status; });
+    6: SetClipBounds(struct { node_id uint64; width uint32; height uint32; }) -> (struct { status Status; });
+    7: SetOpacity(struct { node_id uint64; opacity float32; }) -> (struct { status Status; });
+    8: SetContent(resource struct { node_id uint64; buffer handle:VMO; surface Surface; }) -> (struct { status Status; });
+    9: Present(struct { presentation_time_ticks uint64; }) -> (struct { status Status; });
+    10: ReleaseTransform(struct { node_id uint64; }) -> (struct { status Status; });
+    11: RemoveChild(struct { parent uint64; child uint64; }) -> (struct { status Status; });
+    12: ClearContent(struct { node_id uint64; }) -> (struct { status Status; });
+    13: SetChildOrder(struct { parent uint64; child uint64; index uint32; }) -> (struct { status Status; });
+    /// Acceptance, latching, and display completion are distinct. This reports
+    /// queue state; presentation_time_ticks is in the kernel monotonic domain.
+    14: GetPresentationInfo() -> (struct { status Status; accepted_sequence uint64; pending_count uint32; latched_time_ticks uint64; });
+    15: ReadInput() -> (struct { status Status; events vector<NormalizedInputEvent>:8; });
+    /// Signal acquire with one empty, handle-free channel message. Pixels must
+    /// remain immutable until every presentation referencing them releases.
+    16: PresentWithFences(resource struct { presentation_time_ticks uint64; acquire handle:CHANNEL; release handle:CHANNEL; }) -> (struct { status Status; sequence uint64; });
+    /// The token has TRANSFER and DUPLICATE rights only. Its kernel identity is
+    /// stable across duplication and transplant; a numeric ID is not authority.
+    17: GetViewReference() -> (resource struct { status Status; view ViewReference?; });
+    18: SetViewContent(resource struct { node_id uint64; token handle:CHANNEL; }) -> (struct { status Status; });
+    19: ClearViewContent(struct { node_id uint64; }) -> (struct { status Status; });
+    /// CPU display submission acknowledgement is not hardware VSYNC. A rejected
+    /// queued transaction never replaces the previous committed graph.
+    20: GetPresentationFeedback() -> (struct { status Status; latched_sequence uint64; presented_sequence uint64; rejected_sequence uint64; presented_at_ticks uint64; scene_generation uint64; });
+    /// Effects apply to this node's content. Radius is in content pixels;
+    /// backdrop radius is in display pixels and bounded to 32 for CPU fallback.
+    21: SetContentEffects(struct { node_id uint64; corner_radius float32; backdrop_radius uint32; }) -> (struct { status Status; });
+
+    /// Layout is resolved before queue acceptance. Mode 0=manual, 1=flex row,
+    /// 2=flex column, 3=equal-column grid, 4=none, 5=reverse row,
+    /// 6=reverse column. Width/height -1 means auto.
+    22: SetLayout(struct { node_id uint64; mode uint32; width float32; height float32; grow float32; gap float32; padding float32; columns uint32; }) -> (struct { status Status; });
+    /// Bounded CSS selectors and inline declarations. Empty inputs disable CSS
+    /// for this node; layout/style resolution completes before Present accepts.
+    23: SetStyle(struct { node_id uint64; identifier string:64; classes string:128; inline_style string:512; }) -> (struct { status Status; });
+    /// Session-local geometry for resize and scale updates. This reports only
+    /// the caller's own view and grants no shell ordering or focus authority.
+    24: GetViewport() -> (struct { status Status; geometry ViewGeometry; });
+
+};
+/// Granted privately by appd. No semantic tree contents flow through scened.
+@discoverable
+protocol AccessibilityControl {
+    1: GetViewGeometry(resource struct { token handle:CHANNEL; }) -> (struct { status Status; geometry ViewGeometry; });
+    2: SetFocusRing(resource struct { token handle:CHANNEL; view_generation uint64; bounds Rect; width uint32; rgba uint32; }) -> (struct { status Status; });
+    3: ClearFocusRing() -> (struct { status Status; });
+    /// Scale is in [1,8], origin is in unmagnified display pixels. Filter:
+    /// 0=none, 1=grayscale, 2=invert, 3=protanopia, 4=deuteranopia, 5=high contrast.
+    4: SetDisplayTransform(struct { scale float64; origin_x float64; origin_y float64; color_filter uint32; }) -> (struct { status Status; });
+};
+@discoverable
+protocol ShellControl {
+    1: FocusView(resource struct { token handle:CHANNEL; }) -> (struct { status Status; });
+    2: RaiseView(resource struct { token handle:CHANNEL; }) -> (struct { status Status; });
+    /// One granted shell owns reservation. Edge bits: left=1,right=2,top=4,bottom=8.
+    /// Coordinates are physical display pixels, before accessibility transforms.
+    3: ConfigureReservedEdges(struct { edges uint32; inset float64; threshold float64; }) -> (struct { status Status; });
+    /// Takeover first cancels the original view, then starts this stream with
+    /// the original Down. Reset terminates all streams on bounded queue overflow.
+    4: ReadGestures() -> (struct { status Status; events vector<NormalizedInputEvent>:8; });
+    /// Private diagnostic epoch only; does not change scene or rendering policy.
+    /// Workload IDs 1..5: fullscreen, overlap, partial, backdrop, leased scanout.
+    /// Requires no in-flight frame; diagnostics restart on service replacement.
+    5: BeginMeasurement(struct { workload uint32; }) -> (struct { status Status; });
+};

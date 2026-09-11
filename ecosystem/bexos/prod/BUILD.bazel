@@ -1,0 +1,49 @@
+load("//build/rules:ecosystem.bzl", "ecosystem_profile")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "direct_update_keys.prototxt",
+    "distribution_policy.prototxt",
+    "signing_chain.der",
+    "tuf_root.json",
+])
+
+alias(
+    name = "tls_roots_redb",
+    actual = "//ecosystem/bexos/dev/roots:pki_roots_redb",
+)
+
+alias(
+    name = "app_signing_roots_redb",
+    actual = "//ecosystem/bexos/dev/roots:app_signing_roots_redb",
+)
+
+genrule(
+    name = "public_bundle",
+    srcs = [
+        "distribution_policy.prototxt",
+        "direct_update_keys.prototxt",
+        "tuf_root.json",
+        ":tls_roots_redb",
+        ":app_signing_roots_redb",
+    ],
+    outs = ["bexos.prod-template.ecosystem.bundle"],
+    cmd = "$(location //tools/ecosystem_bundle:ecosystem_bundle) --profile prod --deployable false --policy $(location distribution_policy.prototxt) --direct-update-keys $(location direct_update_keys.prototxt) --tuf-root $(location tuf_root.json) --tls-roots $(location :tls_roots_redb) --app-roots $(location :app_signing_roots_redb) --out $@",
+    tools = ["//tools/ecosystem_bundle:ecosystem_bundle"],
+)
+
+ecosystem_profile(
+    name = "profile",
+    app_roots = ":app_signing_roots_redb",
+    deployable = False,
+    direct_update_keys = "direct_update_keys.prototxt",
+    policy = "distribution_policy.prototxt",
+    profile = "prod",
+    public_bundle = ":public_bundle",
+    signing_chain = ["signing_chain.der"],
+    signing_key = "//ecosystem/bexos/dev:dev_app_signer.key",
+    template_only = True,
+    tls_roots = ":tls_roots_redb",
+    tuf_root = "tuf_root.json",
+)

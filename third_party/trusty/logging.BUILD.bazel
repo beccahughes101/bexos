@@ -1,0 +1,14 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+package(default_visibility = ["//visibility:public"])
+filegroup(name = "all_sources", srcs = glob(["**"]))
+cc_library(
+    name = "log",
+    # AIDL uses host stderr logging, not Android event-tag readers.
+    srcs = ["liblog/" + name + ".cpp" for name in [
+        "logger_name", "logger_write", "properties",
+    ]],
+    hdrs = glob(["liblog/include/**", "liblog/*.h"]),
+    includes = ["liblog/include"],
+    defines = ["LIBLOG_LOG_TAG=1006", "SNET_EVENT_LOG_TAG=1397638484", "ANDROID_DEBUGGABLE=0"],
+    deps = ["@trusty_src//:host_base_headers", "@trusty_src//:host_cutils_headers"],
+)

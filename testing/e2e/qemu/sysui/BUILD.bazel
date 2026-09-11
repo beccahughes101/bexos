@@ -1,0 +1,77 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest")
+load("//build/rules:wasm.bzl", "wasi_component")
+load("//testing/e2e/qemu:qemu_e2e.bzl", "qemu_e2e_test", "QEMU_BOOT_DATA")
+load("//testing/e2e/qemu:architecture_test.bzl", "qemu_suites")
+package(default_visibility = ["//visibility:public"])
+
+app_manifest(name = "second_manifest", src = "second.prototxt")
+app_manifest(name = "alternate_sysui_manifest", src = "alternate_sysui.prototxt")
+app_manifest(name = "alternate_userui_manifest", src = "alternate_userui.prototxt")
+app_manifest(name = "reject_manifest", src = "reject.prototxt")
+wasi_component(name = "reject_wasm", srcs = ["reject.rs"], crate_name = "rejected_shell", deps = ["//lib/dioxus_guest"])
+wasi_component(name = "probe_wasm", srcs = ["probe.rs"], crate_name = "shell_input_probe", deps = ["//lib/dioxus_guest"])
+app_archive(name = "second", manifest = ":second_manifest", entries = {"bin/dioxus_demo.wasm": ":probe_wasm"}, compression = "zstd")
+app_archive(name = "alternate_sysui", manifest = ":alternate_sysui_manifest", entries = {"bin/sysui.wasm": "//apps/sysui:wasm"}, compression = "zstd")
+app_archive(name = "alternate_userui", manifest = ":alternate_userui_manifest", entries = {"bin/userui.wasm": "//apps/userui:wasm"}, compression = "zstd")
+app_archive(name = "rejected", manifest = ":reject_manifest", entries = {"bin/sysui.wasm": ":reject_wasm"}, compression = "zstd")
+BOOT = {k: v.replace("/nongui:", "/workstation:") for k, v in QEMU_BOOT_DATA.items()}
+genrule(
+    name = "test_disk",
+    srcs = [BOOT["disk"], BOOT["key"], ":rejected", ":second", ":alternate_sysui", ":alternate_userui", "//services/appd:replacement_archive"],
+    outs = ["sysui_nvme.img"],
+    tools = ["//tools/image:bexfs_image"],
+    cmd = "cp $(location " + BOOT["disk"] + ") $@ && chmod u+w $@ && $(location //tools/image:bexfs_image) --inspect --image $@ --partition STORAGE --label STORAGE --key-file $(location " + BOOT["key"] + ") --entry updates/sysui-rejected.bex=$(location :rejected) --entry updates/appd-shell.bex=$(location //services/appd:replacement_archive) --entry pkg/bexos.test.second.bex=$(location :second) --entry pkg/bexos.test.sysui.bex=$(location :alternate_sysui) --entry pkg/bexos.test.userui.bex=$(location :alternate_userui)",
+)
+BOOT = dict(BOOT, disk = ":test_disk")
+qemu_e2e_test(
+    name = "sysui_e2e_test",
+    src = "sysui_e2e_test.rs",
+    extra_srcs = ["qmp.rs", "checks.rs", "scenarios.rs"],
+    extra_data = [":second", ":alternate_sysui", ":alternate_userui"],
+    extra_args = ["$(rootpath :second)", "$(rootpath :alternate_sysui)", "$(rootpath :alternate_userui)"],
+    crate_name = "sysui_e2e_test",
+    boot_data = BOOT,
+    x86_extra_data = [":second", ":alternate_sysui", ":alternate_userui", "//boot/efi:authenticated_nucleus_product", "//boot/efi:enrolled.fd", "//device/virtual/qemu/workstation:vbmeta.elf.img", "//kernel:kernel"],
+    x86_env_overrides = {
+        "BEXOS_QEMU_X86_EFI_LOADER": "$(rootpath //boot/efi:authenticated_nucleus_product)",
+        "BEXOS_QEMU_X86_OVMF_VARS": "$(rootpath //boot/efi:enrolled.fd)",
+        "BEXOS_QEMU_VBMETA": "$(rootpath //device/virtual/qemu/workstation:vbmeta.elf.img)",
+        "BEXOS_QEMU_KERNEL": "$(rootpath //kernel:kernel)",
+    },
+    env = {"BEXOS_QEMU_TIMEOUT_SECONDS": "1800", "BEXOS_QEMU_LIVE_LOG": "1", "BEXOS_DEBUG_LIVE_TRACE": "1"},
+    deps = ["//host/debug_client", "//lib/debug_wire", "//lib/component_config", "//testing/e2e", "//tools/qemu:qemu_test", "@crates//:serde_json"],
+)
+qemu_e2e_test(
+    name = "sysui_migration_e2e_test",
+    src = "sysui_e2e_test.rs",
+    extra_srcs = ["qmp.rs", "checks.rs", "scenarios.rs"],
+    crate_name = "sysui_migration_e2e_test",
+    boot_data = BOOT,
+    x86_extra_data = ["//boot/efi:authenticated_nucleus_product", "//boot/efi:enrolled.fd", "//device/virtual/qemu/workstation:vbmeta.elf.img", "//kernel:kernel"],
+    x86_env_overrides = {
+        "BEXOS_QEMU_X86_EFI_LOADER": "$(rootpath //boot/efi:authenticated_nucleus_product)",
+        "BEXOS_QEMU_X86_OVMF_VARS": "$(rootpath //boot/efi:enrolled.fd)",
+        "BEXOS_QEMU_VBMETA": "$(rootpath //device/virtual/qemu/workstation:vbmeta.elf.img)",
+        "BEXOS_QEMU_KERNEL": "$(rootpath //kernel:kernel)",
+    },
+    env = {"BEXOS_SYSUI_MIGRATION_ONLY": "1", "BEXOS_QEMU_TIMEOUT_SECONDS": "1800", "BEXOS_QEMU_LIVE_LOG": "1", "BEXOS_DEBUG_LIVE_TRACE": "1"},
+    deps = ["//host/debug_client", "//lib/debug_wire", "//lib/component_config", "//testing/e2e", "//tools/qemu:qemu_test", "@crates//:serde_json"],
+)
+qemu_e2e_test(
+    name = "sysui_recovery_e2e_test",
+    src = "sysui_e2e_test.rs",
+    extra_srcs = ["qmp.rs", "checks.rs", "scenarios.rs"],
+    crate_name = "sysui_recovery_e2e_test",
+    boot_data = BOOT,
+    x86_extra_data = ["//boot/efi:authenticated_nucleus_product", "//boot/efi:enrolled.fd", "//device/virtual/qemu/workstation:vbmeta.elf.img", "//kernel:kernel"],
+    x86_env_overrides = {
+        "BEXOS_QEMU_X86_EFI_LOADER": "$(rootpath //boot/efi:authenticated_nucleus_product)",
+        "BEXOS_QEMU_X86_OVMF_VARS": "$(rootpath //boot/efi:enrolled.fd)",
+        "BEXOS_QEMU_VBMETA": "$(rootpath //device/virtual/qemu/workstation:vbmeta.elf.img)",
+        "BEXOS_QEMU_KERNEL": "$(rootpath //kernel:kernel)",
+    },
+    env = {"BEXOS_SYSUI_RECOVERY_ONLY": "1", "BEXOS_QEMU_TIMEOUT_SECONDS": "1800", "BEXOS_QEMU_LIVE_LOG": "1", "BEXOS_DEBUG_LIVE_TRACE": "1"},
+    deps = ["//host/debug_client", "//lib/debug_wire", "//lib/component_config", "//testing/e2e", "//tools/qemu:qemu_test", "@crates//:serde_json"],
+)
+qemu_suites()

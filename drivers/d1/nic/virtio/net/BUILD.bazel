@@ -1,0 +1,68 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/platforms:architecture.bzl", "guest_select")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "virtio_net",
+    rustc_flags = guest_select([], ["--cfg=bexos_arch_x86_64"]),
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_features = ["std"],
+    crate_name = "bexos_d1_virtio_net",
+    edition = "2024",
+    deps = [
+        "//idl:ethernet_fidl_rust",
+        "//idl:hardware_manager_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//idl:power_fidl_rust",
+        "//lib/migration",
+        "//lib/userspace",
+        "//lib/virtio_hal",
+        "@crates//:tokio",
+        "@crates//:virtio-drivers",
+    ],
+)
+
+std_service_binary(
+    name = "virtio_net_driver",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_d1_virtio_net_driver",
+    deps = [
+        ":virtio_net",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "virtio_net_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "virtio_net_tests",
+    edition = "2024",
+    deps = [
+        ":virtio_net",
+        "//idl:ethernet_fidl_rust",
+        "//lib/userspace",
+        "//lib/virtio_hal",
+    ],
+)
+
+app_manifest(name = "package_manifest", src = "package/virtio_net_driver.prototxt")
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_d1_virtio_net_driver_replacement",
+    deps = [
+        ":virtio_net",
+        "@crates//:tokio",
+    ],
+)
+
+app_archive(
+    name = "replacement_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/virtio_net_driver": ":replacement_elf"},
+    compression = "zstd",
+)

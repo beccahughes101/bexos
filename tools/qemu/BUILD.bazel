@@ -1,0 +1,88 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_binary(
+    name = "libqemu_activity.dylib",
+    srcs = ["host_activity.c"],
+    copts = ["-x", "objective-c"],
+    linkshared = True,
+    linkopts = ["-framework", "Foundation"],
+    target_compatible_with = ["@platforms//os:macos"],
+)
+
+HOST_ACTIVITY_DATA = select({
+    "@platforms//os:macos": [":libqemu_activity.dylib"],
+    "//conditions:default": [],
+})
+HOST_ACTIVITY_ENV = select({
+    "@platforms//os:macos": {"QEMU_HOST_ACTIVITY_LIBRARY": "$(rootpath :libqemu_activity.dylib)"},
+    "//conditions:default": {},
+})
+
+exports_files(["launch.proto", "config.bzl"])
+
+BOOT_DATA = [
+    "//kernel:kernel_bin",
+    "//device/virtual/qemu/nongui:qemu_nvme_gpt.img",
+    "//device/virtual/qemu/nongui:bootfs.img",
+    "//device/virtual/qemu/nongui:boot_handoff.bin",
+    "//device/virtual/qemu/nongui:boot_evidence.bin",
+    "//device/virtual/qemu/nongui:vbmeta.img",
+    "//device/virtual/qemu/nongui:avb_dev_public_key.bin",
+    "//device/virtual/qemu/nongui:boot_layout.sh",
+    "//tools/image:bexfs_image",
+    "//device/virtual/qemu/base:qemu_bexfs_test.key",
+    "//third_party/trusty:rpmb_dev",
+    "//third_party/trusty:RPMB_DATA",
+]
+BOOT_ARGS = ["$(location " + label + ")" for label in BOOT_DATA]
+QEMU_DEPS = [
+    "//host/debug_client",
+    "//kernel/core",
+    "//lib/boot",
+    "//lib/avb",
+    "//lib/crypto",
+    "//lib/secure_firmware",
+    "//testing/e2e",
+    "//secure/monitor:monitor",
+    "@crates//:serde_json",
+    "@crates//:sha2",
+    "@crates//:libc",
+]
+
+rust_library(
+    name = "qemu_test",
+    data = HOST_ACTIVITY_DATA,
+    rustc_env = HOST_ACTIVITY_ENV,
+    srcs = glob(["src/**/*.rs"], exclude = ["src/bin/**/*.rs"]),
+    crate_name = "bexos_qemu_test",
+    edition = "2024",
+    deps = QEMU_DEPS,
+)
+
+rust_test(
+    name = "qemu_tests",
+    data = HOST_ACTIVITY_DATA,
+    srcs = glob(["src/**/*.rs"], exclude = ["src/bin/**/*.rs"]),
+    crate_name = "bexos_qemu_tests",
+    edition = "2024",
+    deps = QEMU_DEPS,
+    compile_data = ["//device/virtual/qemu/base:launch_config", "//device/virtual/qemu/base/graphics:launch_config"],
+    rustc_env = HOST_ACTIVITY_ENV | {
+        "NONGUI_LAUNCH_CONFIG": "$(execpath //device/virtual/qemu/base:launch_config)",
+        "WORKSTATION_LAUNCH_CONFIG": "$(execpath //device/virtual/qemu/base/graphics:launch_config)",
+    },
+)
+
+rust_binary(
+    name = "qemu_runner",
+    srcs = ["src/bin/qemu_runner.rs"],
+    crate_name = "bexos_qemu_runner",
+    edition = "2024",
+    deps = [
+        ":qemu_test",
+        "//testing/e2e",
+    ],
+)
