@@ -1,4 +1,4 @@
-load("//build/rules:assembly.bzl", "app_config", "component_config_rust", "bexos_product", "product_app_config_policy")
+load("//build/rules:assembly.bzl", "app_config", "component_config_rust", "product_definition", "product_app_config_policy")
 load("//build/rules:app_archive.bzl", "app_archive")
 load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
 load("//testing/e2e/qemu:qemu_e2e.bzl", "qemu_e2e_test", "QEMU_BOOT_DATA")
@@ -7,7 +7,8 @@ load("@rules_rust//rust:defs.bzl", "rust_library")
 package(default_visibility = ["//visibility:public"])
 app_manifest(name = "manifest", src = "probe.prototxt")
 app_config(name = "config", manifest = ":manifest")
-bexos_product(name = "probe_product", src = "product.prototxt", bundles = [], manifests = {})
+# This fixture supplies lock policy for the probe, not an assembled product.
+product_definition(name = "probe_product", src = "product.prototxt")
 product_app_config_policy(
     name = "policy",
     manifest = ":manifest",

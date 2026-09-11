@@ -85,7 +85,8 @@ def component_config_rust(name, manifest):
         tools = ["//tools/assembly:bexos_assembly"],
     )
 
-def bexos_product(name, src, bundles, manifests):
+def product_definition(name, src):
+    """Encode a product definition for config consumers without assembling it."""
     native.genrule(
         name = name + "_bin",
         srcs = [
@@ -103,6 +104,9 @@ def bexos_product(name, src, bundles, manifests):
         ),
         tools = ["@protobuf//:protoc"],
     )
+
+def bexos_product(name, src, bundles, manifests):
+    product_definition(name = name, src = src)
 
     bundle_args = "".join([" --bundle-bin $(location %s)" % bundle for bundle in bundles])
     manifest_args = "".join([
