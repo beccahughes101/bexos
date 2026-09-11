@@ -7,6 +7,10 @@ df -h "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
 
 # Reclaim unused SDK space before fetching the large Trusty and Rust closures.
 sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup
+# Clear the deleted SDK's paths for subsequent steps. Transitive rules_android
+# toolchain discovery reads ANDROID_HOME even when building non-Android targets;
+# an empty value selects its SDK-free fallback instead of inspecting that path.
+printf 'ANDROID_HOME=\nANDROID_SDK_ROOT=\n' >> "$GITHUB_ENV"
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
   build-essential bison flex device-tree-compiler xxd libclang-dev llvm-dev \
