@@ -1,4 +1,4 @@
-# Pinned Alpine 3.24 aarch64 package closure, reviewed 2026-09-07.
+# Pinned Alpine 3.24 aarch64 package closure, reviewed 2026-09-11.
 # linux-virt initramfs-generator is intentionally replaced by the Bazel image rule.
 # vulkan-loader is explicit: Vulkan Tools opens it dynamically.
 archive {
@@ -399,9 +399,9 @@ archive {
 }
 archive {
   name: "linux-virt"
-  version: "6.18.49-r0"
-  url: "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/linux-virt-6.18.49-r0.apk"
-  sha256: "f2aab18283600926a9e55cfd2c857efa378049dcd5a06bd22a0c461c62e61c19"
+  version: "6.18.50-r0"
+  url: "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/linux-virt-6.18.50-r0.apk"
+  sha256: "66e4b983b8d742cf1426615ce50645203712818f400d08f7d70b14b338f60e5d"
 }
 archive {
   name: "llvm22-libs"
@@ -687,9 +687,9 @@ archive {
 }
 archive {
   name: "xz-libs"
-  version: "5.8.3-r0"
-  url: "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/xz-libs-5.8.3-r0.apk"
-  sha256: "76dce86852903fef7adba0285d816e5ce9ffbe9fb3ca86bbb349b97afaba1f63"
+  version: "5.8.4-r0"
+  url: "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/xz-libs-5.8.4-r0.apk"
+  sha256: "9be375832e747afe14f98e400e8b55d8f6fde25e41663090c81600628daab093"
 }
 archive {
   name: "yajl"

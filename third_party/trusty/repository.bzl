@@ -108,6 +108,18 @@ host_libclang_repository = repository_rule(
 )
 
 def _host_macos_sdk_repository_impl(ctx):
+    if ctx.os.name != "mac os x":
+        # Queries traverse every select branch, including Darwin-only SDK labels
+        # on Linux. Keep those labels loadable without probing for Xcode, while
+        # preventing a build from using this repository as an actual SDK.
+        ctx.file("BUILD.bazel", """
+package(default_visibility = ["//visibility:public"])
+[filegroup(
+    name = name,
+    target_compatible_with = ["@platforms//:incompatible"],
+) for name in ["toolchain_files", "MacOSX.sdk/usr/include/stdio.h"]]
+""")
+        return
     xcrun = ctx.which("xcrun")
     if not xcrun:
         fail("Trusty RPMB proxy build requires xcrun on Darwin")

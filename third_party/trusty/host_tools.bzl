@@ -1,5 +1,7 @@
 """Execution-host dependencies shared by every Trusty firmware variant."""
 
+load(":host_rust_std.bzl", "host_rust_std")
+
 _HOSTS = {
     "linux_x86_64": ("linux", "x86_64", "x86_64-unknown-linux-gnu"),
     "linux_aarch64": ("linux", "aarch64", "aarch64-unknown-linux-gnu"),
@@ -25,13 +27,9 @@ def trusty_host_tools():
             name = name,
             constraint_values = ["@platforms//os:" + os, "@platforms//cpu:" + cpu],
         )
-    native.filegroup(
-        name = "host_rust_std",
-        srcs = select({
-            ":" + name: ["@trusty_rust_1_80_1//:rust_std-" + triple]
-            for name, (_, _, triple) in _HOSTS.items()
-        }),
-    )
+    # The host-only repository declares just one rust_std target. Querying all
+    # select branches must not reference the other hosts' nonexistent targets.
+    host_rust_std(name = "host_rust_std")
     native.alias(
         name = "host_rustfmt",
         actual = select({
