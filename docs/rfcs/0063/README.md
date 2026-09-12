@@ -1,4 +1,4 @@
-# RFC-0043: Tiered Font Architecture, Zero-Copy VMO Sharing, and Dynamic OCI Discovery
+# RFC-0063: Tiered Font Architecture, Zero-Copy VMO Sharing, and Dynamic OCI Discovery
 
 * **Author:** BexOS Graphics & Package Management Working Group
 * **Status:** Proposed
