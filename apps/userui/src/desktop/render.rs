@@ -1,36 +1,43 @@
 use super::*;
+use bexos_ui_prelude::*;
+
 impl Desktop {
     pub(super) fn render(&mut self) -> Result<(), String> {
         let view = self.view.as_ref().unwrap();
 
-        let mut frame = paint::scene(self.width, self.height, [27, 48, 68, 255]);
-        paint::text(&mut frame, 24.0, 24.0, "BEXOS", 3.0, [85, 115, 140, 255]);
+        let mut root = Node::element(1, "main")
+            .class(CLASS_ROOT)
+            .style(format!(
+                "width:{}px;height:{}px;background:var(--bex-bg);",
+                self.width, self.height
+            ))
+            .child(label(2, 24.0, 24.0, 180.0, 38.0, "BEXOS", CLASS_TITLE));
         let y = self.height as f32 - 44.0;
-        paint::rect(
-            &mut frame,
-            0.0,
-            y,
-            self.width as f32,
-            44.0,
-            [18, 25, 38, 255],
-        );
-        paint::button(&mut frame, 8.0, y + 6.0, 96.0, "APPS", self.launcher);
-        paint::button(
-            &mut frame,
-            self.width as f32 - 100.0,
-            y + 6.0,
-            92.0,
-            "LOCK",
-            false,
-        );
-        paint::button(
-            &mut frame,
-            self.width as f32 - 212.0,
-            y + 6.0,
-            104.0,
-            "LOG OUT",
-            false,
-        );
+        root = root
+            .child(
+                Node::element(10, "section")
+                    .class(CLASS_PANEL)
+                    .style(format!(
+                        "x:0px;y:{y}px;width:{}px;height:44px;background:#121926;",
+                        self.width
+                    )),
+            )
+            .child(
+                Button::new(20, "APPS")
+                    .active(self.launcher)
+                    .node()
+                    .style(format!("x:8px;y:{}px;width:96px;height:32px;", y + 6.0)),
+            )
+            .child(Button::new(30, "LOCK").node().style(format!(
+                "x:{}px;y:{}px;width:92px;height:32px;",
+                self.width as f32 - 100.0,
+                y + 6.0
+            )))
+            .child(Button::new(40, "LOG OUT").node().style(format!(
+                "x:{}px;y:{}px;width:104px;height:32px;",
+                self.width as f32 - 212.0,
+                y + 6.0
+            )));
         let window_count = self.windows.len();
         for (i, w) in self.windows.iter_mut().enumerate() {
             w.constrain(self.width, self.height);
@@ -47,56 +54,42 @@ impl Desktop {
             )?;
             view.order_child(w.node, i as u32)?;
             let active = i + 1 == window_count;
-            let mut decoration = paint::scene(
-                w.width,
-                w.height,
-                if active {
-                    [60, 92, 136, 255]
-                } else {
-                    [43, 56, 76, 255]
-                },
-            );
             let title = w.view.package.rsplit('.').next().unwrap_or("APP");
-            paint::text(&mut decoration, 10.0, 9.0, title, 1.5, paint::INK);
-            paint::text(
-                &mut decoration,
-                w.width as f32 - 24.0,
-                9.0,
-                "X",
-                2.0,
-                paint::INK,
-            );
-            for inset in [5.0, 9.0] {
-                paint::rect(
-                    &mut decoration,
-                    w.width as f32 - 12.0,
-                    w.height as f32 - inset,
-                    8.0,
-                    2.0,
-                    paint::INK,
-                );
-            }
-            view.set_node_scene(w.node, &decoration)?;
+            root = root.child(window_chrome(1000 + i as u64 * 10, w, title, active));
             if 112 + i as u32 * 120 + 120 < self.width.saturating_sub(212) {
-                paint::button(
-                    &mut frame,
-                    112.0 + i as f32 * 120.0,
-                    y + 6.0,
-                    116.0,
-                    &title.chars().take(9).collect::<String>(),
-                    active,
+                root = root.child(
+                    Button::new(
+                        2000 + i as u64 * 2,
+                        title.chars().take(9).collect::<String>(),
+                    )
+                    .active(active)
+                    .node()
+                    .style(format!(
+                        "x:{}px;y:{}px;width:116px;height:32px;",
+                        112.0 + i as f32 * 120.0,
+                        y + 6.0
+                    )),
                 );
             }
         }
-        // The launcher is a compositor child after every window, so it also owns hit testing.
         if self.launcher {
-            let mut menu = paint::scene(
-                340,
-                (self.snapshot.apps.len().max(1).min(10) as u32 * 38 + 40).min(self.height - 48),
-                [28, 38, 56, 255],
-            );
+            let menu_height =
+                (self.snapshot.apps.len().max(1).min(10) as u32 * 38 + 40).min(self.height - 48);
+            let mut menu = Node::element(3000, "section")
+                .class(CLASS_PANEL)
+                .style(format!(
+                    "x:0px;y:0px;width:340px;height:{menu_height}px;background:var(--bex-panel);"
+                ));
             if self.snapshot.apps.is_empty() {
-                paint::text(&mut menu, 16.0, 24.0, "NO GRAPHICAL APPS", 2.0, paint::INK);
+                menu = menu.child(label(
+                    3001,
+                    16.0,
+                    24.0,
+                    300.0,
+                    24.0,
+                    "NO GRAPHICAL APPS",
+                    CLASS_MUTED,
+                ));
             }
             for (i, (_, name)) in self
                 .snapshot
@@ -106,35 +99,91 @@ impl Desktop {
                 .take(10)
                 .enumerate()
             {
-                paint::button(
-                    &mut menu,
-                    8.0,
-                    20.0 + i as f32 * 38.0,
-                    324.0,
-                    &name.chars().take(25).collect::<String>(),
-                    false,
+                menu = menu.child(
+                    Button::new(
+                        3020 + i as u64 * 2,
+                        name.chars().take(25).collect::<String>(),
+                    )
+                    .node()
+                    .style(format!(
+                        "x:8px;y:{}px;width:324px;height:32px;",
+                        20.0 + i as f32 * 38.0
+                    )),
                 );
             }
-            // Reuse the menu node while open; closing releases it below.
-            let _ = view.create_node(50, view.root_node());
-            view.set_node_scene(50, &menu)?;
-            view.order_child(50, self.windows.len() as u32)?;
-        } else {
-            let _ = view.remove_child(50);
+            root = root.child(menu);
         }
         if !self.error.is_empty() {
-            paint::text(
-                &mut frame,
+            root = root.child(label(
+                4000,
                 24.0,
                 self.height as f32 - 66.0,
+                self.width as f32 - 48.0,
+                18.0,
                 &self.error,
-                1.0,
-                [255, 180, 170, 255],
-            );
+                CLASS_ERROR,
+            ));
         }
-        view.submit(&frame)?;
+        let document = Document {
+            version: bexos_dioxus_guest::dom::VERSION,
+            width: self.width,
+            height: self.height,
+            scale: 1.0,
+            clear_rgba: [27, 48, 68, 255],
+            stylesheets: vec![],
+            author_stylesheets: vec![component_css()],
+            root,
+        };
+        view.submit_document(&document)?;
         self.dirty = false;
 
         Ok(())
     }
+}
+
+fn window_chrome(
+    id: u64,
+    w: &bexos_shell_guest::windows::Window,
+    title: &str,
+    active: bool,
+) -> Node {
+    Node::element(id, "section")
+        .class(CLASS_PANEL)
+        .style(format!(
+            "x:{}px;y:{}px;width:{}px;height:{}px;background:{};",
+            w.x,
+            w.y,
+            w.width,
+            w.height,
+            if active { "#3c5c88" } else { "#2b384c" }
+        ))
+        .child(label(id + 1, 10.0, 9.0, 180.0, 18.0, title, CLASS_MUTED))
+        .child(label(
+            id + 2,
+            w.width as f32 - 24.0,
+            9.0,
+            16.0,
+            18.0,
+            "X",
+            CLASS_MUTED,
+        ))
+        .child(Node::element(id + 3, "div").style(format!(
+            "x:{}px;y:{}px;width:8px;height:2px;background:var(--bex-ink);",
+            w.width as f32 - 12.0,
+            w.height as f32 - 5.0
+        )))
+        .child(Node::element(id + 4, "div").style(format!(
+            "x:{}px;y:{}px;width:8px;height:2px;background:var(--bex-ink);",
+            w.width as f32 - 12.0,
+            w.height as f32 - 9.0
+        )))
+}
+
+fn label(id: u64, x: f32, y: f32, width: f32, height: f32, value: &str, class: &str) -> Node {
+    Node::element(id, "div")
+        .class(class)
+        .style(format!(
+            "x:{x}px;y:{y}px;width:{width}px;height:{height}px;"
+        ))
+        .child(Node::text(id + 1, value))
 }

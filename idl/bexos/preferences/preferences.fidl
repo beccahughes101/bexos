@@ -56,3 +56,26 @@ protocol ConfigObserver {
     3: Commit(struct { transaction_id uint64; generation uint64; }) -> (struct { status Status; transaction_id uint64; generation uint64; });
     4: Abort(struct { transaction_id uint64; generation uint64; });
 };
+
+struct ThemeMetadata {
+    generation uint64;
+    color_scheme string:32;
+    text_scale_percent uint32;
+    reduce_motion bool;
+};
+
+@discoverable
+protocol ThemeManager {
+    1: GetTheme(struct {}) -> (resource struct {
+        status Status; metadata ThemeMetadata; stylesheet vector<handle>:1; stylesheet_len uint64;
+    });
+    2: WatchTheme(resource struct { observer handle:CHANNEL; }) -> (resource struct {
+        status Status; metadata ThemeMetadata; stylesheet vector<handle>:1; stylesheet_len uint64;
+    });
+};
+
+protocol ThemeObserver {
+    1: OnThemeChanged(resource struct {
+        metadata ThemeMetadata; stylesheet handle:VMO; stylesheet_len uint64;
+    });
+};

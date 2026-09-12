@@ -18,5 +18,12 @@ services_exposed {
  capabilities { capability: "Public" method_ordinals: 1 method_ordinals: 2 method_ordinals: 3 }
  capabilities { capability: "ManageUserPreferences" permission: "bexos.permission.MANAGE_USER_PREFERENCES" method_ordinals: 4 }
 }
+services_exposed {
+ name: "bexos.ui.theme.ThemeManager"
+ protocol: "ThemeManager"
+ lifecycle: SINGLETON
+ visibility: PUBLIC
+ capabilities { capability: "Public" method_ordinals: 1 method_ordinals: 2 }
+}
 services_consumed { name: "bexos.service.vfsd" link_type: REQUIRED capabilities { capability: "Public" methods { ordinal: 61 link_type: REQUIRED } methods { ordinal: 62 link_type: REQUIRED } } }
 services_consumed { name: "bexos.user.UserManager" link_type: REQUIRED capabilities { capability: "Public" methods { ordinal: 1 link_type: REQUIRED } methods { ordinal: 2 link_type: REQUIRED } methods { ordinal: 8 link_type: REQUIRED } } }

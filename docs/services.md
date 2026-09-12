@@ -41,13 +41,21 @@ schemas and provides caller-bound service endpoints. Ordinary applications
 access their own package/UID; explicit-UID management is brokered through
 privileged debugd.
 
+Prefsd also exposes the public `bexos.ui.theme.ThemeManager` for the
+config-only `bexos.ui.theme` package. `GetTheme` returns the caller UID's
+resolved theme metadata plus a read-only stylesheet VMO. `WatchTheme` registers
+a bounded observer channel and receives the same stylesheet payload after a
+durable theme-affecting preference commit. Theme observers are included in
+prefsd heart-transplant state so shell theme redraws survive service
+replacement.
+
 Nonzero-UID records exist only inside the unlocked encrypted user home;
 lock/delete clears cached preferences and revokes user connections. UID 0 and
 operator policy use prefsd's system data directory. Compatible schema versions
 share preferences; incompatible schemas start from assembly/operator defaults.
 The service includes bounded migration records and transfers authenticated
-clients, observers, schemas, policy, generations, and pending transaction state
-through heart transplant. Appd and prefsd declare an explicit one-second service
+clients, config observers, theme observers, schemas, policy, generations, and
+pending transaction state through heart transplant. Appd and prefsd declare an explicit one-second service
 cutover budget in their prototxt manifests so x86_64 TCG acceptance keeps the
 same handover semantics without tripping the 150 ms default jitter budget.
 
@@ -59,7 +67,8 @@ and UID bindings, compatible package versions, interrupted durable writes,
 recovery, receiver coordination, and migration records:
 
 ```sh
-bazel test //lib/component_config:tests //services/prefsd:prefsd_tests \
+bazel test //lib/component_config:tests //lib/ui/theme:tests \
+  //services/prefsd:prefsd_tests \
   //lib/userspace:userspace_tests //tools/assembly:assembly_tests \
   //services/appd:appd_tests //services/debugd:debugd_tests \
   //lib/debug_wire:debug_wire_tests //host/debug_client:debug_client_tests \

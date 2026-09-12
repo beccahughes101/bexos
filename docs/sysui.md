@@ -1,8 +1,9 @@
 # System and User UI
 
 The graphical product bundles `bexos.app.sysui` and `bexos.app.userui`. Both are
-Dioxus WASM services using the native renderer and shared
-`com.bexos.lib.dioxus` package (version 0.2). Appd starts the selected
+Dioxus WASM services using the native renderer, shared
+`com.bexos.lib.dioxus` package (version 0.2), and first-party `//lib/ui`
+component prelude. Appd starts the selected
 SysUI as UID 0. Usersd verifies passwords and unlocks the user's existing vault;
 only then does appd resolve and launch that user's desktop. Nongui products do
 not include or start either shell.
@@ -121,6 +122,12 @@ Read-only session queries remain available during replacement so an outstanding
 guest request can complete before checkpointing. The runner snapshots between
 dispatches, retains the previous bulk snapshot if a refresh fails, and defers
 cutover until the current dispatch and rendering work are complete.
+SysUI and UserUI submit retained Dioxus documents for their own shell chrome and
+controls. The runner stores those document bytes in UI migration state and
+re-renders them when `prefsd` reports a new `bexos.ui.theme` generation, so
+theme, text scale, reduce-motion, and high-contrast updates do not require shell
+restart. Embedded application windows remain separate child views managed through
+the existing Flatland reference APIs.
 The authenticated WASM runner embeds build-time Pulley artifacts for the exact
 composed default SysUI, UserUI, and Dioxus demo components, in addition to Brush.
 An exact SHA-256 digest of the raw composed component selects each artifact;
@@ -163,11 +170,13 @@ replacements can exhaust the table. Recovery requires a reboot. The acceptance
 fixture splits window interaction and recovery/selection scenarios across three
 boots of one persistent disk to stay within that limit.
 
-Shell package selection is intentionally declarative. There is no graphical
-package picker, compatibility probe, or package installation flow. An operator
-or user installs a compatible package and writes its package ID with the CLI.
-Fallback reports an invalid selection and preserves it for diagnosis; it does
-not repair or disable that preference automatically.
+Shell package selection and theming are intentionally declarative. There is no
+graphical package picker, compatibility probe, package installation flow, or
+theme editor yet. An operator or user installs a compatible package and writes
+its package ID with the CLI; theme fields live in the typed
+`bexos.ui.theme` preference package. Fallback reports an invalid selection and
+preserves it for diagnosis; it does not repair or disable that preference
+automatically.
 
 The AArch64 end-to-end path is fully recorded below. The same complete x86_64
 acceptance target is still a validation gap at this revision; the focused x86_64

@@ -384,8 +384,12 @@ impl Runtime {
                 }
                 return;
             }
+            {
+                let p = candidate.pending.as_mut().unwrap();
+                let _ = p.transaction.durable_commit();
+            }
+            crate::wire::broadcast_theme_changes(&mut candidate, &mutation);
             let p = candidate.pending.as_mut().unwrap();
-            let _ = p.transaction.durable_commit();
             for snapshot in &p.snapshots {
                 let generation = bexos_component_config::ConfigTable::parse(&snapshot.bytes)
                     .unwrap()

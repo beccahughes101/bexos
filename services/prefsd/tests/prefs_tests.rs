@@ -258,12 +258,18 @@ fn transplant_chunks_large_records_and_retains_authenticated_clients() {
         methods: vec![1, 2, 3],
         admin: false,
         manage: false,
+        theme: false,
     });
     r.service.observers.push(Observer {
         channel: 5,
         package: "app.test@1".into(),
         uid: 5,
         registered: true,
+    });
+    r.service.theme_observers.push(ThemeObserver {
+        channel: 6,
+        uid: 5,
+        generation: 9,
     });
     for p in r.service.packages.values_mut() {
         p.schema.fields.push(Field {
@@ -294,7 +300,7 @@ fn transplant_chunks_large_records_and_retains_authenticated_clients() {
     next.finish_adoption().unwrap();
     assert_eq!(next.clients, r.clients);
     assert_eq!(next.service, r.service);
-    assert_eq!(next.resources().len(), 5);
+    assert_eq!(next.resources().len(), 6);
 }
 
 #[test]

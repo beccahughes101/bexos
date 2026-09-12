@@ -1,0 +1,41 @@
+package_name: "bexos.ui.theme"
+name: "BexOS UI theme preferences"
+package_version { major: 0 minor: 1 patch: 0 }
+config_schema {
+  fields {
+    name: "color_scheme"
+    type: CONFIG_STRING
+    max_size: 32
+    scope: SCOPE_MDM_LOCKABLE
+    default_value { string_value: "dark" }
+    string_enum { values: "light" values: "dark" values: "high_contrast" }
+    display_name: "Color scheme"
+    description: "Resolved shell color scheme."
+  }
+  fields {
+    name: "text_scale_percent"
+    type: CONFIG_UINT32
+    scope: SCOPE_MDM_LOCKABLE
+    default_value { uint32_value: 100 }
+    uint_range { min: 75 max: 300 }
+    display_name: "Text scale"
+    description: "Shell text scaling percentage."
+  }
+  fields {
+    name: "reduce_motion"
+    type: CONFIG_BOOL
+    scope: SCOPE_MDM_LOCKABLE
+    default_value { bool_value: false }
+    display_name: "Reduce motion"
+    description: "Disable nonessential shell animation."
+  }
+  fields {
+    name: "custom_css"
+    type: CONFIG_STRING
+    max_size: 65536
+    scope: SCOPE_MDM_LOCKABLE
+    default_value { string_value: "" }
+    display_name: "Custom CSS"
+    description: "Bounded user-origin shell CSS."
+  }
+}

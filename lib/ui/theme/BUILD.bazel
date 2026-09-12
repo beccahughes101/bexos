@@ -1,0 +1,30 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "theme",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "bexos_ui_theme",
+    edition = "2024",
+    deps = ["//lib/component_config"],
+)
+
+rust_test(
+    name = "tests",
+    crate = ":theme",
+)
+
+app_manifest(
+    name = "manifest",
+    src = "package/manifest.prototxt",
+    architecture = "MULTI",
+)
+
+app_archive(
+    name = "theme_archive",
+    manifest = ":manifest",
+    compression = "zstd",
+)

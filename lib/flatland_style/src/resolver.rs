@@ -70,10 +70,12 @@ impl Resolver {
         let mut stylist = Stylist::new(device, QuirksMode::NoQuirks);
         {
             let guard = theme.lock().read();
-            stylist.append_stylesheet(
-                style::stylesheets::DocumentStyleSheet(theme.stylesheet().clone()),
-                &guard,
-            );
+            for stylesheet in theme.stylesheets() {
+                stylist.append_stylesheet(
+                    style::stylesheets::DocumentStyleSheet(stylesheet.clone()),
+                    &guard,
+                );
+            }
             stylist.flush(&StylesheetGuards::same(&guard));
         }
         Ok(Self {
@@ -87,17 +89,21 @@ impl Resolver {
         })
     }
     pub fn update_theme(&mut self, css: &str) -> Result<bool, Error> {
-        let old = self.theme.stylesheet().clone();
+        let old = self.theme.stylesheets().to_vec();
         if !self.theme.update(css)? {
             return Ok(false);
         }
         let guard = self.theme.lock().read();
-        self.stylist
-            .remove_stylesheet(style::stylesheets::DocumentStyleSheet(old), &guard);
-        self.stylist.append_stylesheet(
-            style::stylesheets::DocumentStyleSheet(self.theme.stylesheet().clone()),
-            &guard,
-        );
+        for stylesheet in old {
+            self.stylist
+                .remove_stylesheet(style::stylesheets::DocumentStyleSheet(stylesheet), &guard);
+        }
+        for stylesheet in self.theme.stylesheets() {
+            self.stylist.append_stylesheet(
+                style::stylesheets::DocumentStyleSheet(stylesheet.clone()),
+                &guard,
+            );
+        }
         self.stylist.flush(&StylesheetGuards::same(&guard));
         self.invalidated = true;
         Ok(true)

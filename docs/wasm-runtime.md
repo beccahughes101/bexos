@@ -168,7 +168,7 @@ scope IDs must be zero. Stdin is closed when no input facility is available;
 terminal handles are unavailable. The runtime provides UTC timezone information.
 WASI 0.1 preview1 imports are not implemented.
 
-`lib/wasm_runtime/wit/bexos.wit` defines `bexos:wasm@1.0.0` kernel, sandbox, and
+`lib/wasm_runtime/wit/bexos.wit` defines `bexos:wasm@1.0.0` kernel, sandbox, UI, and
 lifecycle interfaces. Core modules use versioned imports under
 `bexos:kernel/ipc@1.0.0`, `bexos:kernel/time@1.0.0`, and
 `bexos:wasm/sandbox@1.0.0`. Service components import the same checked kernel
@@ -189,7 +189,11 @@ authority. Unsigned children receive private
 computation resources and bounded, handle-free parent messages. They cannot
 receive filesystem, network, hardware, or arbitrary channel handles, including
 later transfers. Unsigned children cannot receive filesystem, network, hardware, arbitrary channel,
-or graphics/display grants. The Dioxus interface includes direct scene submission for renderer tests and `submit-document` for normal apps; the shared component resolves the supported document/CSS/layout/text subset before using the host UI scene interface. Dioxus UI apps receive graphics access only through
+or graphics/display grants. The Dioxus interface includes direct scene
+submission for renderer tests and `submit-document` for normal apps; the shared
+component forwards bounded documents to the native UI host interface. The runner
+owns Stylo/Taffy rendering state, retained document bytes, theme redraws, and
+scene presentation. Dioxus UI apps receive graphics access only through
 authenticated parent process grants checked by the native runner. JS packaging
 remains future work.
 

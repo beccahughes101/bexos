@@ -29,6 +29,8 @@ struct View {
     scale: f32,
     assets: BTreeMap<u32, Asset>,
     releases: Vec<(u64, u64)>,
+    retained_document: Option<Vec<u8>>,
+    theme_generation: u64,
     last_sequence: u64,
     scene_generation: u64,
     renderer: UiRenderer,
@@ -93,6 +95,8 @@ impl UiState {
                 scale: 1.0,
                 assets: BTreeMap::new(),
                 releases: Vec::new(),
+                retained_document: None,
+                theme_generation: 0,
                 last_sequence: 0,
                 scene_generation: 0,
                 renderer: UiRenderer::new(display, gpu_allowed),
@@ -157,55 +161,119 @@ impl UiState {
     }
     pub fn submit_scene(&mut self, view: u32, batch: &[u8]) -> Result<()> {
         let view = self.views.get_mut(&view).ok_or_else(missing_view)?;
-        retire_releases(view);
-        if view.releases.len() >= 2 {
-            bail!("presentation queue full");
+        view.retained_document = None;
+        submit_batch(view, batch)
+    }
+
+    pub fn submit_document(
+        &mut self,
+        id: u32,
+        document: &[u8],
+        theme: &bexos_ui_runtime::RuntimeTheme,
+    ) -> Result<()> {
+        let view = self.views.get_mut(&id).ok_or_else(missing_view)?;
+        let document = bexos_dioxus_dom::Document::decode(document)
+            .map_err(|error| wasmtime::format_err!("document validation: {error:?}"))?;
+        if document.width != view.width || document.height != view.height {
+            bail!("document dimensions do not match view");
         }
-        let batch = bexos_dioxus_scene::SceneBatch::decode(batch)
-            .map_err(|error| wasmtime::format_err!("scene validation: {error:?}"))?;
-        if batch.width != view.width || batch.height != view.height {
-            bail!("scene dimensions do not match view");
-        }
-        validate_assets(view, &batch)?;
-        let frame = view.renderer.render(&batch)?;
-        let mut session = Session::new(Channel(view.flatland.native()));
-        if let Err(status) = session.content(view.node_id, frame.handle, frame.surface) {
-            drop(frame);
-            bail!("flatland content: {status:?}");
-        }
-        drop(frame);
-        let (signal, acquire) =
-            Channel::pair().map_err(|error| wasmtime::format_err!("acquire fence: {error:?}"))?;
-        let (release, notify) =
-            Channel::pair().map_err(|error| wasmtime::format_err!("release fence: {error:?}"))?;
-        let sequence = match session.present_with_fences(0, acquire.0, notify.0) {
-            Ok(sequence) => sequence,
-            Err(status) => {
-                let _ = Memory::close(signal.0);
-                let _ = Memory::close(acquire.0);
-                let _ = Memory::close(release.0);
-                let _ = Memory::close(notify.0);
-                bail!("flatland present: {status:?}");
-            }
-        };
-        signal
-            .send(&[], &[])
-            .map_err(|error| wasmtime::format_err!("signal acquire: {error:?}"))?;
-        let _ = Memory::close(signal.0);
-        let _ = Memory::close(acquire.0);
-        let _ = Memory::close(notify.0);
-        view.releases.push((sequence, release.0));
-        view.last_sequence = sequence;
-        if view.scene_generation == 0 {
-            bexos_userspace::log(&format!(
-                "wasm_runner: native UI first frame submitted backend={}\n",
-                view.renderer.backend()
-            ));
-        }
-        view.scene_generation = view.scene_generation.saturating_add(1);
+        let rendered = bexos_ui_runtime::render_document(&document, theme)
+            .map_err(|error| wasmtime::format_err!("document render: {error:?}"))?;
+        validate_assets(view, &rendered.batch)?;
+        let bytes = rendered
+            .batch
+            .encode()
+            .map_err(|error| wasmtime::format_err!("document scene encode: {error:?}"))?;
+        submit_batch(view, &bytes)?;
+        view.retained_document = Some(
+            document
+                .encode()
+                .map_err(|error| wasmtime::format_err!("document retain: {error:?}"))?,
+        );
+        view.theme_generation = rendered.theme_generation;
         Ok(())
     }
 
+    pub fn redraw_documents(&mut self, theme: &bexos_ui_runtime::RuntimeTheme) -> Result<()> {
+        for view in self.views.values_mut() {
+            let Some(bytes) = view.retained_document.clone() else {
+                continue;
+            };
+            let document = bexos_dioxus_dom::Document::decode(&bytes)
+                .map_err(|error| wasmtime::format_err!("retained document: {error:?}"))?;
+            let rendered = bexos_ui_runtime::render_document(&document, theme)
+                .map_err(|error| wasmtime::format_err!("document redraw: {error:?}"))?;
+            let scene = rendered
+                .batch
+                .encode()
+                .map_err(|error| wasmtime::format_err!("document scene encode: {error:?}"))?;
+            submit_batch(view, &scene)?;
+            view.theme_generation = rendered.theme_generation;
+        }
+        Ok(())
+    }
+
+    fn submit_scene_bytes(&mut self, view: u32, batch: &[u8]) -> Result<()> {
+        let view = self.views.get_mut(&view).ok_or_else(missing_view)?;
+        submit_batch(view, batch)
+    }
+
+    pub fn submit_scene_compat(&mut self, view: u32, batch: &[u8]) -> Result<()> {
+        self.submit_scene_bytes(view, batch)
+    }
+}
+
+fn submit_batch(view: &mut View, batch: &[u8]) -> Result<()> {
+    retire_releases(view);
+    if view.releases.len() >= 2 {
+        bail!("presentation queue full");
+    }
+    let batch = bexos_dioxus_scene::SceneBatch::decode(batch)
+        .map_err(|error| wasmtime::format_err!("scene validation: {error:?}"))?;
+    if batch.width != view.width || batch.height != view.height {
+        bail!("scene dimensions do not match view");
+    }
+    validate_assets(view, &batch)?;
+    let frame = view.renderer.render(&batch)?;
+    let mut session = Session::new(Channel(view.flatland.native()));
+    if let Err(status) = session.content(view.node_id, frame.handle, frame.surface) {
+        drop(frame);
+        bail!("flatland content: {status:?}");
+    }
+    drop(frame);
+    let (signal, acquire) =
+        Channel::pair().map_err(|error| wasmtime::format_err!("acquire fence: {error:?}"))?;
+    let (release, notify) =
+        Channel::pair().map_err(|error| wasmtime::format_err!("release fence: {error:?}"))?;
+    let sequence = match session.present_with_fences(0, acquire.0, notify.0) {
+        Ok(sequence) => sequence,
+        Err(status) => {
+            let _ = Memory::close(signal.0);
+            let _ = Memory::close(acquire.0);
+            let _ = Memory::close(release.0);
+            let _ = Memory::close(notify.0);
+            bail!("flatland present: {status:?}");
+        }
+    };
+    signal
+        .send(&[], &[])
+        .map_err(|error| wasmtime::format_err!("signal acquire: {error:?}"))?;
+    let _ = Memory::close(signal.0);
+    let _ = Memory::close(acquire.0);
+    let _ = Memory::close(notify.0);
+    view.releases.push((sequence, release.0));
+    view.last_sequence = sequence;
+    if view.scene_generation == 0 {
+        bexos_userspace::log(&format!(
+            "wasm_runner: native UI first frame submitted backend={}\n",
+            view.renderer.backend()
+        ));
+    }
+    view.scene_generation = view.scene_generation.saturating_add(1);
+    Ok(())
+}
+
+impl UiState {
     pub fn poll_input(&mut self, view: u32) -> Result<Vec<UiInputEvent>> {
         let view = self.views.get_mut(&view).ok_or_else(missing_view)?;
         let mut session = Session::new(Channel(view.flatland.native()));
@@ -273,7 +341,7 @@ impl UiState {
     pub fn encode(&self) -> Result<Vec<u8>, bexos_migration::Error> {
         use bexos_migration::{Error, codec::Encoder};
         let mut w = Encoder::new();
-        w.word(1);
+        w.word(2);
         w.word(self.next_view as u64);
         w.word(self.views.len() as u64);
         let mut assets = 0usize;
@@ -285,6 +353,7 @@ impl UiState {
                 v.width as u64,
                 v.height as u64,
                 v.scale.to_bits() as u64,
+                v.theme_generation,
                 v.last_sequence,
                 v.scene_generation,
             ] {
@@ -305,6 +374,10 @@ impl UiState {
                 w.word(a.kind as u64);
                 w.bytes(&a.bytes);
             }
+            match &v.retained_document {
+                Some(document) => w.bytes(document),
+                None => w.bytes(&[]),
+            }
         }
         Ok(w.finish())
     }
@@ -317,7 +390,8 @@ impl UiState {
             return Ok(Self::new());
         }
         let mut r = Decoder::new(bytes);
-        if r.word()? != 1 {
+        let version = r.word()?;
+        if !(1..=2).contains(&version) {
             return Err(Error::UnsupportedVersion);
         }
         let next_view: u32 = r.word()?.try_into().map_err(|_| Error::Capacity)?;
@@ -346,6 +420,7 @@ impl UiState {
             let width: u32 = r.word()?.try_into().map_err(|_| Error::Capacity)?;
             let height: u32 = r.word()?.try_into().map_err(|_| Error::Capacity)?;
             let scale = f32::from_bits(r.word()?.try_into().map_err(|_| Error::Capacity)?);
+            let theme_generation = if version >= 2 { r.word()? } else { 0 };
             let last_sequence = r.word()?;
             let scene_generation = r.word()?;
             if id == 0
@@ -383,6 +458,18 @@ impl UiState {
                     return Err(Error::InvalidData);
                 }
             }
+            let retained_document = if version >= 2 {
+                let retained = r.bytes(bexos_dioxus_dom::MAX_DOCUMENT_BYTES)?.to_vec();
+                if retained.is_empty() {
+                    None
+                } else {
+                    bexos_dioxus_dom::Document::decode(&retained)
+                        .map_err(|_| Error::InvalidData)?;
+                    Some(retained)
+                }
+            } else {
+                None
+            };
             let view = View {
                 flatland,
                 node_id,
@@ -391,6 +478,8 @@ impl UiState {
                 scale,
                 assets,
                 releases,
+                retained_document,
+                theme_generation,
                 last_sequence,
                 scene_generation,
                 renderer: UiRenderer::new(None, false),
@@ -552,6 +641,22 @@ mod migration_tests {
                 scale: 1.,
                 assets: BTreeMap::new(),
                 releases: vec![(9, 99)],
+                retained_document: Some(
+                    bexos_dioxus_dom::Document {
+                        version: bexos_dioxus_dom::VERSION,
+                        width: 800,
+                        height: 600,
+                        scale: 1.,
+                        clear_rgba: [0, 0, 0, 0],
+                        stylesheets: Vec::new(),
+                        author_stylesheets: Vec::new(),
+                        root: bexos_dioxus_dom::Node::element(1, "main")
+                            .style("width:800px;height:600px"),
+                    }
+                    .encode()
+                    .unwrap(),
+                ),
+                theme_generation: 7,
                 last_sequence: 9,
                 scene_generation: 3,
                 renderer: UiRenderer::new(None, false),

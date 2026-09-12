@@ -38,6 +38,12 @@ pub struct Observer {
     pub registered: bool,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ThemeObserver {
+    pub channel: u64,
+    pub uid: u64,
+    pub generation: u64,
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Mutation {
     User {
         uid: u64,
@@ -68,6 +74,7 @@ pub struct Service {
     pub operators: BTreeMap<String, Operator>,
     pub preferences: BTreeMap<(u64, String, u64), Preferences>,
     pub observers: Vec<Observer>,
+    pub theme_observers: Vec<ThemeObserver>,
     pub locked: BTreeSet<u64>,
     pub pending: Option<Pending>,
     pub sequence: u64,

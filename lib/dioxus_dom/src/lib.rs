@@ -10,8 +10,10 @@
 use bexos_dioxus_scene::{
     Command, Glyph, GlyphRun, ImageCommand, Layer, Paint, PathCommand, Point, Rect, SceneBatch,
 };
+use std::collections::BTreeMap;
 
-pub const VERSION: u32 = 1;
+pub const LEGACY_VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 pub const MAX_DOCUMENT_BYTES: usize = 1 << 20;
 pub const MAX_NODES: usize = 2048;
 pub const MAX_RULES: usize = 256;
@@ -25,11 +27,13 @@ pub const LISTENER_FOCUS: u32 = 16;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Document {
+    pub version: u32,
     pub width: u32,
     pub height: u32,
     pub scale: f32,
     pub clear_rgba: [u8; 4],
     pub stylesheets: Vec<StyleRule>,
+    pub author_stylesheets: Vec<String>,
     pub root: Node,
 }
 
@@ -37,6 +41,15 @@ pub struct Document {
 pub struct StyleRule {
     pub selector: String,
     pub declarations: String,
+    pub origin: StyleOrigin,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum StyleOrigin {
+    UserAgent,
+    User,
+    #[default]
+    Author,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -44,7 +57,9 @@ pub struct Node {
     pub id: u64,
     pub tag: String,
     pub classes: Vec<String>,
+    pub attributes: BTreeMap<String, String>,
     pub declarations: String,
+    pub state: u64,
     pub listeners: u32,
     pub kind: NodeKind,
     pub children: Vec<Node>,
@@ -138,6 +153,11 @@ impl Document {
         for rule in &self.stylesheets {
             write_string(&mut out, &rule.selector)?;
             write_string(&mut out, &rule.declarations)?;
+            write_u32(&mut out, rule.origin.to_wire());
+        }
+        write_count(&mut out, self.author_stylesheets.len(), MAX_RULES)?;
+        for sheet in &self.author_stylesheets {
+            write_string(&mut out, sheet)?;
         }
         encode_node(&mut out, &self.root)?;
         if out.len() > MAX_DOCUMENT_BYTES {
@@ -151,7 +171,11 @@ impl Document {
             return Err(Error::LimitExceeded);
         }
         let mut reader = Reader::new(bytes);
-        if reader.u32()? != VERSION {
+        let version = reader.u32()?;
+        if version == LEGACY_VERSION {
+            return Self::decode_v1(reader);
+        }
+        if version != VERSION {
             return Err(Error::InvalidVersion);
         }
         let width = reader.u32()?;
@@ -164,16 +188,54 @@ impl Document {
             stylesheets.push(StyleRule {
                 selector: reader.string()?,
                 declarations: reader.string()?,
+                origin: StyleOrigin::from_wire(reader.u32()?)?,
             });
+        }
+        let sheet_count = reader.count(MAX_RULES)?;
+        let mut author_stylesheets = Vec::with_capacity(sheet_count);
+        for _ in 0..sheet_count {
+            author_stylesheets.push(reader.string()?);
         }
         let root = decode_node(&mut reader)?;
         reader.finish()?;
         let document = Self {
+            version,
             width,
             height,
             scale,
             clear_rgba,
             stylesheets,
+            author_stylesheets,
+            root,
+        };
+        document.validate()?;
+        Ok(document)
+    }
+
+    fn decode_v1(mut reader: Reader<'_>) -> Result<Self, Error> {
+        let width = reader.u32()?;
+        let height = reader.u32()?;
+        let scale = reader.f32()?;
+        let clear_rgba = reader.bytes4()?;
+        let rule_count = reader.count(MAX_RULES)?;
+        let mut stylesheets = Vec::with_capacity(rule_count);
+        for _ in 0..rule_count {
+            stylesheets.push(StyleRule {
+                selector: reader.string()?,
+                declarations: reader.string()?,
+                origin: StyleOrigin::Author,
+            });
+        }
+        let root = decode_node_v1(&mut reader)?;
+        reader.finish()?;
+        let document = Self {
+            version: LEGACY_VERSION,
+            width,
+            height,
+            scale,
+            clear_rgba,
+            stylesheets,
+            author_stylesheets: Vec::new(),
             root,
         };
         document.validate()?;
@@ -193,13 +255,19 @@ impl Document {
         if self.stylesheets.len() > MAX_RULES {
             return Err(Error::LimitExceeded);
         }
+        let legacy_style_validation = self.version <= LEGACY_VERSION;
         for rule in &self.stylesheets {
             validate_string(&rule.selector)?;
             validate_string(&rule.declarations)?;
-            let _ = parse_declarations(&rule.declarations)?;
+            if legacy_style_validation {
+                let _ = parse_declarations(&rule.declarations)?;
+            }
+        }
+        for sheet in &self.author_stylesheets {
+            validate_string(sheet)?;
         }
         let mut count = 0usize;
-        validate_node(&self.root, &mut count)?;
+        validate_node(&self.root, &mut count, legacy_style_validation)?;
         Ok(())
     }
 }
@@ -210,7 +278,9 @@ impl Node {
             id,
             tag: tag.into(),
             classes: Vec::new(),
+            attributes: BTreeMap::new(),
             declarations: String::new(),
+            state: 0,
             listeners: 0,
             kind: NodeKind::Element,
             children: Vec::new(),
@@ -222,7 +292,9 @@ impl Node {
             id,
             tag: "#text".into(),
             classes: Vec::new(),
+            attributes: BTreeMap::new(),
             declarations: String::new(),
+            state: 0,
             listeners: 0,
             kind: NodeKind::Text(value.into()),
             children: Vec::new(),
@@ -234,7 +306,9 @@ impl Node {
             id,
             tag: "img".into(),
             classes: Vec::new(),
+            attributes: BTreeMap::new(),
             declarations: String::new(),
+            state: 0,
             listeners: 0,
             kind: NodeKind::Image { asset },
             children: Vec::new(),
@@ -248,6 +322,16 @@ impl Node {
 
     pub fn style(mut self, declarations: impl Into<String>) -> Self {
         self.declarations = declarations.into();
+        self
+    }
+
+    pub fn attribute(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.attributes.insert(key.into(), value.into());
+        self
+    }
+
+    pub fn state(mut self, state: u64) -> Self {
+        self.state = state;
         self
     }
 
@@ -664,19 +748,32 @@ fn byte(hex: &str, index: usize) -> Result<u8, Error> {
         .map_err(|_| Error::InvalidStyle)
 }
 
-fn validate_node(node: &Node, count: &mut usize) -> Result<(), Error> {
+fn validate_node(
+    node: &Node,
+    count: &mut usize,
+    legacy_style_validation: bool,
+) -> Result<(), Error> {
     *count = count.checked_add(1).ok_or(Error::LimitExceeded)?;
     if *count > MAX_NODES || node.id == 0 || node.children.len() > MAX_CHILDREN {
         return Err(Error::LimitExceeded);
     }
     validate_string(&node.tag)?;
     validate_string(&node.declarations)?;
-    let _ = parse_declarations(&node.declarations)?;
+    if legacy_style_validation {
+        let _ = parse_declarations(&node.declarations)?;
+    }
     if !matches!(node.kind, NodeKind::Element) && !node.children.is_empty() {
         return Err(Error::InvalidNode);
     }
     for class in &node.classes {
         validate_string(class)?;
+    }
+    if node.attributes.len() > 64 {
+        return Err(Error::LimitExceeded);
+    }
+    for (key, value) in &node.attributes {
+        validate_string(key)?;
+        validate_string(value)?;
     }
     if let NodeKind::Image { asset } = node.kind {
         if asset == 0 || asset as usize > bexos_dioxus_scene::MAX_ASSETS {
@@ -687,7 +784,7 @@ fn validate_node(node: &Node, count: &mut usize) -> Result<(), Error> {
         validate_string(value)?;
     }
     for child in &node.children {
-        validate_node(child, count)?;
+        validate_node(child, count, legacy_style_validation)?;
     }
     Ok(())
 }
@@ -707,7 +804,13 @@ fn encode_node(out: &mut Vec<u8>, node: &Node) -> Result<(), Error> {
     for class in &node.classes {
         write_string(out, class)?;
     }
+    write_count(out, node.attributes.len(), MAX_CHILDREN)?;
+    for (key, value) in &node.attributes {
+        write_string(out, key)?;
+        write_string(out, value)?;
+    }
     write_string(out, &node.declarations)?;
+    out.extend_from_slice(&node.state.to_le_bytes());
     write_u32(out, node.listeners);
     match &node.kind {
         NodeKind::Element => out.push(1),
@@ -735,7 +838,18 @@ fn decode_node(reader: &mut Reader<'_>) -> Result<Node, Error> {
     for _ in 0..class_count {
         classes.push(reader.string()?);
     }
+    let attribute_count = reader.count(MAX_CHILDREN)?;
+    let mut attributes = BTreeMap::new();
+    for _ in 0..attribute_count {
+        if attributes
+            .insert(reader.string()?, reader.string()?)
+            .is_some()
+        {
+            return Err(Error::InvalidNode);
+        }
+    }
     let declarations = reader.string()?;
+    let state = reader.u64()?;
     let listeners = reader.u32()?;
     let kind = match reader.byte()? {
         1 => NodeKind::Element,
@@ -754,11 +868,68 @@ fn decode_node(reader: &mut Reader<'_>) -> Result<Node, Error> {
         id,
         tag,
         classes,
+        attributes,
         declarations,
+        state,
         listeners,
         kind,
         children,
     })
+}
+
+fn decode_node_v1(reader: &mut Reader<'_>) -> Result<Node, Error> {
+    let id = reader.u64()?;
+    let tag = reader.string()?;
+    let class_count = reader.count(MAX_CHILDREN)?;
+    let mut classes = Vec::with_capacity(class_count);
+    for _ in 0..class_count {
+        classes.push(reader.string()?);
+    }
+    let declarations = reader.string()?;
+    let listeners = reader.u32()?;
+    let kind = match reader.byte()? {
+        1 => NodeKind::Element,
+        2 => NodeKind::Text(reader.string()?),
+        3 => NodeKind::Image {
+            asset: reader.u32()?,
+        },
+        _ => return Err(Error::InvalidNode),
+    };
+    let child_count = reader.count(MAX_CHILDREN)?;
+    let mut children = Vec::with_capacity(child_count);
+    for _ in 0..child_count {
+        children.push(decode_node_v1(reader)?);
+    }
+    Ok(Node {
+        id,
+        tag,
+        classes,
+        attributes: BTreeMap::new(),
+        declarations,
+        state: 0,
+        listeners,
+        kind,
+        children,
+    })
+}
+
+impl StyleOrigin {
+    fn to_wire(self) -> u32 {
+        match self {
+            Self::UserAgent => 1,
+            Self::User => 2,
+            Self::Author => 3,
+        }
+    }
+
+    fn from_wire(value: u32) -> Result<Self, Error> {
+        match value {
+            1 => Ok(Self::UserAgent),
+            2 => Ok(Self::User),
+            3 => Ok(Self::Author),
+            _ => Err(Error::InvalidStyle),
+        }
+    }
 }
 
 fn write_count(out: &mut Vec<u8>, value: usize, limit: usize) -> Result<(), Error> {
@@ -859,6 +1030,7 @@ mod tests {
 
     fn sample_document() -> Document {
         Document {
+            version: VERSION,
             width: 320,
             height: 200,
             scale: 1.0,
@@ -869,16 +1041,20 @@ mod tests {
                     declarations:
                         "display:flex;flex-direction:column;gap:8;padding:12;background:#f5f7fa"
                             .into(),
+                    origin: StyleOrigin::Author,
                 },
                 StyleRule {
                     selector: ".row".into(),
                     declarations: "display:flex;flex-direction:row;gap:8;background:#ecf0f1".into(),
+                    origin: StyleOrigin::Author,
                 },
                 StyleRule {
                     selector: ".tile".into(),
                     declarations: "background:#34495e;color:#ffffff;font-size:18".into(),
+                    origin: StyleOrigin::Author,
                 },
             ],
+            author_stylesheets: Vec::new(),
             root: Node::element(1, "main").class("root").children([
                 Node::element(2, "section").class("row").child(
                     Node::text(3, "counter 1")
@@ -924,8 +1100,9 @@ mod tests {
     }
 
     #[test]
-    fn malformed_css_is_rejected_before_scene_generation() {
+    fn legacy_document_validation_rejects_malformed_css_before_scene_generation() {
         let mut document = sample_document();
+        document.version = LEGACY_VERSION;
         document.stylesheets[0]
             .declarations
             .push_str("; position:absolute");
@@ -935,6 +1112,7 @@ mod tests {
     #[test]
     fn later_class_does_not_reset_unspecified_layout_values() {
         let document = Document {
+            version: VERSION,
             width: 120,
             height: 60,
             scale: 1.0,
@@ -943,12 +1121,15 @@ mod tests {
                 StyleRule {
                     selector: ".row".into(),
                     declarations: "display:flex;flex-direction:row".into(),
+                    origin: StyleOrigin::Author,
                 },
                 StyleRule {
                     selector: ".tone".into(),
                     declarations: "color:#ffffff".into(),
+                    origin: StyleOrigin::Author,
                 },
             ],
+            author_stylesheets: Vec::new(),
             root: Node::element(1, "main")
                 .class("row")
                 .class("tone")
@@ -984,11 +1165,13 @@ mod tests {
             root.children.push(Node::text(id, "x"));
         }
         let document = Document {
+            version: VERSION,
             width: 100,
             height: 100,
             scale: 1.0,
             clear_rgba: [0, 0, 0, 0],
             stylesheets: vec![],
+            author_stylesheets: Vec::new(),
             root,
         };
         assert_eq!(document.validate(), Err(Error::LimitExceeded));

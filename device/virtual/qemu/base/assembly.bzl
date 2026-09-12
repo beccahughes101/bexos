@@ -44,6 +44,7 @@ QEMU_PRODUCT_MANIFESTS = {
         "//lib/net:net_archive": "//lib/net:package_manifest",
         "//lib/tee_driver_software:tee_driver_software_archive": "//lib/tee_driver_software:package_manifest",
         "//lib/tee_driver_trusty:tee_driver_trusty_archive": "//lib/tee_driver_trusty:package_manifest",
+        "//lib/ui/theme:theme_archive": "//lib/ui/theme:manifest",
         "//services/appd:appd_elf": "//services/appd:package_manifest",
         "//services/usbd:usbd": "//services/usbd:package_manifest",
         "//services/wasm_runner:wasm_runner_archive": "//services/wasm_runner:package_manifest",

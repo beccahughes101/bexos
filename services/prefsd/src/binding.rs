@@ -9,6 +9,7 @@ pub struct Client {
     pub methods: Vec<u64>,
     pub admin: bool,
     pub manage: bool,
+    pub theme: bool,
 }
 impl Client {
     pub fn from_binding(channel: u64, b: &ServiceBinding) -> Option<Self> {
@@ -22,13 +23,21 @@ impl Client {
             .into();
         let admin =
             b.protocol == "PreferencesAdmin" && package == "bexos.platform.appd" && uid == 0;
+        let theme = b.service == "bexos.ui.theme.ThemeManager" && b.protocol == "ThemeManager";
         if !admin
+            && !theme
             && (b.service != "bexos.preferences.UserPreferences" || b.protocol != "UserPreferences")
         {
             return None;
         }
         let manage = !admin && b.capability == "ManageUserPreferences" && b.method_ordinals == [4];
+        if theme
+            && (b.capability != "Public" || b.method_ordinals.iter().any(|m| !matches!(m, 1 | 2)))
+        {
+            return None;
+        }
         if !admin
+            && !theme
             && !manage
             && (b.capability != "Public"
                 || b.method_ordinals.iter().any(|m| !matches!(m, 1 | 2 | 3)))
@@ -43,6 +52,7 @@ impl Client {
             methods: b.method_ordinals.clone(),
             admin,
             manage,
+            theme,
         })
     }
 }

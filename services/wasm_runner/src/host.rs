@@ -1,4 +1,4 @@
-use bexos_userspace::{Channel, Memory};
+use bexos_userspace::{Channel, Memory, preferences as pref_rpc};
 use bexos_wasm_runtime::{
     host::Host,
     resources::{Entry, Handle, Kind, READ, TRANSFER, WRITE},
@@ -14,6 +14,10 @@ use bexos_wasm_runtime::{
             },
         },
     },
+};
+use preferences_fidl::{
+    FidlDecode, HandleRef as PreferencesHandleRef, Status, ThemeManagerWatchThemeRequest,
+    ThemeManagerWatchThemeResponse, ThemeObserverOnThemeChangedRequest,
 };
 use std::sync::{Arc, Mutex};
 use wasmtime::{Result, bail};
@@ -82,13 +86,20 @@ pub fn entry(name: impl Into<String>, raw: u64, kind: Kind, rights: u32) -> Entr
 }
 pub struct NativeHost {
     pub trust: Mutex<Option<std::sync::Weak<dyn Handle>>>,
+    pub theme: Mutex<ThemeState>,
     pub fs_lock: Mutex<()>,
     pub ui: Mutex<ui::UiState>,
+}
+pub struct ThemeState {
+    manager: Option<Arc<dyn Handle>>,
+    observer: Option<Channel>,
+    current: bexos_ui_runtime::RuntimeTheme,
 }
 impl NativeHost {
     pub fn new() -> Self {
         Self {
             trust: Mutex::new(None),
+            theme: Mutex::new(ThemeState::default()),
             fs_lock: Mutex::new(()),
             ui: Mutex::new(ui::UiState::new()),
         }
@@ -97,9 +108,13 @@ impl NativeHost {
         if entry.name == "bexos.security.trust.AppTrustManager" {
             *self.trust.lock().unwrap() = Some(Arc::downgrade(&entry.handle));
         }
+        if entry.name == "bexos.ui.theme.ThemeManager" {
+            self.theme.lock().unwrap().observe(&*entry.handle);
+        }
     }
     pub fn replace_grants<'a>(&self, entries: impl Iterator<Item = &'a Entry>) {
         *self.trust.lock().unwrap() = None;
+        *self.theme.lock().unwrap() = ThemeState::default();
         for entry in entries {
             self.observe_grant(entry);
         }
@@ -108,6 +123,148 @@ impl NativeHost {
     pub fn ui_quiescent(&self) -> bool {
         self.ui.lock().unwrap().quiescent()
     }
+
+    fn refresh_theme(&self) -> bool {
+        self.theme.lock().unwrap().poll()
+    }
+}
+
+impl Default for ThemeState {
+    fn default() -> Self {
+        Self {
+            manager: None,
+            observer: None,
+            current: bexos_ui_runtime::RuntimeTheme::default(),
+        }
+    }
+}
+
+impl ThemeState {
+    fn observe(&mut self, handle: &dyn Handle) {
+        self.manager = Some(clone_handle(handle));
+    }
+
+    fn current(&self) -> bexos_ui_runtime::RuntimeTheme {
+        self.current.clone()
+    }
+
+    fn poll(&mut self) -> bool {
+        if self.observer.is_none() && self.manager.is_some() {
+            let _ = self.watch();
+        }
+        let Some(observer) = self.observer else {
+            return false;
+        };
+        let mut changed = false;
+        loop {
+            let message = match observer.try_recv() {
+                Ok(message) => message,
+                Err(kernel_fidl::Status::ErrPeerClosed) => {
+                    self.observer = None;
+                    break;
+                }
+                Err(_) => break,
+            };
+            let handles = pref_rpc::refs(&message);
+            if message.bytes.get(..8) != Some(&1u64.to_le_bytes()[..]) {
+                for handle in message.handles {
+                    let _ = Memory::close(handle);
+                }
+                continue;
+            }
+            let Ok(request) =
+                ThemeObserverOnThemeChangedRequest::decode(&message.bytes[8..], &handles)
+            else {
+                for handle in message.handles {
+                    let _ = Memory::close(handle);
+                }
+                continue;
+            };
+            if let Ok(css) = pref_rpc::read_vmo(request.stylesheet.raw, request.stylesheet_len) {
+                self.current = theme_from_parts(
+                    request.metadata.generation,
+                    request.metadata.color_scheme,
+                    request.metadata.text_scale_percent,
+                    request.metadata.reduce_motion,
+                    css,
+                );
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    fn watch(&mut self) -> Result<()> {
+        let Some(manager) = self.manager.clone() else {
+            return Ok(());
+        };
+        let (client, server) =
+            Channel::pair().map_err(|error| wasmtime::format_err!("theme observer: {error:?}"))?;
+        let request = ThemeManagerWatchThemeRequest {
+            observer: PreferencesHandleRef { raw: server.0 },
+        };
+        let message = pref_rpc::call(Channel(manager.native()), 2, &request)
+            .map_err(|error| wasmtime::format_err!("theme watch: {error:?}"))?;
+        let handles = pref_rpc::refs(&message);
+        let response = ThemeManagerWatchThemeResponse::decode(&message.bytes, &handles)
+            .map_err(|_| wasmtime::format_err!("theme watch response"))?;
+        if response.status != Status::Ok {
+            let _ = Memory::close(client.0);
+            return Ok(());
+        }
+        let Some(stylesheet) = response.stylesheet.first() else {
+            let _ = Memory::close(client.0);
+            return Ok(());
+        };
+        let css = pref_rpc::read_vmo(stylesheet.raw, response.stylesheet_len)
+            .map_err(|error| wasmtime::format_err!("theme stylesheet: {error:?}"))?;
+        self.current = theme_from_parts(
+            response.metadata.generation,
+            response.metadata.color_scheme,
+            response.metadata.text_scale_percent,
+            response.metadata.reduce_motion,
+            css,
+        );
+        self.observer = Some(client);
+        Ok(())
+    }
+}
+
+fn theme_from_parts(
+    generation: u64,
+    color_scheme: &str,
+    text_scale_percent: u32,
+    reduce_motion: bool,
+    css: Vec<u8>,
+) -> bexos_ui_runtime::RuntimeTheme {
+    let mut preferences = bexos_ui_theme::ThemePreferences {
+        color_scheme: bexos_ui_theme::ColorScheme::parse(color_scheme)
+            .unwrap_or(bexos_ui_theme::ColorScheme::Dark),
+        text_scale_percent: text_scale_percent.clamp(75, 300),
+        reduce_motion,
+        custom_css: String::new(),
+    };
+    let user_css = String::from_utf8(css).unwrap_or_else(|_| preferences.user_css());
+    if user_css.is_empty() {
+        preferences.custom_css.clear();
+    }
+    bexos_ui_runtime::RuntimeTheme {
+        generation,
+        preferences,
+        user_css,
+    }
+}
+
+fn clone_handle(handle: &dyn Handle) -> Arc<dyn Handle> {
+    Arc::new(NativeHandle {
+        raw: handle.native(),
+        kind: handle.kind(),
+        rights: handle.rights(),
+        companions: handle.companions().to_vec(),
+        allowed_methods: handle.allowed_methods().map(|methods| methods.to_vec()),
+        grant: handle.grant().cloned(),
+        ownership: Some(Arc::new(std::sync::atomic::AtomicBool::new(false))),
+    })
 }
 impl Host for NativeHost {
     fn channel_pair(&self) -> Result<(Arc<dyn Handle>, Arc<dyn Handle>)> {
@@ -292,13 +449,29 @@ impl Host for NativeHost {
     fn ui_submit_scene(&self, view: u32, batch: &[u8]) -> Result<()> {
         self.ui.lock().unwrap().submit_scene(view, batch)
     }
+    fn ui_submit_document(&self, view: u32, document: &[u8]) -> Result<()> {
+        self.refresh_theme();
+        let theme = self.theme.lock().unwrap().current();
+        self.ui
+            .lock()
+            .unwrap()
+            .submit_document(view, document, &theme)
+    }
     fn ui_poll_input(&self, view: u32) -> Result<Vec<bexos_wasm_runtime::host::UiInputEvent>> {
+        if self.refresh_theme() {
+            let theme = self.theme.lock().unwrap().current();
+            self.ui.lock().unwrap().redraw_documents(&theme)?;
+        }
         self.ui.lock().unwrap().poll_input(view)
     }
     fn ui_presentation_status(
         &self,
         view: u32,
     ) -> Result<bexos_wasm_runtime::host::UiPresentationStatus> {
+        if self.refresh_theme() {
+            let theme = self.theme.lock().unwrap().current();
+            self.ui.lock().unwrap().redraw_documents(&theme)?;
+        }
         self.ui.lock().unwrap().presentation_status(view)
     }
     fn ui_active_backend(&self, view: u32) -> Result<bexos_wasm_runtime::host::UiBackendStatus> {
