@@ -609,12 +609,29 @@ crate.spec(
 crate.spec(package = "wac-graph", version = "=0.10.1")
 crate.annotation(
     crate = "wasmtime",
+    build_script_env_files = ["@@//third_party/wasmtime:platform_env"],
     patches = ["//third_party/patches:wasmtime_bexos.patch", "//third_party/patches:wasmtime_stack_limits.patch"],
     patch_args = ["-p1"],
 )
-crate.annotation(crate = "wasmtime-internal-fiber", patches = ["//third_party/patches:wasmtime_fiber_bexos.patch"], patch_args = ["-p1"])
+crate.annotation(
+    crate = "wasmtime-internal-fiber",
+    build_script_env_files = ["@@//third_party/wasmtime:platform_env"],
+    patches = ["//third_party/patches:wasmtime_fiber_bexos.patch"],
+    patch_args = ["-p1"],
+)
 crate.spec(package = "wasmtime-wasi-io", version = "=48.0.1", default_features = False, features = ["std"])
-crate.spec(package = "wat", version = "1.252.0")
+# Preserve resolved versions when regenerating the platform annotations.
+crate.spec(package = "bitflags", version = "=2.13.1", default_features = False)
+crate.spec(package = "bytemuck_derive", version = "=1.12.0", default_features = False)
+crate.spec(package = "cranelift-assembler-x64", version = "=0.135.1", default_features = False)
+crate.spec(package = "cranelift-assembler-x64-meta", version = "=0.135.1", default_features = False)
+crate.spec(package = "cranelift-codegen-shared", version = "=0.135.1", default_features = False)
+crate.spec(package = "cranelift-control", version = "=0.135.1", default_features = False)
+crate.spec(package = "cranelift-srcgen", version = "=0.135.1", default_features = False)
+crate.spec(package = "encoding_rs", version = "=0.8.40", default_features = False)
+crate.spec(package = "hickory-proto", version = "=0.26.2", default_features = False)
+crate.spec(package = "smallvec", version = "=1.16.0", default_features = False)
+crate.spec(package = "wat", version = "=1.258.0")
 crate.from_specs(
     cargo_config = "//:.cargo/config.toml",
     supported_platform_triples = [

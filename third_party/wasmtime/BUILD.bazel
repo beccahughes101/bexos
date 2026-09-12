@@ -1,0 +1,12 @@
+package(default_visibility = ["//visibility:public"])
+
+# BexOS shares Rust's Linux target triples with native Linux hosts. Pass the
+# actual Bazel target platform to both Wasmtime build scripts instead.
+genrule(
+    name = "platform_env",
+    outs = ["platform.env"],
+    cmd = "echo BEXOS_GUEST=" + select({
+        "//build/platforms:is_bexos_userspace": "1",
+        "//conditions:default": "0",
+    }) + " > $@",
+)

@@ -1,13 +1,15 @@
 diff --git a/build.rs b/build.rs
 --- a/build.rs
 +++ b/build.rs
-@@ -13,7 +13,9 @@
+@@ -13,7 +13,11 @@
      // A boolean indicating whether there's a `sys` module for this platform.
      // This is true for `unix` or `windows`, but both of those require the `std`
      // feature to also be active so check that too.
 -    let supported_os = (unix || windows) && cfg!(feature = "std");
 +    // BexOS uses the Linux Rust target, but provides the custom runtime ABI.
-+    let bexos = (cfg_is("target_arch", "aarch64") || cfg_is("target_arch", "x86_64")) && cfg_is("target_os", "linux");
++    println!("cargo:rerun-if-env-changed=BEXOS_GUEST");
++    let bexos = std::env::var("BEXOS_GUEST").as_deref() == Ok("1");
++    custom_cfg("bexos_guest", bexos);
 +    let supported_os = (unix || windows) && cfg!(feature = "std") && !bexos;
  
      let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap();
@@ -20,7 +22,7 @@ diff --git a/src/runtime/vm/sys/mod.rs b/src/runtime/vm/sys/mod.rs
          pub use miri::*;
      }
 -    not(feature = "std") => {
-+    any(not(feature = "std"), all(any(target_arch = "aarch64", target_arch = "x86_64"), target_os = "linux")) => {
++    any(not(feature = "std"), bexos_guest) => {
          mod custom;
          pub use custom::*;
      }
@@ -66,7 +68,7 @@ diff --git a/src/profiling_agent.rs b/src/profiling_agent.rs
  
  cfg_select! {
 -    all(unix, feature = "std") => {
-+    all(unix, feature = "std", not(all(any(target_arch = "aarch64", target_arch = "x86_64"), target_os = "linux"))) => {
++    all(unix, feature = "std", not(bexos_guest)) => {
          mod perfmap;
          pub use perfmap::new as new_perfmap;
      }

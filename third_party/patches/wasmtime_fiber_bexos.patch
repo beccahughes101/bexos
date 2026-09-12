@@ -6,7 +6,20 @@ diff --git a/src/lib.rs b/src/lib.rs
  
  cfg_select! {
 -    not(feature = "std") => {
-+    any(not(feature = "std"), all(any(target_arch = "aarch64", target_arch = "x86_64"), target_os = "linux")) => {
++    any(not(feature = "std"), bexos_guest) => {
          mod nostd;
          use nostd as imp;
          mod stackswitch;
+diff --git a/build.rs b/build.rs
+--- a/build.rs
++++ b/build.rs
+@@ -4,4 +4,9 @@
+ fn main() {
++    println!("cargo:rerun-if-env-changed=BEXOS_GUEST");
++    println!("cargo:rustc-check-cfg=cfg(bexos_guest)");
++    if env::var("BEXOS_GUEST").as_deref() == Ok("1") {
++        println!("cargo:rustc-cfg=bexos_guest");
++    }
+     let mut build = cc::Build::new();
+     let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
+     let os = env::var("CARGO_CFG_TARGET_OS").unwrap();
