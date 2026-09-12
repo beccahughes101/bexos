@@ -73,6 +73,10 @@ interface ui {
   register-asset: func(view: u32, asset: u32, kind: u32, bytes: list<u8>) -> result<_, string>;
   release-asset: func(view: u32, asset: u32) -> result<_, string>;
   submit-scene: func(view: u32, batch: list<u8>) -> result<_, string>;
+  /// Submit an encoded BexOS Dioxus document to the native renderer. The host
+  /// retains the last valid document so theme changes and migration restore can
+  /// redraw without guest state loss.
+  submit-document: func(view: u32, document: list<u8>) -> result<_, string>;
   set-node-scene: func(view: u32, node: u64, batch: list<u8>) -> result<_, string>;
   poll-input: func(view: u32) -> result<list<input-event>, string>;
   get-presentation-status: func(view: u32) -> result<presentation-status, string>;

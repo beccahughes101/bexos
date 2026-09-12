@@ -7,7 +7,7 @@ pub use taffy::{
     geometry::{Rect, Size},
     style::{
         AlignItems, AvailableSpace, Dimension, Display, FlexDirection, JustifyContent,
-        LengthPercentageAuto,
+        LengthPercentage, LengthPercentageAuto,
     },
 };
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

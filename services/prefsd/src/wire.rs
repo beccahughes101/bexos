@@ -1,7 +1,7 @@
 use crate::{
     binding::Client,
     runtime::{Runtime, now_ms},
-    service::{Observer, Package},
+    service::{Mutation, Observer, Package, Service, ThemeObserver},
 };
 use alloc::{
     collections::{BTreeMap, BTreeSet},
@@ -9,6 +9,7 @@ use alloc::{
     vec::Vec,
 };
 use bexos_component_config::schema::{Assignments, Error, Schema};
+use bexos_ui_theme::{PACKAGE_ID, ThemePreferences};
 use bexos_userspace::{Channel, Memory, preferences as rpc};
 use preferences_fidl::*;
 
@@ -84,11 +85,22 @@ pub fn poll(runtime: &mut Runtime) {
                     runtime.clients.retain(|c| c.channel != client.channel);
                     continue;
                 }
-                if message.handles.len() != usize::from(client.admin && ordinal == 12) {
+                let expected_handles = if client.admin && ordinal == 12 {
+                    1
+                } else if client.theme && ordinal == 2 {
+                    1
+                } else {
+                    0
+                };
+                if message.handles.len() != expected_handles {
                     for h in message.handles {
                         let _ = Memory::close(h);
                     }
-                    error_reply(client.channel, ordinal, Status::InvalidArgs);
+                    if client.theme {
+                        theme_error_reply(client.channel, ordinal, Status::InvalidArgs);
+                    } else {
+                        error_reply(client.channel, ordinal, Status::InvalidArgs);
+                    }
                     continue;
                 }
                 let hs = rpc::refs(&message);
@@ -112,7 +124,11 @@ pub fn poll(runtime: &mut Runtime) {
                     for h in message.handles {
                         let _ = Memory::close(h);
                     }
-                    error_reply(client.channel, ordinal, rpc::status(error));
+                    if client.theme {
+                        theme_error_reply(client.channel, ordinal, rpc::status(error));
+                    } else {
+                        error_reply(client.channel, ordinal, rpc::status(error));
+                    }
                 }
             }
             Err(kernel_fidl::Status::ErrPeerClosed) => {
@@ -168,6 +184,40 @@ fn error_reply(channel: u64, ordinal: u64, status: Status) {
         _ => mutation_reply(channel.0, ordinal, status, 0),
     }
 }
+fn theme_error_reply(channel: u64, ordinal: u64, status: Status) {
+    let metadata = ThemeMetadata {
+        generation: 0,
+        color_scheme: "",
+        text_scale_percent: 100,
+        reduce_motion: false,
+    };
+    let channel = Channel(channel);
+    match ordinal {
+        1 => {
+            let _ = rpc::reply(
+                channel,
+                &ThemeManagerGetThemeResponse {
+                    status,
+                    metadata,
+                    stylesheet: &[],
+                    stylesheet_len: 0,
+                },
+            );
+        }
+        2 => {
+            let _ = rpc::reply(
+                channel,
+                &ThemeManagerWatchThemeResponse {
+                    status,
+                    metadata,
+                    stylesheet: &[],
+                    stylesheet_len: 0,
+                },
+            );
+        }
+        _ => {}
+    }
+}
 fn start_reply(runtime: &mut Runtime, client: &Client, ordinal: u64) -> Result<(), Error> {
     let p = runtime.service.pending.as_mut().ok_or(Error::Busy)?;
     p.reply_channel = client.channel;
@@ -194,6 +244,9 @@ fn handle(
     hs: &[HandleRef],
 ) -> Result<(), Error> {
     let channel = Channel(client.channel);
+    if client.theme {
+        return handle_theme(runtime, client, ordinal, bytes, hs);
+    }
     if client.admin {
         match ordinal {
             16 => {
@@ -549,6 +602,129 @@ fn handle(
         _ => return Err(Error::AccessDenied),
     }
     Ok(())
+}
+
+fn handle_theme(
+    runtime: &mut Runtime,
+    client: &Client,
+    ordinal: u64,
+    bytes: &[u8],
+    hs: &[HandleRef],
+) -> Result<(), Error> {
+    let channel = Channel(client.channel);
+    match ordinal {
+        1 => {
+            ThemeManagerGetThemeRequest::decode(bytes, hs).map_err(|_| Error::Malformed)?;
+            let (metadata, stylesheet) = theme_snapshot(runtime, client.uid)?;
+            let raw = rpc::read_only_vmo(stylesheet.as_bytes())?;
+            rpc::reply(
+                channel,
+                &ThemeManagerGetThemeResponse {
+                    status: Status::Ok,
+                    metadata,
+                    stylesheet: &[HandleRef { raw }],
+                    stylesheet_len: stylesheet.len() as u64,
+                },
+            )?;
+        }
+        2 => {
+            let q =
+                ThemeManagerWatchThemeRequest::decode(bytes, hs).map_err(|_| Error::Malformed)?;
+            if runtime.service.theme_observers.len() >= 256 {
+                return Err(Error::Bounds);
+            }
+            let (metadata, stylesheet) = theme_snapshot(runtime, client.uid)?;
+            let generation = metadata.generation;
+            let raw = rpc::read_only_vmo(stylesheet.as_bytes())?;
+            let observer = ThemeObserver {
+                channel: q.observer.raw,
+                uid: client.uid,
+                generation,
+            };
+            rpc::reply(
+                channel,
+                &ThemeManagerWatchThemeResponse {
+                    status: Status::Ok,
+                    metadata,
+                    stylesheet: &[HandleRef { raw }],
+                    stylesheet_len: stylesheet.len() as u64,
+                },
+            )?;
+            runtime.service.theme_observers.push(observer);
+        }
+        _ => return Err(Error::AccessDenied),
+    }
+    Ok(())
+}
+
+fn theme_snapshot(
+    runtime: &mut Runtime,
+    uid: u64,
+) -> Result<(ThemeMetadata<'static>, String), Error> {
+    let key = resolve_key(runtime, PACKAGE_ID)?;
+    if runtime.service.pending.is_none() {
+        runtime.load(&key, uid)?;
+    }
+    theme_snapshot_from_service(&runtime.service, &key, uid)
+}
+
+fn theme_snapshot_from_service(
+    service: &Service,
+    key: &str,
+    uid: u64,
+) -> Result<(ThemeMetadata<'static>, String), Error> {
+    let (generation, table) = service.effective(key, uid)?;
+    let (_, prefs) = ThemePreferences::from_table(&table).map_err(|_| Error::Malformed)?;
+    Ok((
+        ThemeMetadata {
+            generation,
+            color_scheme: prefs.color_scheme.as_str(),
+            text_scale_percent: prefs.text_scale_percent,
+            reduce_motion: prefs.reduce_motion,
+        },
+        prefs.user_css(),
+    ))
+}
+
+pub fn broadcast_theme_changes(service: &mut Service, mutation: &Mutation) {
+    let Ok(key) = service.package(PACKAGE_ID).map(|p| p.key.clone()) else {
+        return;
+    };
+    let observers = service.theme_observers.clone();
+    for observer in observers {
+        if !service.affected(mutation, &key, observer.uid) {
+            continue;
+        }
+        let Ok((metadata, stylesheet)) = theme_snapshot_from_service(service, &key, observer.uid)
+        else {
+            continue;
+        };
+        if metadata.generation <= observer.generation {
+            continue;
+        }
+        let generation = metadata.generation;
+        let Ok(raw) = rpc::read_only_vmo(stylesheet.as_bytes()) else {
+            continue;
+        };
+        let request = ThemeObserverOnThemeChangedRequest {
+            metadata,
+            stylesheet: HandleRef { raw },
+            stylesheet_len: stylesheet.len() as u64,
+        };
+        if rpc::send(Channel(observer.channel), 1, &request).is_err() {
+            let _ = Memory::close(raw);
+            let _ = Memory::close(observer.channel);
+            service
+                .theme_observers
+                .retain(|o| o.channel != observer.channel);
+        } else if let Some(stored) = service
+            .theme_observers
+            .iter_mut()
+            .find(|o| o.channel == observer.channel)
+        {
+            stored.generation = generation;
+        }
+    }
 }
 fn get_reply(
     runtime: &Runtime,

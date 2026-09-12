@@ -164,6 +164,9 @@ pub trait Host: Send + Sync {
     fn ui_submit_scene(&self, _view: u32, _batch: &[u8]) -> Result<()> {
         wasmtime::bail!("ui unavailable")
     }
+    fn ui_submit_document(&self, _view: u32, _document: &[u8]) -> Result<()> {
+        wasmtime::bail!("ui document unavailable")
+    }
     fn ui_poll_input(&self, _view: u32) -> Result<Vec<UiInputEvent>> {
         wasmtime::bail!("ui unavailable")
     }

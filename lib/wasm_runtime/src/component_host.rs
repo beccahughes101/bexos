@@ -296,6 +296,16 @@ impl ui::Host for Context {
             .map_err(|error| error.to_string()))
     }
 
+    fn submit_document(&mut self, view: u32, document: Vec<u8>) -> Result<Result<(), String>> {
+        if self.restoring || document.len() > bexos_dioxus_dom::MAX_DOCUMENT_BYTES {
+            bail!("ui document during restore or over limit");
+        }
+        Ok(self
+            .host
+            .ui_submit_document(view, &document)
+            .map_err(|error| error.to_string()))
+    }
+
     fn poll_input(&mut self, view: u32) -> Result<Result<Vec<ui::InputEvent>, String>> {
         Ok(self
             .host

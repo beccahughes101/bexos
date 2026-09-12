@@ -40,6 +40,10 @@ QEMU_STORAGE_PREINSTALLS = [
         "path": "pkg/bexos.lib.tee_driver.trusty.bex",
     },
     {
+        "archive": "//lib/ui/theme:theme_archive",
+        "path": "pkg/bexos.ui.theme.bex",
+    },
+    {
         "archive": ":virtio_net_archive",
         "path": "pkg/bexos.driver.network.virtio_net.bex",
     },

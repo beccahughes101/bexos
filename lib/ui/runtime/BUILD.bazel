@@ -1,0 +1,30 @@
+load("//lib/flatland_text:BUILD.fonts.bzl", "FONT_DATA")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "runtime",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "bexos_ui_runtime",
+    edition = "2024",
+    compile_data = FONT_DATA,
+    rustc_env = {"NOTO_SANS": "$(execpath @noto_sans//file)"},
+    deps = [
+        "//lib/dioxus_dom",
+        "//lib/dioxus_scene",
+        "//lib/flatland",
+        "//lib/flatland_layout",
+        "//lib/flatland_style",
+        "//lib/flatland_text",
+        "//lib/ui/core",
+        "//lib/ui/theme",
+    ],
+)
+
+rust_test(
+    name = "tests",
+    crate = ":runtime",
+    compile_data = FONT_DATA,
+    rustc_env = {"NOTO_SANS": "$(execpath @noto_sans//file)"},
+)

@@ -1,0 +1,17 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "prelude",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "bexos_ui_prelude",
+    edition = "2024",
+    deps = [
+        "//lib/dioxus_dom",
+        "//lib/ui/button",
+        "//lib/ui/core",
+        "//lib/ui/text_input",
+        "//lib/ui/theme",
+    ],
+)

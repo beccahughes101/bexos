@@ -1,5 +1,36 @@
 # Testing Status
 
+## Native UI component stack validation (2026-09-12)
+
+RFC 0062 implementation adds shared `//lib/ui` component crates, native
+Stylo/Taffy document rendering in the WASM runner, `prefsd` theme-manager
+delivery, and SysUI/UserUI adoption of retained documents. The focused build
+selection for this change passes:
+
+```sh
+bazel build //lib/dioxus_dom //lib/ui/... //lib/flatland_style \
+  //lib/flatland_layout //lib/wasm_runtime //services/wasm_runner \
+  //services/prefsd //apps/dioxus_shared //apps/sysui //apps/userui \
+  //lib/ui/theme:theme_archive
+```
+
+The matching focused host validation passes:
+
+```sh
+bazel run @rules_rust//:rustfmt
+bazel test //lib/dioxus_dom:tests //lib/ui/core:tests \
+  //lib/ui/button:tests //lib/ui/text_input:tests //lib/ui/theme:tests \
+  //lib/ui/runtime:tests //lib/flatland_style:tests \
+  //lib/flatland_style:cascade_tests //lib/wasm_runtime:wasm_runtime_tests \
+  //services/prefsd:prefsd_tests //services/wasm_runner:wasm_runner_tests \
+  //apps/sysui:tests //apps/userui:tests
+bazel test //:heart_transplant_coverage_test
+```
+
+QEMU graphical acceptance remains covered by the existing SysUI/Dioxus smoke
+targets and should be rerun when recording full product validation for this
+stack; no new QEMU run is recorded in this entry.
+
 ## GitHub Actions CI setup (2026-09-11)
 
 The new `Bazel CI` workflow runs on PRs, pushes to `main`, and manual dispatch.

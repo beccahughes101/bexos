@@ -124,38 +124,47 @@ fn render(state: &State) -> dom::Document {
         "#f39c12"
     };
     dom::Document {
+        version: dom::VERSION,
         width: WIDTH,
         height: HEIGHT,
         scale: 1.0,
         clear_rgba: [32, 37, 45, 255],
+        author_stylesheets: Vec::new(),
         stylesheets: vec![
             dom::StyleRule {
                 selector: ".root".into(),
-                declarations: "x:24;y:24;width:592;height:372;display:flex;flex-direction:column;gap:14;padding:20;background:#f5f7fa".into(),
+                declarations: "width:592px;height:372px;display:flex;flex-direction:column;gap:14px;padding:20px;background:#f5f7fa".into(),
+                origin: dom::StyleOrigin::Author,
             },
             dom::StyleRule {
                 selector: ".top".into(),
-                declarations: "height:86;display:flex;flex-direction:row;gap:22".into(),
+                declarations: "height:86px;display:flex;flex-direction:row;gap:22px".into(),
+                origin: dom::StyleOrigin::Author,
             },
             dom::StyleRule {
                 selector: ".counter".into(),
-                declarations: "background:#34495e;color:#ffffff;font-size:22;padding:16".into(),
+                declarations: "background:#34495e;color:#ffffff;font-size:22px;padding:16px".into(),
+                origin: dom::StyleOrigin::Author,
             },
             dom::StyleRule {
                 selector: ".editor".into(),
-                declarations: "background:#ecf0f1;color:#2c3e50;font-size:20;padding:16".into(),
+                declarations: "background:#ecf0f1;color:#2c3e50;font-size:20px;padding:16px".into(),
+                origin: dom::StyleOrigin::Author,
             },
             dom::StyleRule {
                 selector: ".content".into(),
-                declarations: format!("height:150;display:grid;grid-template-columns:2x1fr;gap:12;padding:16;background:#ffffff;scroll-y:{}", state.scroll),
+                declarations: format!("height:150px;display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:16px;background:#ffffff;top:{}px", state.scroll),
+                origin: dom::StyleOrigin::Author,
             },
             dom::StyleRule {
                 selector: ".tile".into(),
-                declarations: "background:#dfe6e9;color:#2c3e50;font-size:18;padding:12".into(),
+                declarations: "background:#dfe6e9;color:#2c3e50;font-size:18px;padding:12px".into(),
+                origin: dom::StyleOrigin::Author,
             },
             dom::StyleRule {
                 selector: ".status".into(),
-                declarations: format!("height:36;background:{backend_color};color:#ffffff;font-size:18;padding:8"),
+                declarations: format!("height:36px;background:{backend_color};color:#ffffff;font-size:18px;padding:8px"),
+                origin: dom::StyleOrigin::Author,
             },
         ],
         root: dom::Node::element(1, "main").class("root").children([

@@ -120,7 +120,7 @@ impl Runtime {
             return Err(Error::InvalidData);
         }
         let mut w = Encoder::new();
-        w.word(1);
+        w.word(2);
         w.word(if cfg!(bexos_arch_x86_64) { 2 } else { 1 });
         for v in [
             self.control.0,
@@ -143,6 +143,7 @@ impl Runtime {
             w.word(c.uid);
             w.word(u64::from(c.admin));
             w.word(u64::from(c.manage));
+            w.word(u64::from(c.theme));
             w.word(c.methods.len() as u64);
             for m in &c.methods {
                 w.word(*m);
@@ -183,6 +184,12 @@ impl Runtime {
             w.word(o.uid);
             w.word(u64::from(o.registered));
         }
+        w.word(self.service.theme_observers.len() as u64);
+        for o in &self.service.theme_observers {
+            w.word(o.channel);
+            w.word(o.uid);
+            w.word(o.generation);
+        }
         words(&mut w, &self.service.locked);
         w.word(u64::from(self.service.pending.is_some()));
         if let Some(p) = &self.service.pending {
@@ -217,7 +224,10 @@ impl Runtime {
             return Err(Error::InvalidData);
         }
         let mut r = Decoder::new(bytes.ok_or(Error::InvalidData)?);
-        if r.word()? != 1 || r.word()? != if cfg!(bexos_arch_x86_64) { 2 } else { 1 } {
+        let snapshot_version = r.word()?;
+        if !(1..=2).contains(&snapshot_version)
+            || r.word()? != if cfg!(bexos_arch_x86_64) { 2 } else { 1 }
+        {
             return Err(Error::UnsupportedVersion);
         }
         let mut next = Runtime::empty();
@@ -237,6 +247,11 @@ impl Runtime {
             let uid = r.word()?;
             let admin = r.word()? != 0;
             let manage = r.word()? != 0;
+            let theme = if snapshot_version >= 2 {
+                r.word()? != 0
+            } else {
+                false
+            };
             let mut methods = Vec::new();
             for _ in 0..count(&mut r)? {
                 methods.push(r.word()?);
@@ -248,6 +263,7 @@ impl Runtime {
                 uid,
                 admin,
                 manage,
+                theme,
                 methods,
             });
         }
@@ -307,6 +323,15 @@ impl Runtime {
                 uid: r.word()?,
                 registered: r.word()? != 0,
             });
+        }
+        if snapshot_version >= 2 {
+            for _ in 0..count(&mut r)? {
+                next.service.theme_observers.push(ThemeObserver {
+                    channel: r.word()?,
+                    uid: r.word()?,
+                    generation: r.word()?,
+                });
+            }
         }
         next.service.locked = read_words(&mut r)?;
         if r.word()? != 0 {
@@ -471,6 +496,11 @@ impl State for Runtime {
                 return Err(Error::InvalidData);
             }
         }
+        for observer in &self.service.theme_observers {
+            if observer.channel == 0 {
+                return Err(Error::InvalidData);
+            }
+        }
         if let Some(pending) = &self.service.pending {
             for snapshot in &pending.snapshots {
                 let observer = self
@@ -498,6 +528,7 @@ impl State for Runtime {
         ]);
         handles.extend(self.clients.iter().map(|c| c.channel));
         handles.extend(self.service.observers.iter().map(|o| o.channel));
+        handles.extend(self.service.theme_observers.iter().map(|o| o.channel));
         handles.remove(&0);
         handles.into_iter().map(Resource::Handle).collect()
     }

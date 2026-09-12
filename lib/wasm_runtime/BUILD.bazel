@@ -10,7 +10,7 @@ rust_library(
     edition = "2024",
     compile_data = ["@wasmtime_wasi_wit//:wit", "//testing/wasm:service_component.wat", "//testing/wasm:command.wat", "//testing/wasm:file_service.wat", "//testing/wasm:network.wat"] + glob(["wit/*.wit"]),
     rustc_env = {"CARGO_MANIFEST_DIR": "."},
-    deps = ["@crates//:wasmtime", "//lib/dioxus_scene", "//lib/wasm_embedded", "//lib/wasm_engine", "//lib/wasm_abi", "//lib/userspace"],
+    deps = ["@crates//:wasmtime", "//lib/dioxus_dom", "//lib/dioxus_scene", "//lib/wasm_embedded", "//lib/wasm_engine", "//lib/wasm_abi", "//lib/userspace"],
 )
 
 rust_test(

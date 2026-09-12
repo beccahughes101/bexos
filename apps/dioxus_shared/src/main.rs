@@ -47,12 +47,10 @@ impl exports::bexos::wasm::dioxus::Guest for SharedDioxus {
         let document = bexos_dioxus_dom::Document::decode(&document)
             .map_err(|error| format!("document validation: {error:?}"))?;
         bexos::wasm::ui::configure_view(view, document.width, document.height, document.scale)?;
-        let scene = bexos_dioxus_dom::render(&document)
-            .map_err(|error| format!("document render: {error:?}"))?;
-        let scene = scene
+        let bytes = document
             .encode()
-            .map_err(|error| format!("scene encoding: {error:?}"))?;
-        bexos::wasm::ui::submit_scene(view, &scene)
+            .map_err(|error| format!("document encoding: {error:?}"))?;
+        bexos::wasm::ui::submit_document(view, &bytes)
     }
 
     fn poll_input(view: u32) -> Result<Vec<exports::bexos::wasm::dioxus::InputEvent>, String> {

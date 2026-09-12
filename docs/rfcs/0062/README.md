@@ -1,8 +1,8 @@
-# RFC-0042: Native UI Component Architecture, Stylo Integration, and Multi-Tier Styling
+# RFC 0062: Native UI Component Architecture, Stylo Integration, and Multi-Tier Styling
 
 * **Author:** BexOS Platform & UI Working Group
-* **Status:** Proposed
-* **Target Subsystems:** `libs/ui`, `sysui`, `userui`, `prefsd`, `scened`
+* **Status:** Accepted; current implementation tracked in [`CURRENT.md`](CURRENT.md)
+* **Target Subsystems:** `lib/ui`, `sysui`, `userui`, `prefsd`, `scened`
 * **Applicability:** Dioxus Native WASM Apps, Host UI Runners, System Services
 
 ---
@@ -11,7 +11,7 @@
 
 This RFC establishes the presentation runtime for BexOS native applications. It defines:
 
-1. A modular, package-per-component repository layout under `//libs/ui/<component>` built with Bazel.
+1. A modular, package-per-component repository layout under `//lib/ui/<component>` built with Bazel.
 2. The integration of **Stylo** (Firefox/Servo parallel CSS engine) within the native host runner to compute styles for headless Dioxus RSX/DOM trees.
 3. A three-tier CSS cascade architecture (**System Agent**, **User/MDM Preference**, **App Author**) that leverages standard CSS specificity and `!important` semantics for system-wide theming and mandatory accessibility.
 4. An IPC channel driven by `prefsd` to deliver dynamic, zero-restart theme updates via read-only Virtual Memory Objects (`VMO`).
@@ -31,12 +31,12 @@ By using **Dioxus** for component state management, **Stylo** for parallel CSS c
 
 ## 3. Detailed Design
 
-### 3.1 Repository Layout (`//libs/ui`)
+### 3.1 Repository Layout (`//lib/ui`)
 
-UI primitives reside under `//libs/ui/` as granular Bazel targets to ensure fine-grained incremental builds, hermetic caching, and minimal dead code inclusion in compiled WASM artifacts.
+UI primitives reside under `//lib/ui/` as granular Bazel targets to ensure fine-grained incremental builds, hermetic caching, and minimal dead code inclusion in compiled WASM artifacts.
 
 ```
-//libs/ui/
+//lib/ui/
 ├── BUILD.bazel
 ├── core/                       # Design tokens, theme primitives, Stylo shims
 │   ├── BUILD.bazel
@@ -59,7 +59,7 @@ UI primitives reside under `//libs/ui/` as granular Bazel targets to ensure fine
 
 ```
 
-#### Bazel Rule Definition (`//libs/ui/button/BUILD.bazel`)
+#### Bazel Rule Definition (`//lib/ui/button/BUILD.bazel`)
 
 ```python
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
@@ -70,7 +70,7 @@ rust_library(
     compile_data = ["src/style.css"],
     visibility = ["//visibility:public"],
     deps = [
-        "//libs/ui/core",
+        "//lib/ui/core",
         "@crates//:dioxus",
     ],
 )
@@ -237,8 +237,8 @@ protocol ThemeObserver {
 
 ### Phase 1: Core Layout and Tokens
 
-* Implement `//libs/ui/core` defining standard token schemas (`--bex-space-*`, `--bex-radius-*`, `--bex-color-*`).
-* Stand up `//libs/ui/button` and `//libs/ui/text_input` implementing Dioxus RSX wrappers backed by default `style.css`.
+* Implement `//lib/ui/core` defining standard token schemas (`--bex-space-*`, `--bex-radius-*`, `--bex-color-*`).
+* Stand up `//lib/ui/button` and `//lib/ui/text_input` implementing Dioxus RSX wrappers backed by default `style.css`.
 
 ### Phase 2: Host Stylo Integration
 
