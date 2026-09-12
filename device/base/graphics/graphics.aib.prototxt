@@ -1,5 +1,6 @@
 name: "graphics"
 packages { label: "//services/splashd:splashd_elf" package_id: "bexos.service.splashd" placement: BOOTFS }
+packages { label: "//services/fontd:fontd_elf" package_id: "bexos.service.fontd" placement: BOOTFS }
 packages { label: "//services/scened:scened_elf" package_id: "bexos.service.scened" placement: BOOTFS }
 
 packages { label: "//apps/dioxus_shared:dioxus_shared" package_id: "com.bexos.lib.dioxus" placement: SYSTEM_IMAGE }

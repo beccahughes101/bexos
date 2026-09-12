@@ -1,5 +1,11 @@
 # System and User UI
 
+SysUI and UserUI require the public resolve and fallback methods from
+`bexos.fonts.FontProvider`. Their native Dioxus host resolves CSS family stacks,
+uses Inter and JetBrains Mono as the local baseline, and selects Noto Arabic or
+Devanagari fallbacks before shaping with Parley. The mapped font cache is rebuilt
+from retained documents after heart transplant; neither shell can install fonts.
+
 The graphical product bundles `bexos.app.sysui` and `bexos.app.userui`. Both are
 Dioxus WASM services using the native renderer, shared
 `com.bexos.lib.dioxus` package (version 0.2), and first-party `//lib/ui`

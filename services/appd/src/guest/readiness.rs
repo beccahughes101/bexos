@@ -51,6 +51,7 @@ pub struct Gate {
     pub powerd: Option<Channel>,
     pub users: Option<Channel>,
     pub keychain: Option<Channel>,
+    pub fontd: Option<Channel>,
     pub trust_tls_roots: Vec<u8>,
     pub trust_app_roots: Vec<u8>,
     pub pending_trace_producers: Vec<super::trace_registry::PendingTraceProducer>,
@@ -94,6 +95,7 @@ impl Gate {
             powerd: None,
             users: None,
             keychain: None,
+            fontd: None,
             trust_tls_roots: Vec::new(),
             trust_app_roots: Vec::new(),
             pending_trace_producers: Vec::new(),
@@ -363,6 +365,7 @@ impl ReadinessGate for Gate {
             "bexos.service.powerd" => self.powerd = Some(c),
             "bexos.service.usersd" => self.users = Some(c),
             "bexos.service.keychaind" => self.keychain = Some(c),
+            "bexos.service.fontd" => self.fontd = Some(c),
             _ if p.process_ref.process.runner == "wasm" => {}
             _ => return Err(ReadinessError::NotReady),
         }
@@ -841,6 +844,16 @@ impl Gate {
                             Some(*input),
                         )?);
                     }
+                    if declares(manifest, "bexos.fonts.FontProvider") {
+                        grants.push(self.authenticated_system_grant(
+                            "bexos.fonts.FontProvider",
+                            "FontProvider",
+                            "Public",
+                            &[1, 2],
+                            self.fontd,
+                            &manifest.package_name,
+                        )?);
+                    }
                 }
                 if self.gpu.is_some() {
                     if let Ok(grant) = self.notified_grant(
@@ -936,6 +949,26 @@ impl Gate {
                     )?);
                 }
             }
+            "bexos.service.fontd" => {
+                if declares(manifest, "bexos.user.UserManager") {
+                    grants.push(self.notified_grant(
+                        "bexos.user.UserManager",
+                        "UserManager",
+                        "Public",
+                        &[2, 8],
+                        self.users,
+                    )?);
+                }
+                if declares(manifest, "bexos.service.vfsd") {
+                    grants.push(self.notified_grant(
+                        "bexos.service.vfsd",
+                        "VfsManager",
+                        "Public",
+                        &[62],
+                        self.vfsd,
+                    )?);
+                }
+            }
             "bexos.driver.debugd" => {
                 if declares(manifest, "bexos.tracing.TraceController") {
                     grants.push(self.notified_grant(
@@ -1009,6 +1042,38 @@ impl Gate {
             caller_package: None,
             caller_uid: None,
             caller_foreground: false,
+            endpoint: client.0,
+        })
+    }
+
+    fn authenticated_system_grant(
+        &self,
+        service: &str,
+        protocol: &str,
+        capability: &str,
+        method_ordinals: &[u64],
+        manager: Option<Channel>,
+        caller_package: &str,
+    ) -> Result<ServiceGrant, ReadinessError> {
+        let manager = manager.ok_or(ReadinessError::NotReady)?;
+        let (client, provider) = Channel::pair().map_err(|_| ReadinessError::NotReady)?;
+        let ordinals = join_ordinals(method_ordinals);
+        let metadata =
+            alloc::format!("{service}|{protocol}|{capability}|{ordinals}||{caller_package}|0|fg");
+        if manager.send(metadata.as_bytes(), &[provider.0]).is_err() {
+            let _ = Memory::close(client.0);
+            let _ = Memory::close(provider.0);
+            return Err(ReadinessError::NotReady);
+        }
+        Ok(ServiceGrant {
+            service: service.to_string(),
+            protocol: protocol.to_string(),
+            capability: capability.to_string(),
+            method_ordinals: method_ordinals.to_vec(),
+            permission_values: Vec::new(),
+            caller_package: Some(caller_package.to_string()),
+            caller_uid: Some(0),
+            caller_foreground: true,
             endpoint: client.0,
         })
     }

@@ -14,10 +14,11 @@ pub fn element(id: u64, parent: Option<u64>, tag: &str, classes: &str, inline: &
         state: 0,
     }
 }
-pub fn resolver(target: Surface, config: &DesktopConfig<'_>) -> Result<Resolver, Error> {
-    let metrics =
-        bexos_flatland_text::metrics::Metrics::from_font(include_bytes!(env!("NOTO_SANS")))
-            .map_err(|_| Error::Invalid)?;
+pub fn resolver(
+    target: Surface,
+    config: &DesktopConfig<'_>,
+    metrics: bexos_flatland_text::metrics::Metrics,
+) -> Result<Resolver, Error> {
     // Legacy configurations retain their explicit text appearance.
     let css = format!(
         "desktop {{ font-size: {}px; color: rgba({}, {}, {}, {}); }}\n{}",
@@ -41,27 +42,33 @@ pub fn resolver(target: Surface, config: &DesktopConfig<'_>) -> Result<Resolver,
 pub struct Cache {
     target: Surface,
     resolver: Resolver,
+    metrics: bexos_flatland_text::metrics::Metrics,
 }
 pub fn prepare(
     caches: &mut BTreeMap<u64, Cache>,
     view: u64,
     graph: &Graph,
     target: Surface,
+    metrics: bexos_flatland_text::metrics::Metrics,
 ) -> Result<Graph, Error> {
     if !graph.nodes.values().any(|n| n.style.enabled()) {
         return Ok(graph.clone());
     }
     if !caches.contains_key(&view) {
-        caches.insert(view, Cache::new(target)?);
+        caches.insert(view, Cache::new(target, metrics)?);
     }
     caches.get_mut(&view).unwrap().prepare(graph, target)
 }
 impl Cache {
-    pub fn new(target: Surface) -> Result<Self, Error> {
+    pub fn new(
+        target: Surface,
+        metrics: bexos_flatland_text::metrics::Metrics,
+    ) -> Result<Self, Error> {
         let config = DesktopConfig::decode(include_bytes!(env!("DESKTOP_CONFIG")))?;
         Ok(Self {
             target,
-            resolver: resolver(target, &config)?,
+            resolver: resolver(target, &config, metrics)?,
+            metrics,
         })
     }
     pub fn prepare(&mut self, graph: &Graph, target: Surface) -> Result<Graph, Error> {
@@ -70,7 +77,7 @@ impl Cache {
             return Ok(graph.clone());
         }
         if self.target != target {
-            *self = Self::new(target)?;
+            *self = Self::new(target, self.metrics)?;
         }
         let mut nodes = Vec::with_capacity(graph.nodes.len());
         let parents: BTreeMap<_, _> = graph

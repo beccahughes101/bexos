@@ -132,11 +132,12 @@ pub fn encode(s: &Scene, key: u64) -> Result<Option<Vec<u8>>, Error> {
     if key == 1 {
         // Version 6 adds the separately keyed outstanding display submission.
         let mut w = Encoder::new();
-        w.word(if s.records_version == 0 {
-            10
+        let version = if s.records_version == 0 {
+            11
         } else {
             s.records_version
-        });
+        };
+        w.word(version);
         w.word(s.canvas.is_some() as u64);
         if let Some(c) = &s.canvas {
             c.encode(&mut w);
@@ -152,6 +153,9 @@ pub fn encode(s: &Scene, key: u64) -> Result<Option<Vec<u8>>, Error> {
         w.word(s.ready as u64);
         w.word(0);
         w.word(0); // legacy empty session/buffer lists
+        if version >= 11 {
+            w.word(s.font_provider.map_or(0, |channel| channel.0));
+        }
         return Ok(Some(w.finish()));
     }
     let stream = key >> 32;
@@ -235,7 +239,7 @@ pub fn adopt(s: &mut Scene, key: u64, data: Option<&[u8]>) -> Result<(), Error> 
         let data = data.ok_or(Error::InvalidData)?;
         let mut r = Decoder::new(data);
         let tag = r.word()?;
-        if (2..=10).contains(&tag) {
+        if (2..=11).contains(&tag) {
             let scanout = std::mem::take(&mut s.scanout);
             let gpu = std::mem::take(&mut s.gpu);
             let pending_frame = s.pending_frame.take();
@@ -250,6 +254,7 @@ pub fn adopt(s: &mut Scene, key: u64, data: Option<&[u8]>) -> Result<(), Error> 
             let buffers = std::mem::take(&mut s.buffers);
             let queues = std::mem::take(&mut s.queues);
             let records = std::mem::take(&mut s.records);
+            s.records_version = tag;
             s.decode(&mut r)?;
             r.finish()?;
             s.records_version = tag;

@@ -47,6 +47,8 @@ fn run() -> Result<(), String> {
     let mut device = QemuDevice::new(artifacts)?;
     let mut markers = boot_markers();
     markers.push(b"appd: app lifecycle registry ready for debugd");
+    markers.push(b"fontd: ready");
+    markers.push(b"scened: ready background presented");
     let mut session = device.boot_with_debugd(&markers)?;
     session.assert_debugd_ready()?;
     let migration_only = std::env::var("BEXOS_SYSUI_MIGRATION_ONLY").as_deref() == Ok("1");

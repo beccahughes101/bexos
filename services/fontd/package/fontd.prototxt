@@ -1,0 +1,37 @@
+package_name: "bexos.service.fontd"
+name: "Font Provider"
+processes {
+  name: "fontd"
+  runner: "elf"
+  service: true
+  wave: 5
+  resource_group: "system"
+  lifecycle { update_strategy: HEART_TRANSPLANT migration_timeout_ms: 1000 }
+  runner_options { [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/fontd" } }
+}
+services_exposed {
+  name: "bexos.fonts.FontProvider"
+  protocol: "FontProvider"
+  lifecycle: SINGLETON
+  visibility: PUBLIC
+  capabilities { capability: "Public" method_ordinals: 1 method_ordinals: 2 }
+  capabilities {
+    capability: "InstallUserFont"
+    permission: "bexos.permission.INSTALL_USER_FONTS"
+    method_ordinals: 3
+  }
+}
+services_consumed {
+  name: "bexos.service.vfsd"
+  link_type: REQUIRED
+  capabilities { capability: "Public" methods { ordinal: 62 link_type: REQUIRED } }
+}
+services_consumed {
+  name: "bexos.user.UserManager"
+  link_type: REQUIRED
+  capabilities {
+    capability: "Public"
+    methods { ordinal: 2 link_type: REQUIRED }
+    methods { ordinal: 8 link_type: REQUIRED }
+  }
+}

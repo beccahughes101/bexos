@@ -19,8 +19,8 @@ PARTITIONS = [
     ("BOOT_A", BASIC_DATA_GUID, 2048),
     ("BOOT_B", BASIC_DATA_GUID, 2048),
     ("SYS_STATE", BASIC_DATA_GUID, 65536),
-    # Match qemu_storage in device/virtual/qemu/base/images.bzl (256 MiB).
-    ("STORAGE", BASIC_DATA_GUID, 524288),
+    # Match qemu_storage in device/virtual/qemu/base/images.bzl (320 MiB).
+    ("STORAGE", BASIC_DATA_GUID, 655360),
 ]
 
 

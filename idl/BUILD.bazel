@@ -5,6 +5,19 @@ load("@rules_rust//rust:defs.bzl", "rust_library")
 package(default_visibility = ["//visibility:public"])
 
 bexos_fidl_rust(
+    name = "fonts_fidl_rust_src",
+    src = "bexos/fonts/provider.fidl",
+    out = "fonts_fidl.rs",
+)
+
+rust_library(
+    name = "fonts_fidl_rust",
+    srcs = [":fonts_fidl_rust_src"],
+    crate_name = "fonts_fidl",
+    edition = "2024",
+)
+
+bexos_fidl_rust(
     name = "camera_fidl_rust_src",
     src = "bexos/hardware/camera.fidl",
     out = "camera_fidl.rs",

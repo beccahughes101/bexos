@@ -1,0 +1,43 @@
+load("//build/platforms:architecture.bzl", "guest_select")
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("//lib/flatland_text:BUILD.fonts.bzl", "FONT_DATA", "FONT_ENV", "FONT_LICENSES")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "fontd",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_name = "bexos_fontd",
+    edition = "2024",
+    compile_data = FONT_DATA,
+    rustc_env = FONT_ENV,
+    deps = [
+        "//idl:fonts_fidl_rust",
+        "//idl:fs_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//idl:user_manager_fidl_rust",
+        "//lib/migration",
+        "//lib/userspace",
+        "@crates//:sha2",
+        "@graphics_crates//:skrifa",
+    ],
+)
+
+std_service_binary(name = "fontd_elf", srcs = ["src/main.rs"], crate_name = "bexos_fontd_elf", deps = [":fontd"])
+std_service_binary(name = "replacement_elf", srcs = ["src/main.rs"], crate_name = "bexos_fontd_replacement_elf", deps = [":fontd"])
+
+app_manifest(name = "package_manifest", src = "package/fontd.prototxt")
+app_archive(name = "fontd_archive", manifest = ":package_manifest", entries = dict(FONT_LICENSES.items() + [("bin/fontd", ":fontd_elf")]), compression = "zstd")
+app_archive(name = "replacement_archive", manifest = ":package_manifest", entries = dict(FONT_LICENSES.items() + [("bin/fontd", ":replacement_elf")]), compression = "zstd")
+
+rust_test(
+    name = "fontd_tests",
+    srcs = glob(["tests/**/*.rs"]),
+    crate_name = "fontd_tests",
+    edition = "2024",
+    compile_data = FONT_DATA,
+    rustc_env = FONT_ENV,
+    deps = [":fontd", "//idl:fonts_fidl_rust", "//lib/userspace"],
+)

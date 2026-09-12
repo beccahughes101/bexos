@@ -7,6 +7,7 @@ QEMU_PRODUCT_MANIFESTS = {
         "//drivers/d1/input/virtio:input_driver": "//drivers/d1/input/virtio:package_manifest",
         "//drivers/d1/display/virtio/gpu:gpu_driver": "//drivers/d1/display/virtio/gpu:package_manifest",
         "//services/splashd:splashd_elf": "//services/splashd:package_manifest",
+        "//services/fontd:fontd_elf": "//services/fontd:package_manifest",
         "//services/scened:scened_elf": "//services/scened:package_manifest",
         "//drivers/d1/rtc/pc/cmos:cmos": "//drivers/d1/rtc/pc/cmos:package_manifest",
         "//apps/brush_shell:brush_shell": "//apps/brush_shell:manifest",

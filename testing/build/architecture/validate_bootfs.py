@@ -45,6 +45,25 @@ assert f"product_name: {product}_{architecture}\n" in assembly
 assert f"board: //device/virtual/qemu/base/{architecture}\n" in assembly
 assert f"platform_config: //device/virtual/qemu/{product}:platform_config_bin\n" in assembly
 assert "/boot/platform.pcfg" in paths
+for font in (
+    "InterVariable.ttf",
+    "JetBrainsMonoVariable.ttf",
+    "NotoSansVariable.ttf",
+    "NotoSansArabicVariable.ttf",
+    "NotoSansDevanagariVariable.ttf",
+):
+    assert f"/system/data/fonts/{font}" in paths, f"missing system font {font}"
+for license_name in (
+    "Inter-OFL.txt",
+    "JetBrainsMono-OFL.txt",
+    "NotoSans-OFL.txt",
+    "NotoSansArabic-OFL.txt",
+    "NotoSansDevanagari-OFL.txt",
+):
+    assert f"/system/data/fonts/licenses/{license_name}" in paths, f"missing font license {license_name}"
+if product == "workstation":
+    assert "/boot/pkg/bexos.service.fontd/bin/fontd" in executables
+    assert "/boot/pkg/bexos.service.fontd/package.bexmanifest" in paths
 arm_devices = [path for path in paths if "pl011" in path or "pl031" in path]
 assert bool(arm_devices) == (architecture == "aarch64"), "wrong hardware in product closure"
 print(f"{architecture}: checked {len(paths)} BootFS entries and {len(executables)} ELF artifacts")

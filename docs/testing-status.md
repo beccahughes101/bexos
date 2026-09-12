@@ -1,5 +1,70 @@
 # Testing Status
 
+## Local font architecture validation (2026-09-12)
+
+RFC 0063's local implementation adds the `bexos.fonts.FontProvider` protocol,
+the transplantable wave-5 `fontd` service, system and per-user indexes,
+read-only shared-VMO clients, Inter/JetBrains Mono/Noto image packaging, and
+provider-backed Parley shaping in scened and the native Dioxus host. Dynamic
+OCI/pkgd discovery remains disabled future work. The focused host, migration,
+manifest, disk-layout, and image-closure selection passes:
+
+```sh
+bazel test //services/fontd:fontd_tests \
+  //lib/font_client:font_client_tests //lib/flatland_text:tests \
+  //lib/dioxus_render:tests //lib/ui/runtime:tests \
+  //services/scened:tests //services/scened:internal_tests \
+  //services/scened:controls_tests //services/scened:input_config_tests \
+  //services/wasm_runner:wasm_runner_tests \
+  //apps/sysui:tests //apps/userui:tests \
+  //services/appd:appd_tests \
+  //:heart_transplant_coverage_test //tools/image:generate_gpt_disk_test \
+  //testing/build/architecture:closure_test \
+  //testing/build/architecture:bootfs_closure_test \
+  //testing/build/architecture:workstation_bootfs_closure_test \
+  //testing/build/architecture:emulated_bootfs_closure_test
+
+bazel run @rules_rust//:rustfmt
+```
+
+The production build passes for the generated FIDL, service and replacement
+archives, shared client/text/UI libraries, scened and WASM-runner consumers,
+SysUI/UserUI/Dioxus packages, workstation and nongraphical bootfs images, and
+the workstation NVMe disk. In particular, the 320 MiB STORAGE partition and
+its BexFS payload assemble with the font packages and replacement archives:
+
+```sh
+bazel build //idl:fonts_fidl_rust \
+  //services/fontd:fontd_archive //services/fontd:replacement_archive \
+  //lib/font_client:font_client //lib/flatland_text:flatland_text \
+  //lib/ui/runtime:runtime //lib/dioxus_render:dioxus_render \
+  //services/scened:scened_elf //services/scened:replacement_elf \
+  //services/wasm_runner:wasm_runner_elf \
+  //apps/sysui:sysui //apps/userui:userui //apps/dioxus_demo:dioxus_demo \
+  //device/virtual/qemu/workstation:bootfs.img \
+  //device/virtual/qemu/nongui:bootfs.img \
+  //device/virtual/qemu/workstation:qemu_nvme_disk_image
+```
+
+`//testing/e2e/qemu/graphics:boot_ui_aarch64` was launched with an extracted
+Ubuntu `qemu-system-aarch64` 10.0.2 binary because QEMU is not installed in the
+host image. Under software AArch64 TCG, the default 900-second functional budget
+expired while appd was launching wave-6 services. A second run used the bounded
+`BOOT_UI_TIMEOUT_SECONDS=1500` harness override and reached `fontd: ready`, appd
+acceptance of fontd and scened, provider registration, Parley shaping, glyph
+rasterization, the retained desktop-text cache, splash takeover, scened's ready
+background, and styled desktop text presentation. The full aggregate target
+still did not pass: its 1,500-second budget expired later while the existing
+stored VirtIO-GPU replacement was pending. Both runs cleaned up QEMU. The live
+font-backed graphical path is verified through presentation, but this is not a
+complete graphics/transplant acceptance pass.
+
+`//testing/e2e/qemu/sysui:sysui_e2e_test_aarch64` was also attempted, but it
+could not build because the saved Trusty firmware fixture is absent; QEMU did
+not start for that target. The standard x86 assembled-image validation was
+attempted separately and stopped on the same missing saved-firmware prerequisite.
+Consequently no live SysUI/UserUI or x86 graphical result is claimed.
+
 ## Native UI component stack validation (2026-09-12)
 
 RFC 0062 implementation adds shared `//lib/ui` component crates, native

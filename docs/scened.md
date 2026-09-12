@@ -9,6 +9,20 @@ and complete sustained measurement windows pass; hardware 1080p/120 Hz acceptanc
 remains pending. The long-term designs remain in
 [RFC 0047](rfcs/0047/README.md), [RFC 0042](rfcs/0042/README.md), [RFC 0045](rfcs/0045/README.md), and [RFC 0046](rfcs/0046/README.md).
 
+## Font resolution and shaping
+
+On BexOS, scened does not embed its own guest font copies. Its prototxt manifest
+requires `bexos.fonts.FontProvider` resolve and fallback methods. The desktop
+cache resolves Inter and the Arabic/Devanagari fallback lists through the shared
+native font client, maps returned VMOs read-only, and registers the Arc-backed
+mappings directly with Parley. Style metrics are derived from the same Inter
+mapping. Host-only tests use Bazel-pinned fixtures instead of guest kernel IPC.
+
+The FontProvider endpoint participates in scened's component migration
+resources. Desktop layouts, mappings, and shaping state remain rebuildable; the
+replacement resolves fonts again while reconstructing the desktop cache. The
+longer-term dynamic font work remains in [RFC 0063](rfcs/0063/README.md).
+
 ## Accounting and sustained workload contract
 
 `TaskControl.GetRuntimeStats` returns calling-thread and process CPU nanoseconds.
@@ -410,7 +424,7 @@ including host descheduling, excluding service IPC and physical display timing.
 Overlap uses premultiplied BGRA pixels `[64,96,128,192]`, node opacity 0.8,
 100×50-pixel offsets between surfaces, and an animated first surface. Partial
 damage is at (400,300). The text contains Latin, Arabic, and Devanagari with the
-pinned Noto fonts at 24 pixels. Text rasterization retains its glyph atlas but
+configured Inter/Noto provider fallbacks at 24 pixels. Text rasterization retains its glyph atlas but
 still allocates; unchanged compositor text reuses the rendered pixel cache.
 
 In the pre-SIMD baseline, overlap and fullscreen CPU blur exceeded the 3 ms CPU
@@ -614,7 +628,7 @@ resource teardown through this bridge.
 | `//lib/flatland` | Transactions, geometry, hit testing, SIMD CPU composition, presentation queues, bounded CPU box blur | Integrated through graphics compatibility exports; CPU blur uses bounded box filtering |
 | `//lib/flatland_layout` | Retained Taffy flex/grid tree with validated topology | Desktop insets and client transaction layout; typed equal-column grid projection |
 | `//lib/flatland_style` | Stylo tree matching, cascade, retained stylesheet revisions; imports disabled | Prototxt theme and client style inputs resolve outside the frame loop; supported property projection is bounded |
-| `//lib/flatland_text` | Parley font registration, fallback, bidi, shaping, wrapping, bounded entry cache | Compositor text uses pinned Noto fonts; application widgets own their rendered content |
+| `//lib/flatland_text` | Parley font registration, fallback, bidi, shaping, wrapping, bounded entry cache, and shared Arc-backed blobs | Compositor text uses read-only `fontd` mappings; application widgets own their rendered content |
 | `//lib/flatland_cpu` | Retained Vello CPU glyph atlas and rasterization, premultiplied format conversion | Cached compositor text; surface composition and CPU effects use shared Flatland routines |
 | `//lib/flatland_render` | Vello/wgpu renderer, shared surface/text encoding, retained Dual Kawase textures and damage bounds | Integrated GPU worker awaits the expanded guest run; output uses retained readback |
 | `//lib/flatland_input` | Bounded queues, keymaps/repeat/modifiers, pointer acceleration, tablet/touch, focus/capture/cancellation, migration | Integrated routing and reserved-edge takeover; downstream hotplug guest validation is running |
@@ -624,21 +638,27 @@ Native graphics dependencies use an isolated Bazel crate universe to keep their
 build scripts, including Stylo properties and Vello shader generation, run
 through Bazel. Generated source files are not checked in.
 
-Noto Sans, Noto Sans Arabic, and Noto Sans Devanagari are pinned to google/fonts
-commit `5e35378e6bda803962ee6fd257e444a7d459660d`, each with a checked SHA-256 and
-its SIL Open Font License file. `//lib/flatland_text:fonts` exposes these inputs;
-text tests register them explicitly. Host font discovery is disabled. Text
-cache reuse avoids re-shaping identical text/style; registering a font clears
-cached layouts. The compositor embeds the three pinned fonts, and both initial BootFS packaging
-and replacement archives include their licenses. `services/scened/package/desktop.prototxt`
+Inter Variable, JetBrains Mono Variable, Noto Sans, Noto Sans Arabic, and Noto
+Sans Devanagari are pinned with checked SHA-256 values and their SIL Open Font
+License files. `//lib/flatland_text:fonts` exposes these inputs to host tests and
+to `fontd`'s compile-time system index; raw copies and licenses are also assembled
+under `/system/data/fonts`. Host font discovery is disabled. Text cache reuse
+avoids re-shaping identical text/style; registering a font clears cached layouts.
+On BexOS, scened resolves Inter plus the Noto script fallbacks from `fontd`, maps
+the returned VMOs read-only, and does not package private font copies in its boot
+or replacement archive. `services/scened/package/desktop.prototxt`
 defines multilingual desktop text, size, color and insets. Bazel runs protoc to
 compile this configuration. Taffy lays out the desktop text and Vello CPU
 rasterizes Parley glyphs into a retained surface before normal presentation.
 Glyph atlas pages are limited to 512×512 with at most eight pages. Font
 shaping and rasterization stay outside the steady-state frame loop. A
-replacement rebuilds this cache on its initial global bulk record and retains
-it through final deltas. Host rasterization/configuration tests and graphical
-guest tests on AArch64, secure AArch64 and x86_64 passed. A Bazel-applied
+replacement rebuilds this cache by resolving the provider again on its initial
+global bulk record and retains it through final deltas. Host rasterization and
+configuration tests pass. The 2026-09-12 AArch64 software-TCG run reached
+provider registration, shaping, rasterization, splash takeover, the ready
+background, and styled desktop text presentation, then exceeded an extended
+harness budget in the subsequent stored GPU replacement; see
+[Testing Status](testing-status.md). A Bazel-applied
 dependency patch exposes atlas dimensions because Vello CPU’s default
 4096×4096 page exceeds the guest VMO allocation limit; the shared rasterizer
 uses 512×512 pages with matching packing coordinates.

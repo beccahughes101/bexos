@@ -27,11 +27,11 @@ assembled="$(cat "$index")"
 [[ "$assembled" == *'package: bexos.service.teed '* ]]
 [[ "$assembled" == *'package: bexos.lib.tee_driver.trusty '* ]]
 if [[ "$product" == workstation ]]; then
-  for package in bexos.driver.display.virtio_gpu bexos.service.splashd bexos.service.scened; do
+  for package in bexos.driver.display.virtio_gpu bexos.service.splashd bexos.service.fontd bexos.service.scened; do
     [[ "$assembled" == *"package: $package"* ]]
   done
 else
-  [[ "$assembled" != *"package: bexos.service.splashd"* && "$assembled" != *"package: bexos.service.scened"* && "$assembled" != *"package: bexos.driver.display.virtio_gpu"* ]]
+  [[ "$assembled" != *"package: bexos.service.splashd"* && "$assembled" != *"package: bexos.service.fontd"* && "$assembled" != *"package: bexos.service.scened"* && "$assembled" != *"package: bexos.driver.display.virtio_gpu"* ]]
 fi
 policy_text="$("$protoc" --proto_path=. --proto_path="$protobuf_root" --decode=bexos.platform.PlatformConfig idl/bexos/platform/config.proto < "$policy")"
 if [[ "$arch" == aarch64 ]]; then

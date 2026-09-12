@@ -1,7 +1,7 @@
 # RFC-0063: Tiered Font Architecture, Zero-Copy VMO Sharing, and Dynamic OCI Discovery
 
 * **Author:** BexOS Graphics & Package Management Working Group
-* **Status:** Proposed
+* **Status:** Partially Implemented — local architecture complete; dynamic discovery remains future work
 * **Target Subsystems:** `fontd`, `pkgd`, `libs/ui`, `sysui`, `userui`, `scened`
 * **Applicability:** Dioxus Native Apps, Host Text Shapers (`cosmic-text`/HarfBuzz), Servo Engine
 
@@ -27,6 +27,8 @@ Typography is a frequent source of performance degradation and security vulnerab
 * **System Footprint vs. Completeness:** Modern desktop and enterprise systems require support for thousands of scripts and diverse typography, but bundling every global font family into base system images bloats installation footprints on edge and cloud VM appliances.
 
 BexOS resolves these challenges by centralizing verification and caching within `fontd`, sharing immutable physical pages across processes using microkernel VMOs, and dynamically pulling optional font families over standard OCI package infrastructure.
+
+The repository currently implements the complete local portion of this design. OCI/TUF discovery, `pkgd` integration, `/data/cache/fonts`, network activity, and download prompts remain future work. `allow_network_fetch` is retained in the stable protocol, but a disabled missing-font resolver returns `NOT_FOUND` without network or cache activity. See [CURRENT.md](CURRENT.md) for the exact implemented boundary.
 
 ---
 
@@ -80,14 +82,14 @@ Embedded directly into the system image under `/system/data/fonts/` and indexed 
 
 * **System UI Variable Font:** Canonical sans-serif for shell interfaces and system utilities (e.g., *Inter Variable*).
 * **Developer Monospace:** Fixed-width glyphs for dev tools and logging (e.g., *JetBrains Mono*).
-* **Core Unicode Fallback:** Minimal *Noto Sans* subsets ensuring error boxes, basic symbols, and core scripts render without tofu (``).
+* **Core Unicode Fallback:** Minimal *Noto Sans* subsets ensuring error boxes, basic symbols, and core Latin, Arabic, and Devanagari scripts render without tofu.
 
 #### Tier 2: Encrypted User Fonts (`/data/users/<uid>/fonts/`)
 
 Users or apps may install local fonts at runtime:
 
-* Files are uploaded through `fontd.InstallUserFont(...)`.
-* `fontd` sanitizes the font binary using an isolated parser before saving it to the user's isolated volume.
+* Files are uploaded through the permission-gated `fontd.InstallUserFont(...)` method.
+* `fontd` validates bounded SFNT/TTC structure before saving it to the user's isolated volume.
 * User fonts take precedence over platform baseline fonts of the identical family name within that user's session context.
 
 ---
@@ -187,69 +189,87 @@ let mapped_addr = zx_vmar_map(
 
 ## 4. Interface Definition Language (FIDL)
 
-The core contract resides in `idl/bexos/fonts/provider.fidl`:
+The stable contract resides in `idl/bexos/fonts/provider.fidl`. It uses explicit
+status fields, because BexOS FIDL does not use the error-result syntax shown in
+older drafts:
 
 ```fidl
 library bexos.fonts;
 
-using bexos.kernel;
+type FontStatus = strict enum : int32 {
+    OK = 0;
+    NOT_FOUND = -1;
+    ACCESS_DENIED = -2;
+    INVALID_ARGS = -3;
+    UNSUPPORTED_FORMAT = -4;
+    STORAGE = -5;
+    RESOURCE_EXHAUSTED = -6;
+    BUSY = -7;
+};
 
-type FontStyle : uint8 {
+type FontStyle = strict enum : uint8 {
     NORMAL = 1;
     ITALIC = 2;
     OBLIQUE = 3;
 };
 
-type FontFormat : uint8 {
+type FontFormat = strict enum : uint8 {
     TRUETYPE = 1;
     OPENTYPE = 2;
     WOFF2 = 3;
+    COLLECTION = 4;
 };
 
 struct FontDescriptor {
     family_name string:64;
-    weight uint16;              // Standard CSS numeric weight (100–900)
+    weight uint16;
     style FontStyle;
     format_preference FontFormat;
 };
 
-struct FontHandle {
+resource struct FontHandle {
     font_id uint64;
     /// Read-only handle to the backing physical pages
-    data zx.Handle:VMO;
+    data handle:VMO;
     data_len uint64;
     index_in_collection uint32; // Sub-font index (e.g., for .ttc files)
 };
 
-type FallbackScript = string:4; // ISO 15924 script tag (e.g., "Latn", "Hani", "Arab")
-
 @discoverable
 protocol FontProvider {
     /// Resolve exact or nearest matching font variant
-    ResolveFont(struct {
+    1: ResolveFont(struct {
         query FontDescriptor;
         allow_network_fetch bool;
     }) -> (resource struct {
-        font FontHandle;
-    }) error bexos.kernel.Status;
+        status FontStatus;
+        font vector<FontHandle>:1;
+    });
 
     /// Retrieve prioritized fallback list for missing glyph coverage
-    GetFallbackList(struct {
-        script FallbackScript;
+    2: GetFallbackList(struct {
+        script string:4;
     }) -> (resource struct {
+        status FontStatus;
         fonts vector<FontHandle>:8;
-    }) error bexos.kernel.Status;
+    });
 
     /// Register a user-provided font binary into the user's isolated store
-    InstallUserFont(resource struct {
-        font_data zx.Handle:VMO;
+    3: InstallUserFont(resource struct {
+        font_data handle:VMO;
         data_len uint64;
     }) -> (struct {
+        status FontStatus;
         assigned_id uint64;
-    }) error bexos.kernel.Status;
+    });
 };
 
 ```
+
+TTF, OTF, variable SFNT fonts, and bounded TTC collections are accepted by the
+local implementation. `WOFF2` remains reserved in `FontFormat`; installation
+returns `UNSUPPORTED_FORMAT` until the future ingestion path supplies a bounded
+decoder.
 
 ---
 
