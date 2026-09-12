@@ -70,3 +70,4 @@ An RFC number does not indicate approval or implementation status.
 | [0059](0059/README.md) | Lazy service activation | 2026-09-08 | [Implementation and gaps](0059/CURRENT.md) |
 | [0060](0060/README.md) | System and user UI | 2026-09-09 | [Implementation and gaps](0060/CURRENT.md) |
 | [0061](0061/README.md) | Unified egress and split-DNS routing | 2026-09-10 | [Implementation and gaps](0061/CURRENT.md) |
+| [0062](0062/README.md) |  Native UI Component Architecture | 2026-09-12 | [Implementation and gaps](0062/CURRENT.md) |
