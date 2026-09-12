@@ -2,6 +2,8 @@ load("//build/platforms:architecture.bzl", "guest_select")
 load(":architecture_test.bzl", "architecture_test")
 load("@rules_rust//rust:defs.bzl", "rust_test")
 
+QEMU_HOST_RPMBD = "//third_party/trusty:host_rpmb_dev"
+
 QEMU_BOOT_ARTIFACTS = {
     "kernel": "//kernel:kernel_bin",
     "disk": "//device/virtual/qemu/nongui:qemu_nvme_gpt.img",
@@ -13,7 +15,11 @@ QEMU_BOOT_ARTIFACTS = {
     "layout": "//device/virtual/qemu/nongui:boot_layout.sh",
     "inspector": "//tools/image:bexfs_image",
     "key": "//device/virtual/qemu/base:qemu_bexfs_test.key",
-    "rpmbd": "//third_party/trusty:rpmb_dev",
+    # Execute the helper for this Bazel host. Firmware snapshots retain their
+    # authenticated RPMB template, but their bundled helper belongs to the host
+    # that produced the snapshot and must not cross a CI/job or workstation ABI
+    # boundary.
+    "rpmbd": QEMU_HOST_RPMBD,
     "rpmb_template": "//third_party/trusty:RPMB_DATA",
 }
 
@@ -46,6 +52,8 @@ def qemu_e2e_test(
         x86_extra_data = None,
         extra_args = [],
         x86_extra_args = None,
+        qemu_args = [],
+        x86_qemu_args = None,
         env = {},
         x86_env_overrides = {},
         tags = [],
@@ -70,7 +78,7 @@ def qemu_e2e_test(
         "BEXOS_QEMU_LAYOUT": "$(rootpath %s)" % boot_data["layout"],
         "BEXOS_QEMU_INSPECTOR": "$(rootpath %s)" % boot_data["inspector"],
         "BEXOS_QEMU_KEY": "$(rootpath %s)" % boot_data["key"],
-        "BEXOS_QEMU_RPMBD": "$(rootpath %s)" % boot_data["rpmbd"],
+        "BEXOS_QEMU_RPMBD": "$(rootpath %s)" % QEMU_HOST_RPMBD,
         "BEXOS_QEMU_RPMB_TEMPLATE": "$(rootpath %s)" % boot_data["rpmb_template"],
     }
     test_data = [
@@ -84,13 +92,14 @@ def qemu_e2e_test(
         boot_data["layout"],
         boot_data["inspector"],
         boot_data["key"],
-        boot_data["rpmbd"],
         boot_data["rpmb_template"],
     ]
     common_data = list(test_data)
     test_data += list(extra_data)
     if extra_args:
-        test_env["BEXOS_QEMU_EXTRA_ARGS"] = " ".join(extra_args)
+        test_env["BEXOS_QEMU_TEST_ARGS"] = " ".join(extra_args)
+    if qemu_args:
+        test_env["BEXOS_QEMU_EXTRA_ARGS"] = " ".join(qemu_args)
     arm_env = dict(test_env, BEXOS_QEMU_ARCH = "aarch64")
     arm_data = list(test_data)
     if secure_firmware:
@@ -104,19 +113,20 @@ def qemu_e2e_test(
     x86_env = dict(test_env, BEXOS_QEMU_ARCH = "x86_64", BEXOS_QEMU_BOOT_IMAGE = "$(rootpath //device/virtual/qemu/nongui:x86_64_boot_image)")
     # The integrated monitor and normal-world provider consume the same saved
     # firmware bundle and authenticated persistent RPMB image.
-    x86_env["BEXOS_QEMU_RPMBD"] = "$(rootpath //third_party/trusty:cached_x86_64/rpmb_dev)"
+    x86_env["BEXOS_QEMU_RPMBD"] = "$(rootpath %s)" % QEMU_HOST_RPMBD
     x86_env["BEXOS_QEMU_RPMB_TEMPLATE"] = "$(rootpath //third_party/trusty:cached_x86_64/RPMB_DATA)"
     if x86_extra_args != None:
-        x86_env["BEXOS_QEMU_EXTRA_ARGS"] = " ".join(x86_extra_args)
+        x86_env["BEXOS_QEMU_TEST_ARGS"] = " ".join(x86_extra_args)
+    if x86_qemu_args != None:
+        x86_env["BEXOS_QEMU_EXTRA_ARGS"] = " ".join(x86_qemu_args)
     if development:
         x86_env["BEXOS_QEMU_DEVELOPMENT"] = "1"
     x86_env.update(env)
     x86_base_data = test_data if x86_extra_data == None else common_data + x86_extra_data
-    x86_data = [label for label in x86_base_data if label not in [boot_data["rpmbd"], boot_data["rpmb_template"]]] + ["//device/virtual/qemu/nongui:x86_64_boot_image", "//third_party/trusty:cached_x86_64/rpmb_dev", "//third_party/trusty:cached_x86_64/RPMB_DATA"]
+    x86_data = [label for label in x86_base_data if label != boot_data["rpmb_template"]] + ["//device/virtual/qemu/nongui:x86_64_boot_image", "//third_party/trusty:cached_x86_64/RPMB_DATA"]
     if not development:
         x86_env.pop("BEXOS_QEMU_BOOT_IMAGE")
         secure_inputs = {
-            "BEXOS_QEMU_RPMBD": "//boot/efi:cached/rpmb_dev",
             "BEXOS_QEMU_RPMB_TEMPLATE": "//boot/efi:cached/RPMB_DATA",
             "BEXOS_QEMU_X86_OVMF_CODE": "//boot/efi:cached/OVMF_CODE.fd",
             "BEXOS_QEMU_X86_OVMF_VARS": "//boot/efi:cached/OVMF_VARS.fd",
@@ -146,7 +156,7 @@ def qemu_e2e_test(
         crate_name = crate_name,
         edition = "2024",
         deps = deps,
-        data = guest_select(arm_data, x86_data),
+        data = [QEMU_HOST_RPMBD] + guest_select(arm_data, x86_data),
         env = guest_select(arm_env, x86_env),
         tags = QEMU_TEST_TAGS + tags + ["manual"],
         use_libtest_harness = False,

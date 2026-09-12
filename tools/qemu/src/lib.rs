@@ -94,7 +94,7 @@ impl QemuArtifacts {
             return Self::parse_args(args);
         }
         if let Some(artifacts) = Self::from_env()? {
-            return Ok((artifacts, split_env_args("BEXOS_QEMU_EXTRA_ARGS")));
+            return Ok((artifacts, split_env_args("BEXOS_QEMU_TEST_ARGS")));
         }
         Self::parse_args(args)
     }

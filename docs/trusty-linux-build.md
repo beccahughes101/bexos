@@ -3,6 +3,9 @@
 The build selects native Rust tools, libclang, AIDL, and RPMB helpers for Linux
 x86_64, Linux ARM64, and Apple Silicon Darwin. Firmware guest architecture is
 independent of the execution host. macOS SDK inputs are confined to Darwin.
+QEMU runtime tests execute the Bazel-built native RPMB helper and use only the
+authenticated RPMB template from saved firmware; they do not execute a host
+binary transferred inside a firmware snapshot.
 
 AIDL and its host dependencies use the pinned Trusty superproject, plus the
 Android 16 liblog revision pinned in `MODULE.bazel`. Parser generation is a

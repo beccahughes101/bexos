@@ -34,7 +34,7 @@ BOOT_DATA = [
     "//device/virtual/qemu/nongui:boot_layout.sh",
     "//tools/image:bexfs_image",
     "//device/virtual/qemu/base:qemu_bexfs_test.key",
-    "//third_party/trusty:rpmb_dev",
+    "//third_party/trusty:host_rpmb_dev",
     "//third_party/trusty:RPMB_DATA",
 ]
 BOOT_ARGS = ["$(location " + label + ")" for label in BOOT_DATA]

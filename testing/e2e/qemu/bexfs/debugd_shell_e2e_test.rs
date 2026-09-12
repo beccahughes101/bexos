@@ -13,7 +13,7 @@ fn main() {
 fn echo<T: DebugTransport>(c: &mut DebugClient<T>, id: u64, bytes: &[u8]) -> Result {
     let mut remaining = bytes;
     let mut output = Vec::new();
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut deadline = Instant::now() + Duration::from_secs(30);
     while !remaining.is_empty() || output.len() < bytes.len() {
         if Instant::now() > deadline {
             return Err(format!(
@@ -26,6 +26,9 @@ fn echo<T: DebugTransport>(c: &mut DebugClient<T>, id: u64, bytes: &[u8]) -> Res
         let n = remaining.len().min(bexos_debug_wire::SHELL_CHUNK);
         let r = c.exchange_shell(id, &remaining[..n], false)?;
         remaining = &remaining[r.consumed as usize..];
+        if r.consumed != 0 || !r.stdout.is_empty() || !r.stderr.is_empty() {
+            deadline = Instant::now() + Duration::from_secs(30);
+        }
         output.extend(r.stdout);
         assert!(!r.exited);
     }
@@ -257,6 +260,7 @@ fn authenticated_users<T: DebugTransport>(
             })
             .is_err()
         );
+        eprintln!("e2e: rejected wrong shell password for user {uid}");
         eprintln!("e2e: authenticating shell user {uid}");
         let s = c.open_shell(&ShellRequest {
             user: if uid == 1000 {
@@ -268,10 +272,14 @@ fn authenticated_users<T: DebugTransport>(
             password: password.into(),
             ..Default::default()
         })?;
+        eprintln!("e2e: authenticated shell user {uid}");
         assert_eq!(s.uid, uid);
         c.set_shell_mode(s.session_id, 0)?;
+        eprintln!("e2e: raw shell mode set for user {uid}");
         echo(c, s.session_id, name.as_bytes())?;
+        eprintln!("e2e: shell echo verified for user {uid}");
         c.close_shell(s.session_id)?;
+        eprintln!("e2e: shell closed for user {uid}");
         assert!(
             c.open_shell(&ShellRequest {
                 uid,
@@ -280,6 +288,7 @@ fn authenticated_users<T: DebugTransport>(
             })
             .is_err()
         );
+        eprintln!("e2e: post-close wrong password rejected for user {uid}");
     }
     let processes = c.list_processes()?;
     assert_eq!(

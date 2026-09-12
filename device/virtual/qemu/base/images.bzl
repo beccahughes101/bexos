@@ -3,6 +3,8 @@ load("//build/platforms:architecture.bzl", "guest_select")
 load("//build/rules:app_archive.bzl", "app_archive")
 load("//lib/flatland_text:BUILD.fonts.bzl", "FONT_LICENSES")
 
+QEMU_STORAGE_SIZE_BYTES = 268435456
+
 QEMU_STORAGE_PREINSTALLS = [
     {"archive": "//apps/brush_shell", "path": "pkg/bexos.app.brush_shell.bex"},
     {"archive": "//apps/brush_shell:replacement_archive", "path": "updates/bexos.app.brush_shell.replacement.bex"},
@@ -496,7 +498,7 @@ def qemu_images(graphics = False, input_fixture = False):
         outs = ["storage.bexfs.img"],
         # BexFS keeps two full snapshots; leave room for preinstalls and runtime
         # writes in each. Match the STORAGE partition in generate_gpt_disk.py.
-        cmd = "$(location //tools/image:bexfs_image) --out $@ --size-bytes 268435456 --label STORAGE " +
+        cmd = ("$(location //tools/image:bexfs_image) --out $@ --size-bytes %d --label STORAGE " % QEMU_STORAGE_SIZE_BYTES) +
               "--volume-uuid 53544f52-4147-4500-0000-000000000004 --key-file $(location //device/virtual/qemu/base:qemu_bexfs_test.key) " +
               "--entry pkg/.keep=$(location //device/virtual/qemu/base:pkg.keep) " +
               "".join([
@@ -545,7 +547,7 @@ def qemu_images(graphics = False, input_fixture = False):
         srcs = ["//device/virtual/qemu/base:pkg.keep", "//device/virtual/qemu/base:qemu_bexfs_test.key", "//device/virtual/qemu/base:storage_data.keep"] +
                [entry["archive"] for entry in QEMU_STORAGE_PREINSTALLS_WITHOUT_BRUSH],
         outs = ["storage.without_brush.bexfs.img"],
-        cmd = "$(location //tools/image:bexfs_image) --out $@ --size-bytes 134217728 --label STORAGE " +
+        cmd = ("$(location //tools/image:bexfs_image) --out $@ --size-bytes %d --label STORAGE " % QEMU_STORAGE_SIZE_BYTES) +
               "--volume-uuid 53544f52-4147-4500-0000-000000000004 --key-file $(location //device/virtual/qemu/base:qemu_bexfs_test.key) " +
               "--entry pkg/.keep=$(location //device/virtual/qemu/base:pkg.keep) " +
               "".join([
@@ -561,7 +563,7 @@ def qemu_images(graphics = False, input_fixture = False):
         srcs = ["//device/virtual/qemu/base:pkg.keep", "//device/virtual/qemu/base:qemu_bexfs_test.key", "//device/virtual/qemu/base:storage_data.keep"] +
                [entry["archive"] for entry in QEMU_STORAGE_PREINSTALLS_SHELL_FIXTURE],
         outs = ["storage.shell_fixture.bexfs.img"],
-        cmd = "$(location //tools/image:bexfs_image) --out $@ --size-bytes 134217728 --label STORAGE " +
+        cmd = ("$(location //tools/image:bexfs_image) --out $@ --size-bytes %d --label STORAGE " % QEMU_STORAGE_SIZE_BYTES) +
               "--volume-uuid 53544f52-4147-4500-0000-000000000004 --key-file $(location //device/virtual/qemu/base:qemu_bexfs_test.key) " +
               "--entry pkg/.keep=$(location //device/virtual/qemu/base:pkg.keep) " +
               "".join([

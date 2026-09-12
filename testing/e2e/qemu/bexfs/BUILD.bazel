@@ -151,7 +151,7 @@ qemu_e2e_test(
     src = "brush_shell_e2e_test.rs",
     crate_name = "brush_workstation_shell_e2e_test",
     boot_data = {key: value.replace("/nongui:", "/workstation:") for key, value in QEMU_BOOT_DATA.items()},
-    extra_args = ["-device", "virtio-gpu-pci", "-device", "virtio-keyboard-pci", "-device", "virtio-mouse-pci"],
+    qemu_args = ["-device", "virtio-gpu-pci", "-device", "virtio-keyboard-pci", "-device", "virtio-mouse-pci"],
     architectures = ["aarch64"],
     deps = ["//host/debug_client", "//lib/debug_wire", "//testing/e2e", "//tools/qemu:qemu_test"],
 )

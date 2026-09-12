@@ -34,7 +34,6 @@ qemu_e2e_test(
     src = "authmgr_acceptance_e2e_test.rs",
     crate_name = "authmgr_acceptance_e2e_test",
     boot_data = dict(QEMU_BOOT_DATA,
-        rpmbd = "//third_party/trusty:acceptance_cached/rpmb_dev",
         rpmb_template = "//third_party/trusty:acceptance_cached/RPMB_DATA",
     ),
     secure_firmware = {

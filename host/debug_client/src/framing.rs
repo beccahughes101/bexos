@@ -133,7 +133,11 @@ impl<T: DebugTransport> DebugClient<T> {
             let response = self.read_response(
                 request_id,
                 METHOD_WRITE_UPDATE_CHUNK,
-                self.response_deadline(),
+                // A maximum-size update frame can take more than the ordinary
+                // 120-second call budget to cross an ARM UART under TCG. Keep
+                // the bound finite, but match other on-device update and user
+                // operations so slow emulation does not abandon a live upload.
+                self.response_deadline_with_default(600),
             )?;
             let status = decode_debug_status(&response.payload)?;
             if status.status != 0 {

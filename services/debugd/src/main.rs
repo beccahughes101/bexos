@@ -220,6 +220,11 @@ async fn serve(mut state: migration::Runtime) -> ! {
                     break;
                 }
                 state.input.extend_from_slice(&bytes[..count]);
+                // A large shell frame can take longer than the terminal lease to
+                // arrive under TCG. Receiving transport progress proves that the
+                // client is still connected; only idle/disconnected sessions
+                // should expire while a frame is incomplete.
+                state.shells.renew();
                 if !logged_debug_byte {
                     logged_debug_byte = true;
                     log("debugd: first debug byte read\n");
