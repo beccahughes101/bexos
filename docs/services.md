@@ -4,6 +4,22 @@
 
 Appd is documented separately in [Appd And Userspace](appd-userspace.md). It is the bootstrap service and central policy/broker component.
 
+## Font Provider (`fontd`)
+
+Package: `bexos.service.fontd`; Bazel targets live under `//services/fontd`.
+The workstation starts it in wave 5 and packages both the boot ELF and a
+replacement archive. Its prototxt manifest consumes vfsd and usersd and exposes
+`bexos.fonts.FontProvider` public resolve/fallback methods plus the separately
+permissioned `InstallUserFont` method.
+
+`fontd` indexes the five pinned system-image fonts and lazily indexes the active
+user's encrypted home font directory. It validates bounded SFNT/TTC data,
+deduplicates canonical VMOs by SHA-256, returns only transfer/read/map handles,
+and migrates client channels, service/storage endpoints, the user watcher,
+indexes, and live VMOs during heart transplant. Dynamic OCI/pkgd fetching is a
+future boundary; current misses remain local and return `NOT_FOUND`. See
+[Local Fonts](fonts.md) and [RFC 0063 current state](rfcs/0063/CURRENT.md).
+
 It also exposes the public singleton `bexos.app.opener.Opener` for URL, file,
 direct-app, and preferred-interface opening. Handler declarations come from app
 manifest intent filters and are resolved through appd's system/user
@@ -808,6 +824,7 @@ The workstation adds three BootFS components with heart-transplant archives:
 | --- | --- | --- |
 | D1 VirtIO-GPU | PCI binding, wave 1 | Owns scanout and DMA; grants exclusive presentation by endpoint and generation. |
 | `splashd` | Wave 1, before storage mounting | Vello CPU animation, bounded progress reports, frozen-frame handoff. |
+| `fontd` | Wave 5, after usersd and encrypted-home routing | Validated system/user font index and read-only VMO distribution. |
 | `scened` | Wave 5, takeover after system readiness | Isolated Flatland sessions, CPU composition, acknowledged takeover and fade. |
 
 Appd coordinates milestones and marks a successfully exited splash as a completed

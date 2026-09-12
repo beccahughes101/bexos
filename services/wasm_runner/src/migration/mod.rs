@@ -320,6 +320,12 @@ impl State for Runtime {
                 bexos_userspace::log(&format!("wasm_runner: restore rejected: {error:#}\n"));
                 Error::InvalidData
             })?;
+        host.rebuild_retained_ui().map_err(|error| {
+            bexos_userspace::log(&format!(
+                "wasm_runner: retained UI font reconstruction rejected: {error:#}\n"
+            ));
+            Error::InvalidData
+        })?;
         bexos_userspace::log("wasm_runner: candidate restore complete\n");
         self.valid = true;
         self.current = true;

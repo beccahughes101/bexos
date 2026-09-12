@@ -61,3 +61,12 @@ services_consumed {
     methods { ordinal: 15 link_type: OPTIONAL }
   }
 }
+services_consumed {
+  name: "bexos.fonts.FontProvider"
+  link_type: REQUIRED
+  capabilities {
+    capability: "Public"
+    methods { ordinal: 1 link_type: REQUIRED }
+    methods { ordinal: 2 link_type: REQUIRED }
+  }
+}

@@ -56,6 +56,11 @@ pub async fn main(channel: u64) -> ! {
             .iter()
             .find(|g| g.protocol == "ProgressTracker")
             .map(|g| Channel(g.endpoint));
+        let font_provider = start
+            .service_grants
+            .iter()
+            .find(|grant| grant.protocol == "FontProvider")
+            .map(|grant| Channel(grant.endpoint));
         let mut input = input::Input::default();
         input.settings = input_config::decode(include_bytes!(env!("INPUT_CONFIG")))
             .expect("scened input policy");
@@ -106,6 +111,7 @@ pub async fn main(channel: u64) -> ! {
                 desktop: None,
                 input,
                 splash,
+                font_provider,
                 ..Default::default()
             },
         )
@@ -203,7 +209,7 @@ pub async fn main(channel: u64) -> ! {
                     rt::now_us().saturating_sub(start),
                 ));
                 runtime.component.desktop = runtime.component.canvas.as_ref().and_then(|c| {
-                    match desktop::Desktop::new(c.surface) {
+                    match desktop::Desktop::new(c.surface, runtime.component.font_provider) {
                         Ok(cache) => {
                             bexos_userspace::log(
                                 "scened: Parley/Noto text and Taffy desktop cache ready\n",

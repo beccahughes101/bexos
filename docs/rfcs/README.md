@@ -71,5 +71,5 @@ An RFC number does not indicate approval or implementation status.
 | [0060](0060/README.md) | System and user UI | 2026-09-09 | [Implementation and gaps](0060/CURRENT.md) |
 | [0061](0061/README.md) | Unified egress and split-DNS routing | 2026-09-10 | [Implementation and gaps](0061/CURRENT.md) |
 | [0062](0062/README.md) |  Native UI Component Architecture | 2026-09-12 | [Implementation and gaps](0062/CURRENT.md) |
-| [0063](0063/README.md) |  Fonts | 2026-09-12 | [Implementation and gaps](0063/CURRENT.md) |
-| [0064](0063/README.md) |  OCI  | 2026-09-12 | [Implementation and gaps](0064/CURRENT.md) |
+| [0063](0063/README.md) | Tiered local fonts and future OCI discovery | 2026-09-12 | [Implementation and gaps](0063/CURRENT.md) |
+| [0064](0064/README.md) | Centralized package daemon and secure OCI/TUF resolution | 2026-09-12 | [Implementation and gaps](0064/CURRENT.md) |

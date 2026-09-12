@@ -40,6 +40,8 @@ pub struct Scene {
     pub canvas: Option<Canvas>,
     pub pending_display: Option<Channel>,
     pub splash: Option<Channel>,
+    pub font_provider: Option<Channel>,
+    pub font_metrics: Option<bexos_flatland_text::metrics::Metrics>,
     pub frozen: Option<Mapping>,
     pub ack: Option<Channel>,
     pub start_us: u64,
@@ -67,6 +69,29 @@ impl Scene {
         } else {
             self.period_us
         }
+    }
+    pub fn ensure_font_metrics(
+        &mut self,
+    ) -> Result<bexos_flatland_text::metrics::Metrics, bexos_graphics::Error> {
+        if let Some(metrics) = self.font_metrics {
+            return Ok(metrics);
+        }
+        #[cfg(bexos_guest)]
+        let metrics = {
+            let endpoint = self.font_provider.ok_or(bexos_graphics::Error::Invalid)?;
+            let mut client = bexos_font_client::Client::new(endpoint.0);
+            let font = client
+                .resolve(bexos_font_client::Request::sans("Inter"))
+                .map_err(|_| bexos_graphics::Error::Invalid)?;
+            bexos_flatland_text::metrics::Metrics::from_font(font.as_ref().as_ref())
+                .map_err(|_| bexos_graphics::Error::Invalid)?
+        };
+        #[cfg(not(bexos_guest))]
+        let metrics =
+            bexos_flatland_text::metrics::Metrics::from_font(include_bytes!(env!("INTER")))
+                .map_err(|_| bexos_graphics::Error::Invalid)?;
+        self.font_metrics = Some(metrics);
+        Ok(metrics)
     }
 }
 pub(crate) fn encode_graph(
@@ -304,13 +329,24 @@ impl Component for Scene {
                 return Err(Error::InvalidData);
             }
         }
+        let font_provider = if self.records_version >= 11 {
+            r.word()?
+        } else {
+            0
+        };
         // The initial global record arrives during bulk transfer. Build text
         // then, and retain it across subsequent global deltas, so the final
         // quiescent boundary does not shape fonts or initialize a rasterizer.
         let desktop = match &canvas {
             Some(c) => match self.desktop.take() {
                 Some(cache) if cache.surface == c.surface => Some(cache),
-                _ => Some(crate::desktop::Desktop::new(c.surface).map_err(|_| Error::InvalidData)?),
+                _ => Some(
+                    crate::desktop::Desktop::new(
+                        c.surface,
+                        (font_provider != 0).then_some(Channel(font_provider)),
+                    )
+                    .map_err(|_| Error::InvalidData)?,
+                ),
             },
             None => None,
         };
@@ -318,6 +354,7 @@ impl Component for Scene {
             desktop,
             canvas,
             splash: (splash != 0).then_some(Channel(splash)),
+            font_provider: (font_provider != 0).then_some(Channel(font_provider)),
             frozen,
             ack: (ack != 0).then_some(Channel(ack)),
             start_us,
@@ -342,6 +379,9 @@ impl Component for Scene {
         out.extend(self.fences.handles().into_iter().map(Resource::Handle));
         for c in [self.splash, self.ack].into_iter().flatten() {
             out.push(Resource::Handle(c.0));
+        }
+        if let Some(provider) = self.font_provider {
+            out.push(Resource::Handle(provider.0));
         }
         if let Some(m) = &self.frozen {
             out.extend(m.resources());

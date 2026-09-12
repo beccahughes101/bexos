@@ -18,7 +18,7 @@ pub struct UiState {
 
 struct Asset {
     kind: u32,
-    bytes: Vec<u8>,
+    bytes: Arc<Vec<u8>>,
 }
 
 struct View {
@@ -28,6 +28,7 @@ struct View {
     height: u32,
     scale: f32,
     assets: BTreeMap<u32, Asset>,
+    resolved_fonts: BTreeMap<u32, Arc<bexos_font_client::MappedFont>>,
     releases: Vec<(u64, u64)>,
     retained_document: Option<Vec<u8>>,
     theme_generation: u64,
@@ -94,6 +95,7 @@ impl UiState {
                 height,
                 scale: 1.0,
                 assets: BTreeMap::new(),
+                resolved_fonts: BTreeMap::new(),
                 releases: Vec::new(),
                 retained_document: None,
                 theme_generation: 0,
@@ -133,7 +135,7 @@ impl UiState {
             asset,
             Asset {
                 kind,
-                bytes: bytes.to_vec(),
+                bytes: Arc::new(bytes.to_vec()),
             },
         );
         Ok(())
@@ -153,7 +155,8 @@ impl UiState {
         let batch = bexos_dioxus_scene::SceneBatch::decode(bytes)
             .map_err(|e| wasmtime::format_err!("invalid node scene: {e:?}"))?;
         validate_assets(view, &batch)?;
-        let frame = view.renderer.render(&batch)?;
+        let fonts = font_resources(view);
+        let frame = view.renderer.render(&batch, &fonts)?;
         Session::new(Channel(view.flatland.native()))
             .content(node, frame.handle, frame.surface)
             .map_err(|e| wasmtime::format_err!("node content: {e:?}"))?;
@@ -170,14 +173,17 @@ impl UiState {
         id: u32,
         document: &[u8],
         theme: &bexos_ui_runtime::RuntimeTheme,
+        fonts: &mut bexos_ui_runtime::FontSet,
+        resolved_fonts: &[(u32, Arc<bexos_font_client::MappedFont>)],
     ) -> Result<()> {
         let view = self.views.get_mut(&id).ok_or_else(missing_view)?;
+        view.resolved_fonts.extend(resolved_fonts.iter().cloned());
         let document = bexos_dioxus_dom::Document::decode(document)
             .map_err(|error| wasmtime::format_err!("document validation: {error:?}"))?;
         if document.width != view.width || document.height != view.height {
             bail!("document dimensions do not match view");
         }
-        let rendered = bexos_ui_runtime::render_document(&document, theme)
+        let rendered = bexos_ui_runtime::render_document_with_fonts(&document, theme, fonts)
             .map_err(|error| wasmtime::format_err!("document render: {error:?}"))?;
         validate_assets(view, &rendered.batch)?;
         let bytes = rendered
@@ -194,14 +200,20 @@ impl UiState {
         Ok(())
     }
 
-    pub fn redraw_documents(&mut self, theme: &bexos_ui_runtime::RuntimeTheme) -> Result<()> {
+    pub fn redraw_documents(
+        &mut self,
+        theme: &bexos_ui_runtime::RuntimeTheme,
+        fonts: &mut bexos_ui_runtime::FontSet,
+        resolved_fonts: &[(u32, Arc<bexos_font_client::MappedFont>)],
+    ) -> Result<()> {
         for view in self.views.values_mut() {
+            view.resolved_fonts.extend(resolved_fonts.iter().cloned());
             let Some(bytes) = view.retained_document.clone() else {
                 continue;
             };
             let document = bexos_dioxus_dom::Document::decode(&bytes)
                 .map_err(|error| wasmtime::format_err!("retained document: {error:?}"))?;
-            let rendered = bexos_ui_runtime::render_document(&document, theme)
+            let rendered = bexos_ui_runtime::render_document_with_fonts(&document, theme, fonts)
                 .map_err(|error| wasmtime::format_err!("document redraw: {error:?}"))?;
             let scene = rendered
                 .batch
@@ -234,7 +246,8 @@ fn submit_batch(view: &mut View, batch: &[u8]) -> Result<()> {
         bail!("scene dimensions do not match view");
     }
     validate_assets(view, &batch)?;
-    let frame = view.renderer.render(&batch)?;
+    let fonts = font_resources(view);
+    let frame = view.renderer.render(&batch, &fonts)?;
     let mut session = Session::new(Channel(view.flatland.native()));
     if let Err(status) = session.content(view.node_id, frame.handle, frame.surface) {
         drop(frame);
@@ -332,6 +345,13 @@ impl UiState {
         true
     }
 
+    pub fn retained_documents(&self) -> Vec<Vec<u8>> {
+        self.views
+            .values()
+            .filter_map(|view| view.retained_document.clone())
+            .collect()
+    }
+
     pub fn resources(&self) -> Vec<u64> {
         self.views
             .values()
@@ -372,7 +392,7 @@ impl UiState {
                 }
                 w.word(*id as u64);
                 w.word(a.kind as u64);
-                w.bytes(&a.bytes);
+                w.bytes(a.bytes.as_ref());
             }
             match &v.retained_document {
                 Some(document) => w.bytes(document),
@@ -454,7 +474,16 @@ impl UiState {
                 if asset_bytes > 4 << 20 {
                     return Err(Error::Capacity);
                 }
-                if assets.insert(asset, Asset { kind, bytes }).is_some() {
+                if assets
+                    .insert(
+                        asset,
+                        Asset {
+                            kind,
+                            bytes: Arc::new(bytes),
+                        },
+                    )
+                    .is_some()
+                {
                     return Err(Error::InvalidData);
                 }
             }
@@ -483,6 +512,7 @@ impl UiState {
                 last_sequence,
                 scene_generation,
                 renderer: UiRenderer::new(None, false),
+                resolved_fonts: BTreeMap::new(),
             };
             if out.views.insert(id, view).is_some() {
                 return Err(Error::InvalidData);
@@ -522,18 +552,48 @@ fn validate_assets(view: &View, batch: &bexos_dioxus_scene::SceneBatch) -> Resul
                 }
             }
             bexos_dioxus_scene::Command::Glyphs(run) => {
-                let asset = view
+                let package_asset = view
                     .assets
                     .get(&run.font_asset)
-                    .ok_or_else(|| wasmtime::format_err!("missing font asset"))?;
-                if asset.kind != 2 || asset.bytes.is_empty() {
-                    bail!("invalid font asset");
+                    .is_some_and(|asset| asset.kind == 2 && !asset.bytes.is_empty());
+                if !package_asset && !view.resolved_fonts.contains_key(&run.font_asset) {
+                    bail!("missing font asset");
                 }
             }
             _ => {}
         }
     }
     Ok(())
+}
+
+fn font_resources(view: &View) -> BTreeMap<u32, bexos_dioxus_render::FontResource> {
+    let mut fonts = view
+        .resolved_fonts
+        .iter()
+        .map(|(asset, font)| {
+            let data: Arc<dyn AsRef<[u8]> + Send + Sync> = font.clone();
+            (
+                *asset,
+                bexos_dioxus_render::FontResource {
+                    data,
+                    collection_index: font.collection_index,
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for (asset, resource) in &view.assets {
+        if resource.kind == 2 && !resource.bytes.is_empty() {
+            let data: Arc<dyn AsRef<[u8]> + Send + Sync> = resource.bytes.clone();
+            fonts.insert(
+                *asset,
+                bexos_dioxus_render::FontResource {
+                    data,
+                    collection_index: 0,
+                },
+            );
+        }
+    }
+    fonts
 }
 
 fn retire_releases(view: &mut View) {
@@ -640,6 +700,7 @@ mod migration_tests {
                 height: 600,
                 scale: 1.,
                 assets: BTreeMap::new(),
+                resolved_fonts: BTreeMap::new(),
                 releases: vec![(9, 99)],
                 retained_document: Some(
                     bexos_dioxus_dom::Document {

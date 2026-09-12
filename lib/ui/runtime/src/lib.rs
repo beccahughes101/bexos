@@ -1,7 +1,9 @@
 //! Native retained document rendering for shell Dioxus documents.
 
 use bexos_dioxus_dom::{Document, Node, NodeKind, StyleOrigin};
-use bexos_dioxus_scene::{Command, Layer, Paint, PathCommand, Point, Rect, SceneBatch};
+use bexos_dioxus_scene::{
+    Command, Glyph, GlyphRun, Layer, Paint, PathCommand, Point, Rect, SceneBatch,
+};
 use bexos_flatland_style::{
     Resolver, StylesheetSet, Theme,
     dom::Node as StyleNode,
@@ -12,6 +14,135 @@ use bexos_flatland_style::{
     style::values::{computed::Size, specified::box_::DisplayInside},
 };
 use bexos_ui_theme::ThemePreferences;
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+pub const LATIN_FONT_ASSET: u32 = 2048;
+pub const ARABIC_FONT_ASSET: u32 = 2047;
+pub const DEVANAGARI_FONT_ASSET: u32 = 2046;
+
+struct ShapingFont {
+    engine: bexos_flatland_text::TextEngine,
+    asset: u32,
+}
+
+pub struct FontSet {
+    latin: ShapingFont,
+    arabic: ShapingFont,
+    devanagari: ShapingFont,
+    families: BTreeMap<String, ShapingFont>,
+    metrics: bexos_flatland_text::metrics::Metrics,
+}
+
+impl FontSet {
+    pub fn from_shared<T>(latin: Arc<T>, arabic: Arc<T>, devanagari: Arc<T>) -> Result<Self, Error>
+    where
+        T: AsRef<[u8]> + Send + Sync + 'static,
+    {
+        let metrics = bexos_flatland_text::metrics::Metrics::from_font(latin.as_ref().as_ref())
+            .map_err(|_| Error::UnsupportedLayout)?;
+        Ok(Self {
+            latin: shared_font(latin, LATIN_FONT_ASSET)?,
+            arabic: shared_font(arabic, ARABIC_FONT_ASSET)?,
+            devanagari: shared_font(devanagari, DEVANAGARI_FONT_ASSET)?,
+            families: BTreeMap::new(),
+            metrics,
+        })
+    }
+
+    #[cfg(test)]
+    fn pinned() -> Result<Self, Error> {
+        let latin = include_bytes!(env!("INTER")).to_vec();
+        let arabic = include_bytes!(env!("NOTO_ARABIC")).to_vec();
+        let devanagari = include_bytes!(env!("NOTO_DEVANAGARI")).to_vec();
+        let metrics = bexos_flatland_text::metrics::Metrics::from_font(&latin)
+            .map_err(|_| Error::UnsupportedLayout)?;
+        Ok(Self {
+            latin: owned_font(latin, LATIN_FONT_ASSET)?,
+            arabic: owned_font(arabic, ARABIC_FONT_ASSET)?,
+            devanagari: owned_font(devanagari, DEVANAGARI_FONT_ASSET)?,
+            families: BTreeMap::new(),
+            metrics,
+        })
+    }
+
+    pub fn add_shared_family<T>(
+        &mut self,
+        family: &str,
+        font: Arc<T>,
+        asset: u32,
+    ) -> Result<(), Error>
+    where
+        T: AsRef<[u8]> + Send + Sync + 'static,
+    {
+        let family = normalize_family(family).ok_or(Error::UnsupportedLayout)?;
+        self.families.insert(family, shared_font(font, asset)?);
+        Ok(())
+    }
+
+    pub fn has_family(&self, family: &str) -> bool {
+        normalize_family(family).is_some_and(|family| self.families.contains_key(&family))
+    }
+
+    fn select(&mut self, text: &str, family_stack: Option<&str>) -> &mut ShapingFont {
+        if let Some(stack) = family_stack {
+            for family in stack.split(',').filter_map(normalize_family) {
+                let family = if family == "monospace" {
+                    "jetbrains mono".into()
+                } else {
+                    family
+                };
+                if self.families.contains_key(&family) {
+                    return self.families.get_mut(&family).unwrap();
+                }
+            }
+        }
+        if text
+            .chars()
+            .any(|value| ('\u{0600}'..='\u{06ff}').contains(&value))
+        {
+            &mut self.arabic
+        } else if text
+            .chars()
+            .any(|value| ('\u{0900}'..='\u{097f}').contains(&value))
+        {
+            &mut self.devanagari
+        } else {
+            &mut self.latin
+        }
+    }
+}
+
+fn normalize_family(value: &str) -> Option<String> {
+    let value = value
+        .trim()
+        .trim_matches(['\'', '"'])
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    (!value.is_empty() && value.len() <= 64).then_some(value)
+}
+
+fn shared_font<T>(font: Arc<T>, asset: u32) -> Result<ShapingFont, Error>
+where
+    T: AsRef<[u8]> + Send + Sync + 'static,
+{
+    let mut engine = bexos_flatland_text::TextEngine::default();
+    engine
+        .register_shared_font(font)
+        .map_err(|_| Error::UnsupportedLayout)?;
+    Ok(ShapingFont { engine, asset })
+}
+
+#[cfg(test)]
+fn owned_font(font: Vec<u8>, asset: u32) -> Result<ShapingFont, Error> {
+    let mut engine = bexos_flatland_text::TextEngine::default();
+    engine
+        .register_font(font)
+        .map_err(|_| Error::UnsupportedLayout)?;
+    Ok(ShapingFont { engine, asset })
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RuntimeTheme {
@@ -48,15 +179,21 @@ pub enum Error {
     UnsupportedLayout,
 }
 
+#[cfg(test)]
 pub fn render_document(
     document: &Document,
     theme: &RuntimeTheme,
 ) -> Result<RenderedDocument, Error> {
+    render_document_with_fonts(document, theme, &mut FontSet::pinned()?)
+}
+
+pub fn render_document_with_fonts(
+    document: &Document,
+    theme: &RuntimeTheme,
+    fonts: &mut FontSet,
+) -> Result<RenderedDocument, Error> {
     document.validate().map_err(Error::Document)?;
     let stylesheets = stylesheet_set(document, theme);
-    let metrics =
-        bexos_flatland_text::metrics::Metrics::from_font(include_bytes!(env!("NOTO_SANS")))
-            .map_err(|_| Error::UnsupportedLayout)?;
     let mut resolver = Resolver::new(
         Theme::from_stylesheets(&stylesheets).map_err(Error::Style)?,
         document.width as f32,
@@ -66,7 +203,7 @@ pub fn render_document(
             theme.preferences.color_scheme,
             bexos_ui_theme::ColorScheme::Light
         ),
-        Box::new(DefaultFontMetrics(metrics)),
+        Box::new(DefaultFontMetrics(fonts.metrics)),
     )
     .map_err(Error::Style)?;
     let style_nodes = flatten(document)?;
@@ -112,6 +249,7 @@ pub fn render_document(
         theme,
         &layout,
         &resolver,
+        fonts,
         &mut commands,
     )?;
     commands.push(Command::PopLayer);
@@ -261,6 +399,7 @@ fn emit_node(
     theme: &RuntimeTheme,
     layout: &bexos_flatland_layout::LayoutTree,
     resolver: &Resolver,
+    fonts: &mut FontSet,
     commands: &mut Vec<Command>,
 ) -> Result<(), Error> {
     if matches!(node.kind, NodeKind::Text(_)) {
@@ -289,18 +428,22 @@ fn emit_node(
         .clone_color()
         .to_nscolor()
         .to_le_bytes();
+    let family_stack = declaration_value(&node.declarations, "font-family");
     for child in &node.children {
         match &child.kind {
             NodeKind::Text(value) => {
                 if !value.is_empty() {
-                    vector_text(
+                    shaped_text(
                         commands,
                         rect.x,
                         rect.y,
+                        rect.width.max(1.0),
                         value,
-                        (font_size / 8.0).max(1.0),
+                        font_size,
                         color,
-                    );
+                        family_stack,
+                        fonts,
+                    )?;
                 }
             }
             NodeKind::Image { asset } => {
@@ -310,7 +453,7 @@ fn emit_node(
                     opacity,
                 }));
             }
-            NodeKind::Element => emit_node(child, x, y, theme, layout, resolver, commands)?,
+            NodeKind::Element => emit_node(child, x, y, theme, layout, resolver, fonts, commands)?,
         }
     }
     Ok(())
@@ -438,90 +581,60 @@ fn parse_px(value: &str) -> Option<f32> {
     value.parse::<f32>().ok().filter(|v| v.is_finite())
 }
 
-fn vector_text(
+fn shaped_text(
     commands: &mut Vec<Command>,
     x: f32,
     y: f32,
+    width: f32,
     value: &str,
-    scale: f32,
+    size: f32,
     color: [u8; 4],
-) {
-    for (i, c) in value.chars().take(64).enumerate() {
-        for (row, bits) in glyph(c).into_iter().enumerate() {
-            let mut col = 0;
-            while col < 5 {
-                if bits & (16 >> col) == 0 {
-                    col += 1;
-                    continue;
-                }
-                let start = col;
-                while col < 5 && bits & (16 >> col) != 0 {
-                    col += 1;
-                }
-                rect_command(
-                    commands,
-                    Rect {
-                        x: x + i as f32 * 6.0 * scale + start as f32 * scale,
-                        y: y + row as f32 * scale,
-                        width: (col - start) as f32 * scale,
-                        height: scale,
-                    },
+    family_stack: Option<&str>,
+    fonts: &mut FontSet,
+) -> Result<(), Error> {
+    let font = fonts.select(value, family_stack);
+    let layout = font
+        .engine
+        .shape(
+            value,
+            bexos_flatland_text::TextStyle {
+                size,
+                width,
+                color,
+                ..Default::default()
+            },
+        )
+        .map_err(|_| Error::UnsupportedLayout)?;
+    for line in layout.lines() {
+        for item in line.items() {
+            if let bexos_flatland_text::PositionedLayoutItem::GlyphRun(run) = item {
+                commands.push(Command::Glyphs(GlyphRun {
+                    font_asset: font.asset,
+                    size: run.run().font_size(),
+                    x: x + run.offset(),
+                    y: y + run.baseline(),
                     color,
-                );
+                    glyphs: run
+                        .glyphs()
+                        .map(|glyph| Glyph {
+                            id: glyph.id,
+                            x: glyph.x,
+                            y: -glyph.y,
+                            advance: glyph.advance,
+                        })
+                        .collect(),
+                }));
             }
         }
     }
+    Ok(())
 }
 
-fn glyph(c: char) -> [u8; 7] {
-    match c.to_ascii_uppercase() {
-        'A' => [14, 17, 17, 31, 17, 17, 17],
-        'B' => [30, 17, 17, 30, 17, 17, 30],
-        'C' => [14, 17, 16, 16, 16, 17, 14],
-        'D' => [30, 17, 17, 17, 17, 17, 30],
-        'E' => [31, 16, 16, 30, 16, 16, 31],
-        'F' => [31, 16, 16, 30, 16, 16, 16],
-        'G' => [14, 17, 16, 23, 17, 17, 15],
-        'H' => [17, 17, 17, 31, 17, 17, 17],
-        'I' => [14, 4, 4, 4, 4, 4, 14],
-        'J' => [7, 2, 2, 2, 18, 18, 12],
-        'K' => [17, 18, 20, 24, 20, 18, 17],
-        'L' => [16, 16, 16, 16, 16, 16, 31],
-        'M' => [17, 27, 21, 21, 17, 17, 17],
-        'N' => [17, 25, 21, 19, 17, 17, 17],
-        'O' => [14, 17, 17, 17, 17, 17, 14],
-        'P' => [30, 17, 17, 30, 16, 16, 16],
-        'Q' => [14, 17, 17, 17, 21, 18, 13],
-        'R' => [30, 17, 17, 30, 20, 18, 17],
-        'S' => [15, 16, 16, 14, 1, 1, 30],
-        'T' => [31, 4, 4, 4, 4, 4, 4],
-        'U' => [17, 17, 17, 17, 17, 17, 14],
-        'V' => [17, 17, 17, 17, 17, 10, 4],
-        'W' => [17, 17, 17, 21, 21, 21, 10],
-        'X' => [17, 17, 10, 4, 10, 17, 17],
-        'Y' => [17, 17, 10, 4, 4, 4, 4],
-        'Z' => [31, 1, 2, 4, 8, 16, 31],
-        '0' => [14, 17, 19, 21, 25, 17, 14],
-        '1' => [4, 12, 4, 4, 4, 4, 14],
-        '2' => [14, 17, 1, 2, 4, 8, 31],
-        '3' => [30, 1, 1, 14, 1, 1, 30],
-        '4' => [2, 6, 10, 18, 31, 2, 2],
-        '5' => [31, 16, 16, 30, 1, 1, 30],
-        '6' => [14, 16, 16, 30, 17, 17, 14],
-        '7' => [31, 1, 2, 4, 8, 8, 8],
-        '8' => [14, 17, 17, 14, 17, 17, 14],
-        '9' => [14, 17, 17, 15, 1, 1, 14],
-        '.' => [0, 0, 0, 0, 0, 6, 6],
-        ':' => [0, 6, 6, 0, 6, 6, 0],
-        '-' => [0, 0, 0, 31, 0, 0, 0],
-        '_' => [0, 0, 0, 0, 0, 0, 31],
-        '/' => [1, 1, 2, 4, 8, 16, 16],
-        '*' => [0, 21, 14, 31, 14, 21, 0],
-        '>' => [16, 8, 4, 2, 4, 8, 16],
-        '<' => [1, 2, 4, 8, 4, 2, 1],
-        ' ' => [0; 7],
-        _ => [14, 17, 1, 2, 4, 0, 4],
-    }
+fn declaration_value<'a>(input: &'a str, wanted: &str) -> Option<&'a str> {
+    input.split(';').find_map(|declaration| {
+        let (name, value) = declaration.split_once(':')?;
+        (name.trim() == wanted).then_some(value.trim())
+    })
 }
 
 #[cfg(test)]
@@ -558,7 +671,29 @@ mod tests {
                 .batch
                 .commands
                 .iter()
-                .any(|command| matches!(command, Command::Path(_)))
+                .any(|command| matches!(command, Command::Glyphs(run) if run.glyphs.iter().all(|glyph| glyph.id != 0)))
         );
+    }
+
+    #[test]
+    fn native_runtime_shapes_arabic_and_devanagari() {
+        for text in ["مرحبا", "नमस्ते"] {
+            let document = Document {
+                version: bexos_dioxus_dom::VERSION,
+                width: 240,
+                height: 80,
+                scale: 1.0,
+                clear_rgba: [0, 0, 0, 0],
+                stylesheets: Vec::new(),
+                author_stylesheets: Vec::new(),
+                root: Node::element(1, "main")
+                    .style("width:240px;height:80px;font-size:24px")
+                    .child(Node::text(2, text)),
+            };
+            let rendered = render_document(&document, &RuntimeTheme::default()).unwrap();
+            assert!(rendered.batch.commands.iter().any(|command| {
+                matches!(command, Command::Glyphs(run) if run.glyphs.iter().all(|glyph| glyph.id != 0))
+            }));
+        }
     }
 }

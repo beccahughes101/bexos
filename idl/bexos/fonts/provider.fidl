@@ -1,0 +1,65 @@
+library bexos.fonts;
+
+type FontStatus = strict enum : int32 {
+    OK = 0;
+    NOT_FOUND = -1;
+    ACCESS_DENIED = -2;
+    INVALID_ARGS = -3;
+    UNSUPPORTED_FORMAT = -4;
+    STORAGE = -5;
+    RESOURCE_EXHAUSTED = -6;
+    BUSY = -7;
+};
+
+type FontStyle = strict enum : uint8 {
+    NORMAL = 1;
+    ITALIC = 2;
+    OBLIQUE = 3;
+};
+
+type FontFormat = strict enum : uint8 {
+    TRUETYPE = 1;
+    OPENTYPE = 2;
+    WOFF2 = 3;
+    COLLECTION = 4;
+};
+
+struct FontDescriptor {
+    family_name string:64;
+    weight uint16;
+    style FontStyle;
+    format_preference FontFormat;
+};
+
+resource struct FontHandle {
+    font_id uint64;
+    data handle:VMO;
+    data_len uint64;
+    index_in_collection uint32;
+};
+
+@discoverable
+protocol FontProvider {
+    1: ResolveFont(struct {
+        query FontDescriptor;
+        allow_network_fetch bool;
+    }) -> (resource struct {
+        status FontStatus;
+        font vector<FontHandle>:1;
+    });
+
+    2: GetFallbackList(struct {
+        script string:4;
+    }) -> (resource struct {
+        status FontStatus;
+        fonts vector<FontHandle>:8;
+    });
+
+    3: InstallUserFont(resource struct {
+        font_data handle:VMO;
+        data_len uint64;
+    }) -> (struct {
+        status FontStatus;
+        assigned_id uint64;
+    });
+};

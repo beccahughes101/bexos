@@ -119,7 +119,7 @@ fn desktop_renders_multilingual_text_and_respects_damage() {
         stride: 3200,
         format: Format::Bgra,
     };
-    let desktop = bexos_scened::desktop::Desktop::new(surface).unwrap();
+    let desktop = bexos_scened::desktop::Desktop::new(surface, None).unwrap();
     let mut pixels = vec![0; surface.validate(u64::MAX).unwrap()];
     desktop
         .compose(
@@ -332,6 +332,30 @@ fn transplant_retains_pending_and_committed_scene() {
         new.component.sessions[&4].committed.nodes[&1].translation,
         (0, 0)
     );
+}
+
+#[test]
+fn transplant_retains_the_font_provider_endpoint() {
+    let scene = Scene {
+        font_provider: Some(Channel(33)),
+        ..Default::default()
+    };
+    let source = Runtime::new(Channel(1), Some(Channel(2)), scene);
+    let mut target = Runtime::<Scene>::empty();
+    for key in source.keys() {
+        target
+            .adopt_record(key, source.encode_record(key).unwrap().as_deref())
+            .unwrap();
+    }
+    target.finish_adoption().unwrap();
+    assert_eq!(
+        target.component.font_provider.map(|channel| channel.0),
+        Some(33)
+    );
+    assert!(target.resources().iter().any(|resource| matches!(
+        resource,
+        bexos_userspace::live_migration::Resource::Handle(33)
+    )));
 }
 #[test]
 fn malformed_candidate_does_not_change_source() {

@@ -174,7 +174,9 @@ with tempfile.TemporaryDirectory(prefix='bex-ui-', dir='/tmp') as scratch, ExitS
         # diagnostics, and the native text/GPU renderer stack under TCG. Keep
         # an overall bound without confusing this functional boot budget with
         # the guest's unchanged cutover deadlines.
-        deadline = time.monotonic() + 900
+        boot_timeout = int(os.environ.get("BOOT_UI_TIMEOUT_SECONDS", "900"))
+        assert 60 <= boot_timeout <= 3600, "invalid graphical boot timeout"
+        deadline = time.monotonic() + boot_timeout
         next_capture = 0
         done_at = None
         with selectors.DefaultSelector() as poll:
@@ -353,7 +355,7 @@ with tempfile.TemporaryDirectory(prefix='bex-ui-', dir='/tmp') as scratch, ExitS
             sys.exit(0)
         if dioxus_smoke:
             combined = log + probe_log
-            for marker in [f'virtio-gpu: ready {width}x{height}'.encode(), b'scened: ready background presented', b'wasm_runner: composed component graph dependencies=1', b'wasm_runner: service component instantiated', b'wasm_runner: native UI first frame submitted backend=', b'dioxus-probe: Dioxus WASM app launched and rendered a native UI frame']:
+            for marker in [f'virtio-gpu: ready {width}x{height}'.encode(), b'fontd: ready', b'scened: ready background presented', b'wasm_runner: composed component graph dependencies=1', b'wasm_runner: service component instantiated', b'wasm_runner: native UI first frame submitted backend=', b'dioxus-probe: Dioxus WASM app launched and rendered a native UI frame']:
                 assert marker in combined, marker
             print(f'Validated Dioxus WASM native UI smoke on {arch}')
             sys.exit(0)
@@ -376,7 +378,7 @@ with tempfile.TemporaryDirectory(prefix='bex-ui-', dir='/tmp') as scratch, ExitS
             assert b'virtio-input: queues and report stream adopted' in log
             assert re.search(rb'input-fixture: view=0 kind=1 phase=1[^\n]*id=3', log)
             assert re.search(rb'input-fixture: view=0 kind=1 phase=3[^\n]*id=3', log)
-        for marker in [f'virtio-gpu: ready {width}x{height}'.encode(), b'virtio-gpu: first compositor frame equals splash', b'appd: splash completed; restart disabled', b'splashd: stage=5 percent=100', b'splashd: handoff complete', b'scened: splash frame presented; takeover acknowledged']:
+        for marker in [f'virtio-gpu: ready {width}x{height}'.encode(), b'fontd: ready', b'virtio-gpu: first compositor frame equals splash', b'appd: splash completed; restart disabled', b'splashd: stage=5 percent=100', b'splashd: handoff complete', b'scened: splash frame presented; takeover acknowledged']:
             assert marker in log, marker
         if test_input or validate_splash:
             assert len({digest for _, digest, _ in screenshots}) >= 3, 'No visible animation or transition'

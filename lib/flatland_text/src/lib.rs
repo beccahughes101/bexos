@@ -54,6 +54,25 @@ impl TextEngine {
         self.cache.clear();
         Ok(())
     }
+    pub fn register_shared_font<T>(&mut self, data: Arc<T>) -> Result<(), Error>
+    where
+        T: AsRef<[u8]> + Send + Sync + 'static,
+    {
+        if data.as_ref().as_ref().is_empty() || data.as_ref().as_ref().len() > 32 * 1024 * 1024 {
+            return Err(Error::InvalidFont);
+        }
+        let blob = parley::fontique::Blob::new(data);
+        let families = self.fonts.collection.register_fonts(blob, None);
+        if families.is_empty() {
+            return Err(Error::InvalidFont);
+        }
+        self.fonts.collection.append_generic_families(
+            parley::fontique::GenericFamily::SansSerif,
+            families.iter().map(|(id, _)| *id),
+        );
+        self.cache.clear();
+        Ok(())
+    }
     pub fn shape(&mut self, text: &str, style: TextStyle) -> Result<Arc<Layout<[u8; 4]>>, Error> {
         if text.len() > 64 * 1024 {
             return Err(Error::TextTooLong);

@@ -6,6 +6,7 @@ use bexos_flatland_layout::{
 };
 use bexos_flatland_text::{TextEngine, TextStyle};
 use bexos_graphics::{Damage, Error, Surface, resolved::Snapshot, scene::Graph};
+use bexos_userspace::Channel;
 pub struct Desktop {
     pub profile_gpu: bool,
     pub software_vulkan_timeout_ms: u32,
@@ -17,13 +18,13 @@ pub struct Desktop {
     text: std::sync::Arc<bexos_flatland_text::Layout<[u8; 4]>>,
 }
 impl Desktop {
-    pub fn new(target: Surface) -> Result<Self, Error> {
+    pub fn new(target: Surface, font_provider: Option<Channel>) -> Result<Self, Error> {
         let config = DesktopConfig::decode(include_bytes!(env!("DESKTOP_CONFIG")))?;
         let [left, top, right, bottom] = config.insets;
         let width = target.width.saturating_sub(left + right).min(480).max(1);
         let available_height = target.height.saturating_sub(top + bottom).max(1);
-        let mut engine = TextEngine::default();
-        let mut styles = crate::styling::resolver(target, &config)?;
+        let (mut engine, metrics) = text_engine(font_provider)?;
+        let mut styles = crate::styling::resolver(target, &config, metrics)?;
         styles
             .resolve(&[
                 crate::styling::element(1, None, "desktop", "", ""),
@@ -42,16 +43,7 @@ impl Desktop {
             .clone_color()
             .to_nscolor()
             .to_le_bytes();
-        for font in [
-            include_bytes!(env!("NOTO_SANS")).as_slice(),
-            include_bytes!(env!("NOTO_ARABIC")).as_slice(),
-            include_bytes!(env!("NOTO_DEVANAGARI")).as_slice(),
-        ] {
-            engine
-                .register_font(font.to_vec())
-                .map_err(|_| Error::Invalid)?;
-        }
-        bexos_userspace::log("scened: desktop fonts registered\n");
+        bexos_userspace::log("scened: fontd desktop fonts registered\n");
         let text = engine
             .shape(
                 config.text,
@@ -147,5 +139,49 @@ impl Desktop {
         bexos_graphics::composition::composite(&self.snapshot, surface, output, damage, |_| {
             Some(self.pixels.as_slice())
         })
+    }
+}
+
+fn text_engine(
+    font_provider: Option<Channel>,
+) -> Result<(TextEngine, bexos_flatland_text::metrics::Metrics), Error> {
+    let mut engine = TextEngine::default();
+    #[cfg(bexos_guest)]
+    {
+        let provider = font_provider.ok_or(Error::Invalid)?;
+        let mut client = bexos_font_client::Client::new(provider.0);
+        let latin = client
+            .resolve(bexos_font_client::Request::sans("Inter"))
+            .map_err(|_| Error::Invalid)?;
+        let metrics = bexos_flatland_text::metrics::Metrics::from_font(latin.as_ref().as_ref())
+            .map_err(|_| Error::Invalid)?;
+        engine
+            .register_shared_font(latin)
+            .map_err(|_| Error::Invalid)?;
+        for script in ["Arab", "Deva"] {
+            for font in client.fallback(script).map_err(|_| Error::Invalid)? {
+                engine
+                    .register_shared_font(font)
+                    .map_err(|_| Error::Invalid)?;
+            }
+        }
+        Ok((engine, metrics))
+    }
+    #[cfg(not(bexos_guest))]
+    {
+        let _ = font_provider;
+        let latin = include_bytes!(env!("INTER")).as_slice();
+        let metrics =
+            bexos_flatland_text::metrics::Metrics::from_font(latin).map_err(|_| Error::Invalid)?;
+        for font in [
+            latin,
+            include_bytes!(env!("NOTO_ARABIC")).as_slice(),
+            include_bytes!(env!("NOTO_DEVANAGARI")).as_slice(),
+        ] {
+            engine
+                .register_font(font.to_vec())
+                .map_err(|_| Error::Invalid)?;
+        }
+        Ok((engine, metrics))
     }
 }

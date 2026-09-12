@@ -1,0 +1,23 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "font_client",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "bexos_font_client",
+    edition = "2024",
+    deps = [
+        "//idl:fonts_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//lib/userspace",
+    ],
+)
+
+rust_test(
+    name = "font_client_tests",
+    srcs = ["tests/rights.rs"],
+    crate_name = "font_client_tests",
+    edition = "2024",
+    deps = [":font_client"],
+)

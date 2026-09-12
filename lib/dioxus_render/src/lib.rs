@@ -8,10 +8,17 @@
 use bexos_dioxus_scene::{Command, Paint, PathCommand, Point, Rect, SceneBatch, Transform};
 use bexos_flatland::{Damage, Format, Surface};
 use bexos_flatland_render::{composition::Layer, vello};
+use std::sync::Arc;
 use vello::{
     kurbo::{Affine, BezPath, Rect as VRect, RoundedRect, Stroke},
     peniko::{BlendMode, Color, Fill},
 };
+
+#[derive(Clone)]
+pub struct FontResource {
+    pub data: Arc<dyn AsRef<[u8]> + Send + Sync>,
+    pub collection_index: u32,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -38,6 +45,13 @@ pub fn damage_for(batch: &SceneBatch) -> Result<Damage, Error> {
 }
 
 pub fn vello_layers(batch: &SceneBatch) -> Result<Vec<Layer>, Error> {
+    vello_layers_with_fonts(batch, |_| None)
+}
+
+pub fn vello_layers_with_fonts(
+    batch: &SceneBatch,
+    mut resolve_font: impl FnMut(u32) -> Option<FontResource>,
+) -> Result<Vec<Layer>, Error> {
     batch.validate().map_err(Error::InvalidScene)?;
     let mut scene = vello::Scene::new();
     scene.fill(
@@ -52,6 +66,34 @@ pub fn vello_layers(batch: &SceneBatch) -> Result<Vec<Layer>, Error> {
         match command {
             Command::Path(path) => append_path(&mut scene, path, state.transform)?,
             Command::Glyphs(run) => {
+                if let Some(resource) = resolve_font(run.font_asset) {
+                    let font = vello::peniko::FontData::new(
+                        vello::peniko::Blob::new(resource.data),
+                        resource.collection_index,
+                    );
+                    let mut cursor = 0.0;
+                    scene
+                        .draw_glyphs(&font)
+                        .font_size(run.size)
+                        .transform(
+                            state.transform
+                                * Affine::translate((f64::from(run.x), f64::from(run.y))),
+                        )
+                        .brush(color(run.color))
+                        .draw(
+                            Fill::NonZero,
+                            run.glyphs.iter().map(|glyph| {
+                                let item = vello::Glyph {
+                                    id: glyph.id,
+                                    x: cursor + glyph.x,
+                                    y: glyph.y,
+                                };
+                                cursor += glyph.advance;
+                                item
+                            }),
+                        );
+                    continue;
+                }
                 let mut cursor = run.x;
                 for glyph in &run.glyphs {
                     let w = glyph.advance.max(1.0);

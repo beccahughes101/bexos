@@ -116,6 +116,11 @@ pub fn handle(s: &mut Scene, c: &BoundServiceEndpoint, m: bexos_userspace::ipc::
     }
     let node_count: usize = s.sessions.values().map(|s| s.pending.nodes.len()).sum();
     let available = crate::admission::available(s, c.channel.0);
+    let present_metrics = if ordinal == 9 {
+        Some(s.ensure_font_metrics())
+    } else {
+        None
+    };
     let session = s.sessions.entry(c.channel.0).or_default();
     let result: Result<(), bexos_graphics::Error> = (|| {
         let invalid = bexos_graphics::Error::Invalid;
@@ -214,11 +219,13 @@ pub fn handle(s: &mut Scene, c: &BoundServiceEndpoint, m: bexos_userspace::ipc::
                     return Err(invalid);
                 }
                 let target = s.canvas.as_ref().ok_or(invalid)?.surface;
+                let metrics = present_metrics.ok_or(invalid)??;
                 let styled = crate::styling::prepare(
                     &mut s.style_cache,
                     c.channel.0,
                     &session.pending,
                     target,
+                    metrics,
                 )?;
                 let graph = s
                     .layout_cache

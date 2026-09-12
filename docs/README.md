@@ -13,7 +13,7 @@ BexOS is currently an experimental Rust OS built with Bazel. The implemented sys
 - appd broker, lifecycle, namespace, driver wave, and migration logic;
 - appd AppManager and domain-association cache state;
 - D1 native drivers for PCI, PL011 UART, NVMe, BexFS, archivefs, MemFS, disk images, VirtIO-Net, and deterministic I2C/SPI controller services;
-- core services for VFS, debug, tracing, updates, trust, TEE access, power, users, keychain, networking, time, jobs, and storage verification;
+- core services for VFS, debug, tracing, updates, trust, TEE access, power, users, keychain, fonts, networking, time, jobs, and storage verification;
 - Trusty secure-world firmware with KeyMint, Gatekeeper, storage, AVB, AuthMgr
   FE/BE, the retained BexOS orchestrator, and a pluggable external TEE driver
   ABI loaded by `teed`;
@@ -39,6 +39,7 @@ image/autoinstall set. The storage-image packages are preinstalled on the
 - [WASM Runtime](wasm-runtime.md): implementation status, guest interfaces, limits, lifecycle, and verification.
 - [System and User UI](sysui.md): package selection, authentication, desktop windows, isolation, and recovery.
 - [Dioxus WASM native UI](dioxus.md): Rust WASI component apps, shared UI component packaging, native GPU/CPU rendering, input, and transplant behavior.
+- [Local Fonts](fonts.md): `fontd`, system/user tiers, read-only shared VMOs, matching, shaping clients, and the disabled dynamic-fetch boundary.
 - [Drivers And Storage](drivers-storage.md): D1 drivers, block/filesystem stack, Linux shim, and D2 smoke target.
 - [I2C And SPI Services](i2c_spi.md): scoped D1 I2C/SPI controllers, deterministic backend, topology, migration, and validation state.
 - [Services](services.md): appd, jobd, debugd, traced, vfsd, usersd, keychaind, trustd, netstackd, timed, updated, teed, powerd, i2cd, spid, and storage_verify.
@@ -83,6 +84,7 @@ The QEMU product currently assembles these platform packages:
 - `bexos.service.powerd`
 - `bexos.service.usersd`
 - `bexos.service.keychaind`
+- `bexos.service.fontd` (workstation)
 - `bexos.service.netstackd`
 - `bexos.service.timed`
 - `bexos.service.jobd`
@@ -99,7 +101,7 @@ services carry their wave in their package manifests:
 - wave 2: BexFS, archivefs, and MemFS
 - wave 3: diskimage, vfsd, teed, debugd, traced, updated, and trustd
 - wave 4: powerd and usersd
-- package wave 5: keychaind and netstackd
+- package wave 5: keychaind, fontd and netstackd
 - package wave 6: timed
 - package wave 7: jobd
 

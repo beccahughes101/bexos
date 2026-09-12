@@ -38,11 +38,19 @@ pub fn present(s: &mut Scene, channel: Channel, bytes: &[u8], handles: &[u64]) {
         {
             return Err(Status::ErrInvalidArgs);
         }
-        let session = s.sessions.get(&channel.0).ok_or(Status::ErrInvalidArgs)?;
         let target = s.canvas.as_ref().ok_or(Status::ErrIo)?.surface;
-        let styled =
-            crate::styling::prepare(&mut s.style_cache, channel.0, &session.pending, target)
-                .map_err(|_| Status::ErrInvalidArgs)?;
+        let metrics = s
+            .ensure_font_metrics()
+            .map_err(|_| Status::ErrInvalidArgs)?;
+        let session = s.sessions.get(&channel.0).ok_or(Status::ErrInvalidArgs)?;
+        let styled = crate::styling::prepare(
+            &mut s.style_cache,
+            channel.0,
+            &session.pending,
+            target,
+            metrics,
+        )
+        .map_err(|_| Status::ErrInvalidArgs)?;
         let graph = s
             .layout_cache
             .entry(channel.0)

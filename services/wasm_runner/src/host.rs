@@ -87,6 +87,7 @@ pub fn entry(name: impl Into<String>, raw: u64, kind: Kind, rights: u32) -> Entr
 pub struct NativeHost {
     pub trust: Mutex<Option<std::sync::Weak<dyn Handle>>>,
     pub theme: Mutex<ThemeState>,
+    fonts: Mutex<FontState>,
     pub fs_lock: Mutex<()>,
     pub ui: Mutex<ui::UiState>,
 }
@@ -100,6 +101,7 @@ impl NativeHost {
         Self {
             trust: Mutex::new(None),
             theme: Mutex::new(ThemeState::default()),
+            fonts: Mutex::new(FontState::default()),
             fs_lock: Mutex::new(()),
             ui: Mutex::new(ui::UiState::new()),
         }
@@ -111,10 +113,14 @@ impl NativeHost {
         if entry.name == "bexos.ui.theme.ThemeManager" {
             self.theme.lock().unwrap().observe(&*entry.handle);
         }
+        if entry.name == "bexos.fonts.FontProvider" {
+            self.fonts.lock().unwrap().observe(&*entry.handle);
+        }
     }
     pub fn replace_grants<'a>(&self, entries: impl Iterator<Item = &'a Entry>) {
         *self.trust.lock().unwrap() = None;
         *self.theme.lock().unwrap() = ThemeState::default();
+        *self.fonts.lock().unwrap() = FontState::default();
         for entry in entries {
             self.observe_grant(entry);
         }
@@ -124,9 +130,173 @@ impl NativeHost {
         self.ui.lock().unwrap().quiescent()
     }
 
+    pub fn rebuild_retained_ui(&self) -> Result<()> {
+        let documents = self.ui.lock().unwrap().retained_documents();
+        if documents.is_empty() {
+            return Ok(());
+        }
+        self.refresh_theme();
+        let theme = self.theme.lock().unwrap().current();
+        let mut fonts = self.fonts.lock().unwrap();
+        for document in documents {
+            fonts.prepare_document(&document)?;
+        }
+        fonts.prepare()?;
+        let assets = fonts.assets.clone();
+        let set = fonts.set.as_mut().expect("font set prepared");
+        self.ui
+            .lock()
+            .unwrap()
+            .redraw_documents(&theme, set, &assets)
+    }
+
     fn refresh_theme(&self) -> bool {
         self.theme.lock().unwrap().poll()
     }
+}
+
+#[derive(Default)]
+struct FontState {
+    provider: Option<Arc<dyn Handle>>,
+    client: Option<bexos_font_client::Client>,
+    set: Option<bexos_ui_runtime::FontSet>,
+    assets: Vec<(u32, Arc<bexos_font_client::MappedFont>)>,
+    attempted: std::collections::BTreeSet<String>,
+    next_asset: u32,
+}
+
+impl FontState {
+    fn observe(&mut self, handle: &dyn Handle) {
+        self.provider = Some(clone_handle(handle));
+        self.client = None;
+        self.set = None;
+        self.assets.clear();
+        self.attempted.clear();
+        self.next_asset = 2000;
+    }
+
+    fn prepare(&mut self) -> Result<()> {
+        if self.set.is_some() {
+            return Ok(());
+        }
+        if self.next_asset == 0 {
+            self.next_asset = 2000;
+        }
+        let provider = self
+            .provider
+            .as_ref()
+            .ok_or_else(|| wasmtime::format_err!("font provider unavailable"))?;
+        let client = self
+            .client
+            .get_or_insert_with(|| bexos_font_client::Client::new(provider.native()));
+        let latin = client
+            .resolve(bexos_font_client::Request::sans("Inter"))
+            .map_err(|error| wasmtime::format_err!("resolve Inter: {error:?}"))?;
+        let arabic = client
+            .fallback("Arab")
+            .map_err(|error| wasmtime::format_err!("resolve Arabic fallback: {error:?}"))?
+            .into_iter()
+            .next()
+            .ok_or_else(|| wasmtime::format_err!("empty Arabic fallback"))?;
+        let devanagari = client
+            .fallback("Deva")
+            .map_err(|error| wasmtime::format_err!("resolve Devanagari fallback: {error:?}"))?
+            .into_iter()
+            .next()
+            .ok_or_else(|| wasmtime::format_err!("empty Devanagari fallback"))?;
+        self.set = Some(
+            bexos_ui_runtime::FontSet::from_shared(
+                latin.clone(),
+                arabic.clone(),
+                devanagari.clone(),
+            )
+            .map_err(|error| wasmtime::format_err!("font shaping setup: {error:?}"))?,
+        );
+        self.assets = vec![
+            (bexos_ui_runtime::LATIN_FONT_ASSET, latin),
+            (bexos_ui_runtime::ARABIC_FONT_ASSET, arabic),
+            (bexos_ui_runtime::DEVANAGARI_FONT_ASSET, devanagari),
+        ];
+        let mono = client
+            .resolve(bexos_font_client::Request::sans("JetBrains Mono"))
+            .map_err(|error| wasmtime::format_err!("resolve JetBrains Mono: {error:?}"))?;
+        self.set
+            .as_mut()
+            .unwrap()
+            .add_shared_family("JetBrains Mono", mono.clone(), self.next_asset)
+            .map_err(|error| wasmtime::format_err!("monospace shaping setup: {error:?}"))?;
+        self.assets.push((self.next_asset, mono));
+        self.next_asset -= 1;
+        Ok(())
+    }
+
+    fn prepare_document(&mut self, document: &[u8]) -> Result<()> {
+        self.prepare()?;
+        let document = bexos_dioxus_dom::Document::decode(document)
+            .map_err(|error| wasmtime::format_err!("document font families: {error:?}"))?;
+        for family in document_font_families(&document) {
+            let requested = match family.as_str() {
+                "monospace" => "JetBrains Mono",
+                "sans-serif" | "system-ui" | "ui-sans-serif" => "Inter",
+                _ => family.as_str(),
+            };
+            if self.set.as_ref().unwrap().has_family(requested)
+                || !self.attempted.insert(requested.to_lowercase())
+            {
+                continue;
+            }
+            let Some(client) = self.client.as_mut() else {
+                continue;
+            };
+            let Ok(font) = client.resolve(bexos_font_client::Request::sans(requested)) else {
+                continue;
+            };
+            let asset = self.next_asset;
+            self.next_asset = self.next_asset.saturating_sub(1).max(1024);
+            self.set
+                .as_mut()
+                .unwrap()
+                .add_shared_family(requested, font.clone(), asset)
+                .map_err(|error| wasmtime::format_err!("CSS font family {requested}: {error:?}"))?;
+            self.assets.push((asset, font));
+        }
+        Ok(())
+    }
+}
+
+fn document_font_families(document: &bexos_dioxus_dom::Document) -> Vec<String> {
+    fn scan(value: &str, out: &mut Vec<String>) {
+        for tail in value.split("font-family:").skip(1) {
+            let stack = tail.split([';', '}']).next().unwrap_or("");
+            for family in stack.split(',') {
+                let family = family
+                    .trim()
+                    .trim_matches(['\'', '"'])
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .to_lowercase();
+                if !family.is_empty() && family.len() <= 64 && !out.contains(&family) {
+                    out.push(family);
+                }
+            }
+        }
+    }
+    fn visit(node: &bexos_dioxus_dom::Node, out: &mut Vec<String>) {
+        scan(&node.declarations, out);
+        for child in &node.children {
+            visit(child, out);
+        }
+    }
+    let mut out = Vec::new();
+    visit(&document.root, &mut out);
+    for rule in &document.stylesheets {
+        scan(&rule.declarations, &mut out);
+    }
+    for stylesheet in &document.author_stylesheets {
+        scan(stylesheet, &mut out);
+    }
+    out
 }
 
 impl Default for ThemeState {
@@ -452,15 +622,29 @@ impl Host for NativeHost {
     fn ui_submit_document(&self, view: u32, document: &[u8]) -> Result<()> {
         self.refresh_theme();
         let theme = self.theme.lock().unwrap().current();
+        let mut fonts = self.fonts.lock().unwrap();
+        fonts.prepare_document(document)?;
+        let assets = fonts.assets.clone();
+        let set = fonts.set.as_mut().expect("font set prepared");
         self.ui
             .lock()
             .unwrap()
-            .submit_document(view, document, &theme)
+            .submit_document(view, document, &theme, set, &assets)
     }
     fn ui_poll_input(&self, view: u32) -> Result<Vec<bexos_wasm_runtime::host::UiInputEvent>> {
         if self.refresh_theme() {
             let theme = self.theme.lock().unwrap().current();
-            self.ui.lock().unwrap().redraw_documents(&theme)?;
+            let mut fonts = self.fonts.lock().unwrap();
+            for document in self.ui.lock().unwrap().retained_documents() {
+                fonts.prepare_document(&document)?;
+            }
+            fonts.prepare()?;
+            let assets = fonts.assets.clone();
+            let set = fonts.set.as_mut().expect("font set prepared");
+            self.ui
+                .lock()
+                .unwrap()
+                .redraw_documents(&theme, set, &assets)?;
         }
         self.ui.lock().unwrap().poll_input(view)
     }
@@ -470,7 +654,17 @@ impl Host for NativeHost {
     ) -> Result<bexos_wasm_runtime::host::UiPresentationStatus> {
         if self.refresh_theme() {
             let theme = self.theme.lock().unwrap().current();
-            self.ui.lock().unwrap().redraw_documents(&theme)?;
+            let mut fonts = self.fonts.lock().unwrap();
+            for document in self.ui.lock().unwrap().retained_documents() {
+                fonts.prepare_document(&document)?;
+            }
+            fonts.prepare()?;
+            let assets = fonts.assets.clone();
+            let set = fonts.set.as_mut().expect("font set prepared");
+            self.ui
+                .lock()
+                .unwrap()
+                .redraw_documents(&theme, set, &assets)?;
         }
         self.ui.lock().unwrap().presentation_status(view)
     }

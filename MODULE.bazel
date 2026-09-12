@@ -108,6 +108,10 @@ http_file(name = "noto_devanagari", urls = ["https://raw.githubusercontent.com/g
 http_file(name = "noto_license", urls = ["https://raw.githubusercontent.com/google/fonts/5e35378e6bda803962ee6fd257e444a7d459660d/ofl/notosans/OFL.txt"], sha256 = "cee9892f9f0cc8fe882c9e9537ee6a89621d86ee7ceaf70b02e2b2b1c25c061a", downloaded_file_path = "OFL.txt")
 http_file(name = "noto_arabic_license", urls = ["https://raw.githubusercontent.com/google/fonts/5e35378e6bda803962ee6fd257e444a7d459660d/ofl/notosansarabic/OFL.txt"], sha256 = "07fc70bfeb985cc1a87a8587d0a0c80bab11c86c9dc3fd95b6f0cb332f983e96", downloaded_file_path = "OFL-Arabic.txt")
 http_file(name = "noto_devanagari_license", urls = ["https://raw.githubusercontent.com/google/fonts/5e35378e6bda803962ee6fd257e444a7d459660d/ofl/notosansdevanagari/OFL.txt"], sha256 = "a216f6f8d85c7228093e0ee5e258d9d377e6671f68acb4db1930b29583d0f331", downloaded_file_path = "OFL-Devanagari.txt")
+http_file(name = "inter", urls = ["https://raw.githubusercontent.com/google/fonts/5e35378e6bda803962ee6fd257e444a7d459660d/ofl/inter/Inter%5Bopsz%2Cwght%5D.ttf"], sha256 = "29160a80ff49ddcab2c97711247e08b1fab27a484a329ce8b813d820dc559031", downloaded_file_path = "InterVariable.ttf")
+http_file(name = "inter_license", urls = ["https://raw.githubusercontent.com/google/fonts/5e35378e6bda803962ee6fd257e444a7d459660d/ofl/inter/OFL.txt"], sha256 = "5b9321a4298cfeb6b34354164a1c3afc3db114569984c502b9b35d988fd58c57", downloaded_file_path = "Inter-OFL.txt")
+http_file(name = "jetbrains_mono", urls = ["https://raw.githubusercontent.com/google/fonts/5e35378e6bda803962ee6fd257e444a7d459660d/ofl/jetbrainsmono/JetBrainsMono%5Bwght%5D.ttf"], sha256 = "48715a42ec242c21e9f02692891e147d022299a52e48d5e413e1a942193ffeda", downloaded_file_path = "JetBrainsMonoVariable.ttf")
+http_file(name = "jetbrains_mono_license", urls = ["https://raw.githubusercontent.com/google/fonts/5e35378e6bda803962ee6fd257e444a7d459660d/ofl/jetbrainsmono/OFL.txt"], sha256 = "b2fe5e8987594e9ffd1d2ca52a2f5d73eb8335243893c5d6254b5ad69269591d", downloaded_file_path = "JetBrainsMono-OFL.txt")
 
 http_archive(
     name = "wasmtime_wasi_wit",
