@@ -169,10 +169,23 @@ bazel run --config=x86_64 //device/virtual/qemu/workstation:run
 Workstation uses the same Trusty boot chain, teed, signed Trusty driver, and
 RPMB integration as nongui on AArch64. The x86 product retains its current
 boot and Trusty limitations; see [x86_64 support](docs/x86_64-support.md).
-Graphics and input support currently consists of configuration and virtual
-hardware: no guest graphics/input drivers or compositor are installed, so a
-QEMU window does not yet display a BexOS desktop or provide guest input.
+Workstation bundles graphics/input drivers, the scened compositor, and the
+SysUI login and UserUI desktop packages. See [System and User UI](docs/sysui.md)
+for login, session controls, and current limitations.
 Opening the window is separate from reaching debugd readiness.
+
+Once the running workstation reports debugd readiness, create a user from a
+second terminal (replace the example name and password):
+
+```sh
+bazel run //tools/bexctl:bexctl -- \
+  --socket /tmp/bexos-qemu-workstation-aarch64-debugd.sock \
+  users create --uid 1000 --name alice --display-name Alice --password 'testpass'
+```
+
+For x86_64, use `/tmp/bexos-qemu-workstation-x86_64-debugd.sock` instead.
+Select the new user in SysUI and sign in with the same password. The default
+runner uses a temporary disk, so this account does not survive a new instance.
 
 Each runner owns a temporary writable NVMe disk and its QEMU/RPMB helper
 processes. Stop it with Ctrl-C or close the QEMU window. Debug sockets include

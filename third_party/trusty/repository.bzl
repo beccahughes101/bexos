@@ -135,6 +135,16 @@ filegroup(
     srcs = glob([
         "MacOSX.sdk/usr/include/**",
         "MacOSX.sdk/usr/lib/**",
+        # Foundation and its transitive headers used by native QEMU tools.
+        # Avoid a whole-SDK glob: Ruby.framework contains recursive symlinks.
+        "MacOSX.sdk/System/Library/Frameworks/CFNetwork.framework/**",
+        "MacOSX.sdk/System/Library/Frameworks/CoreFoundation.framework/**",
+        "MacOSX.sdk/System/Library/Frameworks/CoreGraphics.framework/**",
+        "MacOSX.sdk/System/Library/Frameworks/CoreServices.framework/**",
+        "MacOSX.sdk/System/Library/Frameworks/DiskArbitration.framework/**",
+        "MacOSX.sdk/System/Library/Frameworks/Foundation.framework/**",
+        "MacOSX.sdk/System/Library/Frameworks/IOKit.framework/**",
+        "MacOSX.sdk/System/Library/Frameworks/Security.framework/**",
     ]),
 )
 """)
@@ -145,15 +155,34 @@ host_macos_sdk_repository = repository_rule(
 )
 
 def _host_parser_tools_impl(ctx):
-    for name in ["bison", "flex"]:
-        tool = ctx.which(name)
-        if not tool:
-            fail("Native Trusty AIDL generation requires %s; install the host bison and flex packages" % name)
-        ctx.symlink(tool, name)
-    result = ctx.execute([ctx.path("bison"), "--print-datadir"])
-    if result.return_code:
-        fail("locate Bison parser skeletons: " + result.stderr)
-    ctx.symlink(result.stdout.strip(), "bison_data")
+    # Xcode's Bison 2.3 cannot generate the current AIDL grammar. Homebrew's
+    # modern Bison is keg-only, so it need not appear on PATH.
+    override = ctx.os.environ.get("BISON")
+    candidates = [override] if override else [ctx.which("bison")]
+    if not override and ctx.os.name == "mac os x":
+        candidates += ["/opt/homebrew/opt/bison/bin/bison", "/usr/local/opt/bison/bin/bison"]
+    bison = None
+    for candidate in candidates:
+        if not candidate or not ctx.path(candidate).exists:
+            continue
+        version = ctx.execute([candidate, "--version"])
+        if version.return_code or not version.stdout.strip():
+            continue
+        major = version.stdout.splitlines()[0].split(" ")[-1].split(".")[0]
+        if not major.isdigit() or int(major) < 3:
+            continue
+        result = ctx.execute([candidate, "--print-datadir"])
+        if not result.return_code and ctx.path(result.stdout.strip()).exists:
+            bison = candidate
+            ctx.symlink(result.stdout.strip(), "bison_data")
+            break
+    if not bison:
+        fail("Native Trusty AIDL generation requires Bison 3 or newer with parser skeletons; install bison (brew install bison on macOS) or set --repo_env=BISON=/absolute/path/to/bison. Xcode's Bison 2.3 is unsupported.")
+    ctx.symlink(bison, "bison")
+    flex = ctx.which("flex")
+    if not flex:
+        fail("Native Trusty AIDL generation requires flex; install the host flex package")
+    ctx.symlink(flex, "flex")
     ctx.file("BUILD.bazel", """
 package(default_visibility = ["//visibility:public"])
 exports_files(["bison", "flex"])
@@ -162,6 +191,7 @@ filegroup(name = "bison_data", srcs = glob(["bison_data/**"]))
 
 host_parser_tools = repository_rule(
     implementation = _host_parser_tools_impl,
+    environ = ["BISON"],
     local = True,
     configure = True,
 )

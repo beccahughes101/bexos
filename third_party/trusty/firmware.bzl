@@ -51,6 +51,9 @@ def trusty_firmware(name, output_dir = "built", acceptance = False, architecture
             ":host_rpmb_dev",
             ":host_aidl",
             ":host_environment",
+            # The build script uses SDK paths relative to the execroot, not
+            # the host_environment executable's runfiles tree.
+            ":host_sdk_files",
             "@trusty_host_libclang//:libclang",
             "@trusty_rust_1_80_1//:rustc",
             "@trusty_rust_1_80_1//:rustc_lib",

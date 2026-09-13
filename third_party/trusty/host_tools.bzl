@@ -17,9 +17,13 @@ def trusty_host_tools():
             "@platforms//os:osx": "@trusty_macos_sdk//:MacOSX.sdk/usr/include/stdio.h",
             "//conditions:default": None,
         }),
-        sdk_files = select({
-            "@platforms//os:osx": "@trusty_macos_sdk//:toolchain_files",
-            "//conditions:default": None,
+        sdk_files = ":host_sdk_files",
+    )
+    native.filegroup(
+        name = "host_sdk_files",
+        srcs = select({
+            "@platforms//os:osx": ["@trusty_macos_sdk//:toolchain_files"],
+            "//conditions:default": [],
         }),
     )
     for name, (os, cpu, _) in _HOSTS.items():

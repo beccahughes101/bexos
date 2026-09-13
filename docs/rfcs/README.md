@@ -73,3 +73,4 @@ An RFC number does not indicate approval or implementation status.
 | [0062](0062/README.md) |  Native UI Component Architecture | 2026-09-12 | [Implementation and gaps](0062/CURRENT.md) |
 | [0063](0063/README.md) | Tiered local fonts and future OCI discovery | 2026-09-12 | [Implementation and gaps](0063/CURRENT.md) |
 | [0064](0064/README.md) | Centralized package daemon and secure OCI/TUF resolution | 2026-09-12 | [Implementation and gaps](0064/CURRENT.md) |
+| [0065](0065/README.md) |  Timezones  | 2026-09-13 | [Implementation and gaps](0065/CURRENT.md) |

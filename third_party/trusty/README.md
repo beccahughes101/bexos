@@ -40,7 +40,11 @@ Install native C/C++ development headers/libraries, GNU make, GNU sed, Python 3,
 libclang. On Ubuntu/Debian, the additional package names are
 `build-essential bison flex device-tree-compiler libclang-dev llvm-dev libssl-dev`.
 On Darwin retain Xcode command line tools and the macOS SDK, GNU sed (`gsed`),
-and Homebrew OpenSSL 3. Darwin's SDK and linker are used only for host tools;
+and Homebrew OpenSSL 3 and Bison 3 or newer (`brew install bison`). Xcode's
+Bison 2.3 cannot generate the AIDL grammar. Bazel discovers Homebrew's keg-only
+Bison in either standard prefix; a custom installation can be selected with
+`--repo_env=BISON=/absolute/path/to/bison`.
+Darwin's SDK and linker are used only for host tools;
 they are not Linux build dependencies.
 
 For a nonstandard Linux LLVM installation, pass

@@ -143,7 +143,7 @@ alias(
 # guest sysroot. Register these after the specialized guest toolchains.
 host_tools(
     name = "native_llvm",
-    tools = [":llvm_headers", "@llvm//tools:clang", "@llvm//tools:clang++", "@llvm//tools:llvm-ar", "@llvm//tools:llvm-nm", "@llvm//tools:llvm-strip"],
+    tools = [":llvm_headers", "@llvm//tools:clang", "@llvm//tools:clang++", "@llvm//tools:llvm-ar", "@llvm//tools:llvm-libtool-darwin", "@llvm//tools:llvm-nm", "@llvm//tools:llvm-strip"],
 )
 filegroup(
     name = "native_toolchain_files",

@@ -16,7 +16,9 @@ def _impl(ctx):
     if ctx.file.sdk_marker:
         sdk = ctx.file.sdk_marker.dirname[:-len("/usr/include")]
         flags += ["-isysroot", sdk]
-        link_flags += ["-isysroot", sdk]
+        # Rust links do not necessarily inherit PATH; use Apple's linker shim
+        # explicitly rather than asking Clang to find `ld` in the environment.
+        link_flags += ["-isysroot", sdk, "--ld-path=/usr/bin/ld"]
         includes += ["%workspace%/" + sdk]
         darwin_features = [
             feature(name = "shared_flag", flag_sets = [flag_set(
@@ -26,6 +28,8 @@ def _impl(ctx):
             feature(name = "runtime_library_search_directories", flag_sets = [flag_set(
                 actions = _LINK,
                 flag_groups = [flag_group(
+                    # Rust build-script links may omit runtime search paths.
+                    expand_if_available = "runtime_library_search_directories",
                     iterate_over = "runtime_library_search_directories",
                     flags = ["-Wl,-rpath,@loader_path/%{runtime_library_search_directories}"],
                 )],
