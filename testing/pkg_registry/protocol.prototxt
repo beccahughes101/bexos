@@ -1,0 +1,8 @@
+package_name: "bexos.test.pkg_protocol"
+name: "Package client ownership tests"
+processes {
+  name: "probe"
+  runner: "elf"
+  lifecycle { update_strategy: RESTART }
+  runner_options { [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/probe" } }
+}

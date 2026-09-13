@@ -33,6 +33,11 @@ processes {
 }
 config_schema {
  fields {
+  name: "network_sync_enabled"
+  type: CONFIG_BOOL
+  default_value { bool_value: true }
+ }
+ fields {
   name: "primary_server"
   type: CONFIG_STRING
   required: true

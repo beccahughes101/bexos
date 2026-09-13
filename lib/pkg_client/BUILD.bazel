@@ -1,0 +1,13 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+package(default_visibility = ["//visibility:public"])
+rust_library(
+    name = "pkg_client",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "bexos_pkg_client",
+    edition = "2024",
+    deps = ["//idl:pkg_fidl_rust", "//idl:kernel_fidl_rust", "//lib/userspace", "@crates//:sha2", "@crates//:blake3"],
+)
+rust_test(name = "tests", srcs = glob(["tests/**/*.rs"]), edition = "2024", deps = [":pkg_client", "//idl:pkg_fidl_rust"])
+
+genquery(name = "dependency_closure", expression = "deps(//lib/pkg_client:pkg_client)", scope = [":pkg_client"])
+sh_test(name = "dependency_policy_test", srcs = ["dependency_policy_test.sh"], args = ["$(location :dependency_closure)"], data = [":dependency_closure"])

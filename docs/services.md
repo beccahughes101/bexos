@@ -16,8 +16,9 @@ permissioned `InstallUserFont` method.
 user's encrypted home font directory. It validates bounded SFNT/TTC data,
 deduplicates canonical VMOs by SHA-256, returns only transfer/read/map handles,
 and migrates client channels, service/storage endpoints, the user watcher,
-indexes, and live VMOs during heart transplant. Dynamic OCI/pkgd fetching is a
-future boundary; current misses remain local and return `NOT_FOUND`. See
+indexes, and live VMOs during heart transplant. Configured remote misses now
+queue through pkgd; default products have no remote mappings and guest OCI
+acceptance remains outstanding. See
 [Local Fonts](fonts.md) and [RFC 0063 current state](rfcs/0063/CURRENT.md).
 
 It also exposes the public singleton `bexos.app.opener.Opener` for URL, file,
@@ -553,6 +554,11 @@ step realtime immediately; subsequent accepted network corrections up to the
 configured one-second threshold slew at up to 500 ppm. On QEMU, the wave-0 PL031
 RTC driver can provide startup UTC and accepts best-effort writes after manual
 or network time acceptance. Accepted NTS sync records `ClockSource::NTS_SECURE`.
+The `network_sync_enabled` component configuration defaults to true. Setting it
+to false disables automatic and requested network synchronization; RTC validation
+still runs at boot. The package-registry acceptance fixture uses this mode so
+its clock prerequisite does not depend on a public time server. A retained time
+quality record alone no longer establishes the current boot's kernel clock.
 
 `timed` is std-linked and runs its service loop on a two-worker Tokio runtime.
 The loop uses the shared `//lib/userspace_async` helpers around explicit BexOS
@@ -830,3 +836,15 @@ The workstation adds three BootFS components with heart-transplant archives:
 Appd coordinates milestones and marks a successfully exited splash as a completed
 boot service, preventing restart. Graphics readiness failures are nonfatal.
 See [boot UI](bootui.md) for protocol, migration, validation, and current limits.
+
+
+RFC 0064 now adds the centralized pkgd source implementation, including a
+configured font miss path, asynchronous app installation, OCI/TUF verification
+and a protected package-state endpoint. Default products contain no remote
+registry roots or mappings. The complete guest/lifecycle acceptance remains
+outstanding; see [package resolution current state](rfcs/0064/CURRENT.md).
+The resolver still performs synchronous service and storage operations, and
+the shared TLS root-service path needs VMO ownership cleanup. Live consumer
+delivery and replacement have not passed guest acceptance. See the
+[current gaps](rfcs/0064/CURRENT.md#current-gaps) for implementation limitations
+and missing lifecycle assertions.

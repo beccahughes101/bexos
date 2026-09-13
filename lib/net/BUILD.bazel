@@ -32,6 +32,9 @@ rust_library(
         "//lib/trust_store:trust_store_bexos_std",
         "//lib/userspace",
         "@crates//:rustls",
+        "@crates//:h2",
+        "@crates//:http",
+        "@crates//:tokio",
     ],
 )
 
@@ -50,6 +53,9 @@ rust_library(
         "//lib/trust_store:trust_store_bexos_std",
         "//lib/userspace",
         "@crates//:rustls",
+        "@crates//:h2",
+        "@crates//:http",
+        "@crates//:tokio",
     ],
 )
 

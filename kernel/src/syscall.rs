@@ -254,25 +254,7 @@ fn raw(rt: &mut Rt, r: &[u64; 10]) -> Result<(usize, usize), Status> {
     Ok((e.bytes, e.handles))
 }
 fn method(protocol: u64, ordinal: u64) -> Option<&'static str> {
-    let methods = match protocol {
-        1 => CHANNEL_CONTROL_PUBLIC_METHODS,
-        10 => SOCKET_CONTROL_PUBLIC_METHODS,
-        2 => VIRTUAL_MEMORY_PUBLIC_METHODS,
-        3 => TASK_CONTROL_PUBLIC_METHODS,
-        4 => SYSTEM_PRIVILEGED_BEXOS_SYSTEM_PRIVILEGED_METHODS,
-        5 => OBJECT_CONTROL_PUBLIC_METHODS,
-        6 => KERNEL_DEBUG_CONTROL_PUBLIC_METHODS,
-        12 => KERNEL_TRACE_CONTROL_BEXOS_SYSTEM_PRIVILEGED_METHODS,
-        9 => SECURE_MONITOR_PUBLIC_METHODS,
-        8 => CLOCK_PUBLIC_METHODS,
-        13 => RANDOM_PUBLIC_METHODS,
-        11 => PROFILE_PROVIDER_PUBLIC_METHODS,
-        _ => return None,
-    };
-    methods
-        .iter()
-        .find(|m| m.ordinal == ordinal)
-        .map(|m| m.name)
+    bexos_kernel_core::kernel_services::routing::syscall_method(protocol, ordinal)
 }
 
 const fn q_channel_flow_id(ordinal: u64) -> u64 {

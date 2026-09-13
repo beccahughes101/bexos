@@ -9,6 +9,7 @@ pub mod migration;
 pub mod service;
 pub mod smoltcp_runtime;
 pub mod stack;
+mod stream;
 pub mod tcp;
 pub mod udp;
 

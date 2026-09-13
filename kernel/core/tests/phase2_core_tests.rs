@@ -2072,6 +2072,23 @@ fn kernel_clock_adjusts_realtime_without_touching_monotonic() {
 }
 
 #[test]
+fn system_privileged_syscall_routes_every_declared_capability() {
+    use bexos_kernel_core::kernel_services::routing::syscall_method;
+    let mut checked_time = false;
+    for capability in kernel_fidl::CAPABILITY_BINDINGS
+        .iter()
+        .filter(|c| c.protocol == "SystemPrivileged")
+    {
+        for method in capability.methods {
+            assert_eq!(syscall_method(4, method.ordinal), Some(method.name));
+            checked_time |= method.name == "AdjustClock";
+        }
+    }
+    assert!(checked_time, "SetTime must participate in syscall routing");
+    assert_eq!(syscall_method(4, 0), None);
+}
+
+#[test]
 fn invalid_clock_type_fidl_decode_fails() {
     let mut bytes = [0u8; 8];
     bytes[0] = 99;

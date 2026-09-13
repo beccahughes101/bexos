@@ -182,6 +182,9 @@ impl TimedService {
     }
 
     pub async fn force_sync(&mut self) -> Status {
+        if !self.config.network_sync_enabled {
+            return Status::ErrUnsupported;
+        }
         let Some(monotonic_ns) = self.monotonic_ns() else {
             self.record_failure(Status::ErrInvalidArgs);
             return Status::ErrInvalidArgs;
@@ -278,20 +281,24 @@ impl TimedService {
     }
 
     fn bootstrap_from_rtc(&mut self) {
-        if self.quality.state == SyncState::Synced || self.quality.state == SyncState::Manual {
-            return;
-        }
+        // A retained quality record does not establish this boot's kernel clock.
+        // Revalidate the hardware source before reporting synchronized time.
+        self.quality = state::default_quality();
         if self.rtc.is_none() {
+            log("timed: RTC endpoint unavailable\n");
             return;
         }
         let Some(monotonic_ns) = self.monotonic_ns() else {
+            log("timed: monotonic clock unavailable for RTC bootstrap\n");
             return;
         };
         let Some(utc_timestamp_ns) = self.read_rtc() else {
+            log("timed: RTC read failed validation\n");
             return;
         };
         let offset = utc_timestamp_ns - monotonic_ns as i64;
         if self.adjust_realtime(offset, 0) != Status::Ok {
+            log("timed: RTC clock adjustment rejected\n");
             return;
         }
         self.clear_slew();
@@ -305,6 +312,7 @@ impl TimedService {
             last_error: Status::Ok,
         };
         let _ = state::store(self.data, &self.quality);
+        log("timed: validated RTC initialized realtime\n");
     }
 
     fn apply_network_quality(&mut self, monotonic_ns: u64, quality: TimeQuality) -> Status {
@@ -633,7 +641,10 @@ async fn serve(mut runtime: Runtime) -> ! {
             bexos_userspace_async::yield_once().await;
             continue;
         }
-        if !source.active() && runtime.service.next_sync_ms == 0 {
+        if runtime.service.config.network_sync_enabled
+            && !source.active()
+            && runtime.service.next_sync_ms == 0
+        {
             let status = runtime.service.force_sync().await;
             let quality = runtime.service.quality();
             notify_time_watchers(&mut runtime.service.quality_watchers, quality);
@@ -644,7 +655,10 @@ async fn serve(mut runtime: Runtime) -> ! {
             };
             runtime.service.next_sync_ms = now_ms().saturating_add(u64::from(delay));
             source.changed(0);
-        } else if runtime.service.next_sync_ms != 0 && now_ms() >= runtime.service.next_sync_ms {
+        } else if runtime.service.config.network_sync_enabled
+            && runtime.service.next_sync_ms != 0
+            && now_ms() >= runtime.service.next_sync_ms
+        {
             runtime.service.next_sync_ms = 0;
             source.changed(0);
         }

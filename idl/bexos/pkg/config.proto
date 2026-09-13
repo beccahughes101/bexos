@@ -1,0 +1,34 @@
+syntax = "proto3";
+package bexos.pkg;
+
+message Config {
+  repeated Repository repositories = 1;
+  repeated Consumer consumers = 2;
+  repeated ArtifactMapping mappings = 3;
+  uint64 max_cache_bytes = 4;
+  uint64 max_payload_bytes = 5;
+  uint32 max_inflight = 6;
+  uint32 max_waiters = 7;
+  uint64 connect_timeout_ms = 8;
+  uint64 request_timeout_ms = 9;
+}
+message Repository {
+  string registry_host = 1;
+  string repository = 2;
+  bytes trusted_root = 3;
+  repeated string token_origins = 4;
+  repeated string redirect_origins = 5;
+  repeated bytes tls_roots_der = 6;
+}
+message Consumer {
+  string package_id = 1;
+  repeated uint32 artifact_kinds = 2;
+  repeated string repositories = 3;
+}
+message ArtifactMapping {
+  string name = 1;
+  string registry_host = 2;
+  string repository = 3;
+  string tag = 4;
+  uint32 kind = 5;
+}

@@ -69,8 +69,9 @@ impl TcpEndpoint {
     }
 
     pub fn close(&mut self) {
-        if let Some(socket) = self.stream {
+        if let Some(socket) = self.stream.take() {
             let _ = socket.shutdown(true, true);
+            let _ = bexos_userspace::Memory::close(socket.0);
         }
         self.state = TcpState::Closed;
     }

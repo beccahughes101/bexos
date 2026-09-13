@@ -1,4 +1,6 @@
 package(default_visibility = ["//visibility:public"])
+cc_library(name = "package_state", srcs = ["package_state.c"], hdrs = ["include/bexos_package_state.h"])
+cc_test(name = "package_state_test", srcs = ["package_state_test.c"], deps = [":package_state"])
 
 filegroup(
     name = "all_sources",

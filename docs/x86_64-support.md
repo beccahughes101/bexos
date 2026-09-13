@@ -63,15 +63,14 @@ the normal-world `rpmb0` virtio console after the boot proxy acknowledges
 release. Detailed target results and remaining gates are recorded in
 [secure integration validation](secure-integration-validation.md).
 
-Ordinary integrated product builds and the x86 E2E matrix select the validated
-saved closure `//boot/efi:cached_firmware`. Refresh it explicitly with
-`bazel run -c opt --config=x86_64 //boot/efi:refresh_firmware`; the acceptance
-closure additionally selects `--//build/platforms:trusty_variant=acceptance`.
-The saved loader/monitor verifies independently supplied kernel, BootFS and
-vbmeta snapshots, so changes to guest images do not compile firmware.
-`//boot/efi:cached_firmware_boundary_test` checks this dependency boundary for
-the product and full maintained x86 matrix. Firmware bring-up probes remain
-explicit source-built diagnostics. The integrated developer launcher is
+Integrated product builds and the x86 E2E matrix select the source-built
+EFI/monitor/Trusty closure through `//boot/efi:cached_firmware`. This includes
+RFC 64's package-state secure application without relying on a previously saved
+image. `//boot/efi:cached_firmware_boundary_test` checks that this dependency
+remains present. Bazel caches unchanged firmware actions. Explicit
+`//boot/efi:refresh_firmware` snapshots remain available for recovery; acceptance
+uses `--//build/platforms:trusty_variant=acceptance`.
+The integrated developer launcher is
 `bazel run -c opt --config=x86_64 //device/virtual/qemu/nongui:run`.
 
 The Q35 layout reserves handoff at `0x01000000`, the kernel at `0x02000000`,
@@ -124,7 +123,7 @@ bazel test --config=e2e //third_party/trusty:x86_64_boot_test
 bazel test --config=e2e //third_party/trusty:x86_64_acceptance_test
 ```
 
-Consumers use cached firmware, independently of source compilation.
+Consumers extract source-built firmware bundles. Saved snapshots are explicit recovery artifacts.
 Refresh validates artifact hashes and architecture/variant metadata before
 atomically replacing the gitignored bundle. Extraction checks host
 compatibility and rejects ARM/x86 or standard/acceptance mismatches.
@@ -170,3 +169,10 @@ entry, and permanent execution ownership. The EFI product loader starts
 authenticated recovery, selects protected component identities, then admits
 the verified BexOS and Trusty service domains. See [the Trusty design](rfcs/0051/README.md)
 and [the multiarchitecture design](rfcs/0057/README.md).
+
+RFC 0064's earlier x86 pkgd, replacement archive and consumer builds predate the
+latest networking and lifecycle changes. Final-tree x86 source-firmware, EFI
+boundary, nongraphical/workstation assembly and package-resolution guest checks
+remain outstanding. Existing x86 boot and security results do not validate
+pkgd's new protected package-state endpoint or reboot persistence. See the
+[package-resolution gap table](rfcs/0064/CURRENT.md#current-gaps).

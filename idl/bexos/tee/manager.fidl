@@ -63,6 +63,12 @@ struct TaState {
 
 @discoverable
 protocol TeeManager {
+    14: ExchangePackageState(struct {
+        request vector<uint8>:3168;
+    }) -> (struct {
+        status TeeStatus;
+        response vector<uint8>:3168;
+    });
     1: GetTeeInfo() -> (struct {
         status TeeStatus;
         present bool;

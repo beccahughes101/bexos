@@ -61,7 +61,8 @@ def qemu_e2e_test(
         secure_firmware = QEMU_SECURE_FIRMWARE,
         architectures = ["aarch64", "x86_64"],
         development = False,
-        trusty_variant = "standard"):
+        trusty_variant = "standard",
+        package_config = ""):
     if native.existing_rule("declared_tests") != None:
         fail("qemu_suites() must follow every QEMU scenario in this package")
     test_env = {
@@ -168,6 +169,7 @@ def qemu_e2e_test(
             name = name + "_" + arch,
             test = ":" + name + "_implementation",
             architecture = arch,
+            package_config = package_config,
             trusty_variant = trusty_variant if arch == "x86_64" else "standard",
             tags = QEMU_TEST_TAGS + tags + ["guest-" + arch, "qemu-development" if development else "qemu-integrated"],
             **kwargs

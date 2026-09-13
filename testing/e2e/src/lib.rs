@@ -221,9 +221,19 @@ impl<T: DebugTransport> DebugSession<T> {
         markers: &[&[u8]],
         timeout: Duration,
     ) -> Result<Vec<u8>, String> {
+        self.wait_for_serial_markers_observed(markers, timeout, |_| {})
+    }
+
+    pub fn wait_for_serial_markers_observed(
+        &mut self,
+        markers: &[&[u8]],
+        timeout: Duration,
+        mut observe: impl FnMut(&[u8]),
+    ) -> Result<Vec<u8>, String> {
         let deadline = Instant::now() + timeout;
         let mut output = self.combined_serial_output();
         while Instant::now() < deadline {
+            observe(&output);
             assert_absent_with_tail(&output, b"panic", "guest panic during traced QEMU boot")?;
             assert_absent_with_tail(
                 &output,

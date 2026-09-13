@@ -162,7 +162,8 @@ filegroup(
 
 genrule(
     name = "cached_firmware",
-    srcs = [":saved_image"],
+    # Package-state security changes must reach products without checked-in binaries.
+    srcs = [":built_image"],
     outs = [
         "bl1.bin", "bl2.bin", "bl31.bin", "lk.bin", "lk.elf", "bl33.bin",
         "bl33-rollback.bin", "rollback_nt_fw_content.crt",

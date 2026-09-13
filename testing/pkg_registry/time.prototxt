@@ -1,0 +1,2 @@
+package_id: "bexos.service.timed"
+values { name: "network_sync_enabled" value { bool_value: false } }

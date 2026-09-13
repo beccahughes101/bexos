@@ -21,6 +21,7 @@ pub enum InstallSource {
     Bootfs,
     SystemImage,
     Debugd,
+    Oci,
 }
 
 impl InstallSource {
@@ -30,6 +31,7 @@ impl InstallSource {
             Self::Bootfs => 1,
             Self::SystemImage => 2,
             Self::Debugd => 3,
+            Self::Oci => 4,
         }
     }
 
@@ -39,6 +41,7 @@ impl InstallSource {
             1 => Ok(Self::Bootfs),
             2 => Ok(Self::SystemImage),
             3 => Ok(Self::Debugd),
+            4 => Ok(Self::Oci),
             _ => Err(RegistryError::CorruptRecord),
         }
     }

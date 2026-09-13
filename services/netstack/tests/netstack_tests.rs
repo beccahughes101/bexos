@@ -62,6 +62,34 @@ fn tcp_requires_configured_ip() {
 }
 
 #[test]
+fn cancelled_tcp_endpoints_release_connection_quota() {
+    let mut stack = Netstack::new(
+        NetConfig {
+            static_ipv4: Some([10, 0, 2, 15]),
+            ..NetConfig::default()
+        },
+        None,
+    );
+    let remote = SocketAddress {
+        addr: IpAddress::Ipv4(Ipv4Address {
+            octets: [10, 0, 2, 2],
+        }),
+        port: 443,
+    };
+    for control in 1..=256 {
+        assert_eq!(stack.connect_tcp(control, remote), Status::Ok);
+        stack.remove_tcp(control);
+        assert!(stack.tcp.is_empty());
+    }
+    for control in 1..=64 {
+        assert_eq!(stack.connect_tcp(control, remote), Status::Ok);
+    }
+    assert_eq!(stack.connect_tcp(65, remote), Status::ErrResourceExhausted);
+    stack.remove_tcp(32);
+    assert_eq!(stack.connect_tcp(65, remote), Status::Ok);
+}
+
+#[test]
 fn dns_query_and_a_record_response_round_trip() {
     let mut query = [0; 512];
     let len = encode_query("example.com", 0x1234, &mut query).unwrap();

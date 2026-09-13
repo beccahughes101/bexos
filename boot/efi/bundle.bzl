@@ -1,4 +1,4 @@
-"""Saved firmware boundaries: ordinary product builds never compile firmware."""
+"""Bazel-built signed firmware bundles; saved images remain explicit recovery inputs."""
 def integrated_firmware_bundle():
     names = ["loader.efi", "monitor.elf", "trusty.elf", "OVMF_CODE.fd", "OVMF_VARS.fd", "boot_root.avbpubkey", "rpmb_dev", "RPMB_DATA", "rollback_loader.efi", "revoked.fd", "development.pem", "trusty.replacement.fw", "hypervisor.replacement.fw", "trusty.candidate.elf", "monitor.policy.elf", "monitor.fault.elf", "monitor.hang.elf", "monitor.successor.elf", "hypervisor.fault.fw", "hypervisor.hang.fw", "hypervisor.successor.fw", "hypervisor.successor_fault.fw"]
     inputs = [
@@ -27,10 +27,11 @@ def integrated_firmware_bundle():
         native.filegroup(name = value + "_saved_firmware", srcs = native.glob([value + "_firmware.bin"], allow_empty = True))
     saved = select({"//build/platforms:trusty_acceptance": [":acceptance_saved_firmware"], "//conditions:default": [":standard_saved_firmware"]})
     native.filegroup(name = "selected_saved_firmware", srcs = saved)
-    extract_suffix = " $(@D)/cached $(locations :selected_saved_firmware) " + " ".join(["$(location " + label + ")" for label in selected])
+    native.filegroup(name = "selected_product_firmware", srcs = [":built_firmware_bundle"])
+    extract_suffix = " $(@D)/cached $(locations :selected_product_firmware) " + " ".join(["$(location " + label + ")" for label in selected])
     native.genrule(
         name = "cached_firmware",
-        srcs = [":selected_saved_firmware"] + selected + scripts,
+        srcs = [":selected_product_firmware"] + selected + scripts,
         outs = ["cached/" + name for name in names + ["build.prototxt"]],
         cmd = select({"//build/platforms:trusty_acceptance": command + "extract acceptance" + extract_suffix, "//conditions:default": command + "extract standard" + extract_suffix}),
     )

@@ -1,0 +1,68 @@
+# Signed fallback driver acquisition fixture; existing device ownership is preserved.
+package_name: "bexos.test.pkg_driver"
+name: "virtio_net_driver"
+library_dependencies {
+ package_name: "bexos.lib.crypto"
+ mount_alias: "bexos.lib.crypto"
+ abi_version: 1
+}
+library_dependencies {
+ package_name: "bexos.lib.net"
+ mount_alias: "bexos.lib.net"
+ abi_version: 1
+}
+driver_info {
+ name: "virtio_net_d1_driver"
+ package_id: "bexos.test.pkg_driver"
+ version: "1.0.0"
+}
+bind_rules {
+ priority: 0
+ condition {
+  bus: BUS_PCI
+  property { key: "pci.vendor_id" value: 0x1af4 }
+  property { key: "pci.device_id" value: 0x1041 }
+ }
+}
+bind_rules {
+ condition {
+  bus: BUS_PCI
+  property { key: "pci.vendor_id" value: 0x1af4 }
+  property { key: "pci.device_id" value: 0x1000 }
+ }
+}
+processes {
+ name: "virtio_net_driver"
+ runner: "elf"
+ lifecycle { update_strategy: HEART_TRANSPLANT }
+ service: true
+ wave: 4
+ runner_options {
+  [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/virtio_net_driver" }
+ }
+}
+services_exposed {
+ name: "bexos.hardware.ethernet.Device"
+ protocol: "Device"
+ lifecycle: MULTIPLE_INSTANCE
+ visibility: PUBLIC
+ capabilities {
+  capability: "Public"
+  method_ordinals: 1
+  method_ordinals: 2
+  method_ordinals: 3
+  method_ordinals: 4
+  method_ordinals: 5
+  method_ordinals: 6
+ }
+}
+services_exposed {
+ name: "bexos.power.DevicePowerControl"
+ protocol: "DevicePowerControl"
+ lifecycle: MULTIPLE_INSTANCE
+ visibility: PUBLIC
+ capabilities {
+  capability: "Public"
+  method_ordinals: 1
+ }
+}

@@ -21,6 +21,7 @@ pub struct Runtime<B: TeeBackend = DriverBackend> {
     pub service: TeeService<B>,
     pub clients: Vec<BoundServiceEndpoint>,
     pub generation: u64,
+    pub session_owners: alloc::collections::BTreeMap<u64, u64>,
 }
 
 impl<B: TeeBackend> Runtime<B> {
@@ -30,6 +31,7 @@ impl<B: TeeBackend> Runtime<B> {
             migration,
             service,
             clients: Vec::new(),
+            session_owners: Default::default(),
             generation: 1,
         }
     }
@@ -67,6 +69,7 @@ impl<B: MigratableBackend + Default> State for Runtime<B> {
             migration: None,
             service: TeeService::new(B::default()),
             clients: Vec::new(),
+            session_owners: Default::default(),
             generation: 0,
         }
     }
@@ -83,7 +86,7 @@ impl<B: MigratableBackend + Default> State for Runtime<B> {
         let (apps, sessions, next_session_id, secure_os_version, anti_rollback_version, update) =
             backend.parts();
         let mut w = Encoder::new();
-        w.word(5);
+        w.word(6);
         w.word(self.control.0);
         w.word(self.migration.map_or(0, |c| c.0));
         w.word(self.generation);
@@ -110,6 +113,11 @@ impl<B: MigratableBackend + Default> State for Runtime<B> {
             }
         }
         w.word(self.service.backend().rpmb_channel().map_or(0, |c| c.0));
+        w.word(self.session_owners.len() as u64);
+        for (session, owner) in &self.session_owners {
+            w.word(*session);
+            w.word(*owner);
+        }
         Ok(Some(w.finish()))
     }
 
@@ -119,7 +127,7 @@ impl<B: MigratableBackend + Default> State for Runtime<B> {
         }
         let mut r = Decoder::new(bytes.ok_or(Error::InvalidData)?);
         let version = r.word()?;
-        if !(1..=5).contains(&version) {
+        if !(1..=6).contains(&version) {
             return Err(Error::UnsupportedVersion);
         }
         self.control = Channel(r.word()?);
@@ -160,6 +168,19 @@ impl<B: MigratableBackend + Default> State for Runtime<B> {
                 .push(BoundServiceEndpoint::new(channel, allowed_methods));
         }
         let rpmb = if version >= 5 { r.word()? } else { 0 };
+        self.session_owners.clear();
+        if version >= 6 {
+            for _ in 0..r.count(1024)? {
+                let session = r.word()?;
+                let owner = r.word()?;
+                if !sessions.iter().any(|(id, _, _)| *id == session)
+                    || !self.clients.iter().any(|client| client.channel.0 == owner)
+                    || self.session_owners.insert(session, owner).is_some()
+                {
+                    return Err(Error::InvalidData);
+                }
+            }
+        }
         r.finish()?;
         if rpmb != 0 {
             self.service.backend_mut().set_rpmb_channel(Channel(rpmb));

@@ -38,12 +38,13 @@ def _guest_test_transition_impl(settings, attr):
         "//build/platforms:guest_arch": attr.architecture,
         "//build/platforms:trusty_variant": attr.trusty_variant,
         "//services/scened:legacy_standalone": attr.scened_standalone,
+        "//services/pkgd:config_source": attr.package_config or settings["//services/pkgd:config_source"],
     }
 
 guest_test_transition = transition(
     implementation = _guest_test_transition_impl,
-    inputs = [],
-    outputs = ["//build/platforms:guest_arch", "//build/platforms:trusty_variant", "//services/scened:legacy_standalone"],
+    inputs = ["//services/pkgd:config_source"],
+    outputs = ["//build/platforms:guest_arch", "//build/platforms:trusty_variant", "//services/scened:legacy_standalone", "//services/pkgd:config_source"],
 )
 
 def _architecture_files_impl(ctx):

@@ -56,6 +56,7 @@ pub struct Gate {
     pub trust_app_roots: Vec<u8>,
     pub pending_trace_producers: Vec<super::trace_registry::PendingTraceProducer>,
     pub services: Vec<super::state::ManagedService>,
+    pub service_directory_bindings: Vec<crate::ServiceDirectoryBinding>,
 }
 impl Gate {
     pub fn new() -> Self {
@@ -100,6 +101,7 @@ impl Gate {
             trust_app_roots: Vec::new(),
             pending_trace_producers: Vec::new(),
             services: Vec::new(),
+            service_directory_bindings: Vec::new(),
         }
     }
 }
@@ -769,7 +771,10 @@ impl Gate {
         }
     }
 
-    fn service_grants_for(&self, manifest: &Manifest) -> Result<Vec<ServiceGrant>, ReadinessError> {
+    fn service_grants_for(
+        &mut self,
+        manifest: &Manifest,
+    ) -> Result<Vec<ServiceGrant>, ReadinessError> {
         let mut grants = Vec::new();
         match manifest.package_name.as_str() {
             "bexos.testing.input_fixture" => {
@@ -950,6 +955,30 @@ impl Gate {
                 }
             }
             "bexos.service.fontd" => {
+                // Fontd starts before the storage-service broker loop. Retain the
+                // directory peer in appd so remote misses can discover pkgd later.
+                if declares(manifest, "ServiceDirectory") {
+                    let (client, server) = Channel::pair().map_err(|_| ReadinessError::NotReady)?;
+                    self.service_directory_bindings
+                        .push(crate::ServiceDirectoryBinding {
+                            channel: server.0,
+                            package: manifest.package_name.clone(),
+                            uid: 0,
+                            system: true,
+                            shell: false,
+                        });
+                    grants.push(ServiceGrant {
+                        service: "ServiceDirectory".into(),
+                        protocol: "bexos.app.service_directory.ServiceDirectory".into(),
+                        capability: "Public".into(),
+                        method_ordinals: alloc::vec![2],
+                        permission_values: Vec::new(),
+                        caller_package: None,
+                        caller_uid: None,
+                        caller_foreground: false,
+                        endpoint: client.0,
+                    });
+                }
                 if declares(manifest, "bexos.user.UserManager") {
                     grants.push(self.notified_grant(
                         "bexos.user.UserManager",

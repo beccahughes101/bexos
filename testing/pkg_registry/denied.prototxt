@@ -1,0 +1,18 @@
+package_name: "bexos.test.pkg_denied"
+name: "RFC 64 unprivileged consumer"
+processes {
+  name: "probe"
+  runner: "elf"
+  lifecycle { update_strategy: RESTART }
+  runner_options { [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/probe" } }
+}
+services_consumed {
+  name: "bexos.pkg.PackageResolver"
+  link_type: REQUIRED
+  capabilities { capability: "Resolve" methods { ordinal: 1 link_type: REQUIRED } methods { ordinal: 2 link_type: REQUIRED } }
+}
+services_consumed {
+  name: "bexos.pkg.CredentialManager"
+  link_type: OPTIONAL
+  capabilities { capability: "ManageRegistryCredentials" methods { ordinal: 1 link_type: OPTIONAL } }
+}

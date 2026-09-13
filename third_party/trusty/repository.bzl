@@ -73,7 +73,7 @@ def _host_libclang_repository_impl(ctx):
         override = ctx.os.environ.get("LIBCLANG_PATH")
         if override:
             path = ctx.path(override)
-            candidates = [str(path)] if not path.is_dir else [str(p) for p in path.readdir() if p.basename.startswith("libclang.so")]
+            candidates = [str(path)] if not path.is_dir else [str(p) for p in path.readdir() if (p.basename.startswith("libclang.so") or (p.basename.startswith("libclang-") and ".so" in p.basename))]
         else:
             for tool in ["llvm-config"] + ["llvm-config-%d" % n for n in range(23, 13, -1)]:
                 executable = ctx.which(tool)
@@ -81,14 +81,14 @@ def _host_libclang_repository_impl(ctx):
                     result = ctx.execute([executable, "--libdir"])
                     if result.return_code == 0:
                         directory = ctx.path(result.stdout.strip())
-                        candidates += [str(p) for p in directory.readdir() if p.basename.startswith("libclang.so")]
+                        candidates += [str(p) for p in directory.readdir() if (p.basename.startswith("libclang.so") or (p.basename.startswith("libclang-") and ".so" in p.basename))]
             for root in ["/usr/lib", "/usr/local/lib", "/usr/lib64", "/usr/lib/x86_64-linux-gnu", "/usr/lib/aarch64-linux-gnu"]:
                 directory = ctx.path(root)
                 if directory.exists:
-                    candidates += [str(p) for p in directory.readdir() if p.basename.startswith("libclang.so")]
+                    candidates += [str(p) for p in directory.readdir() if (p.basename.startswith("libclang.so") or (p.basename.startswith("libclang-") and ".so" in p.basename))]
                     for child in directory.readdir():
                         if child.basename.startswith("llvm-") and child.get_child("lib").exists:
-                            candidates += [str(p) for p in child.get_child("lib").readdir() if p.basename.startswith("libclang.so")]
+                            candidates += [str(p) for p in child.get_child("lib").readdir() if (p.basename.startswith("libclang.so") or (p.basename.startswith("libclang-") and ".so" in p.basename))]
     found = None
     for candidate in candidates:
         if ctx.path(candidate).exists:

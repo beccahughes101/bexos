@@ -6,6 +6,7 @@ pub mod binding;
 pub mod index;
 pub mod migration;
 pub mod parser;
+pub mod remote;
 pub mod resolver;
 pub mod runtime;
 pub mod storage;
@@ -32,6 +33,10 @@ pub async fn main(channel: u64) -> ! {
             match grant.protocol.as_str() {
                 "VfsManager" => runtime.vfsd = Channel(grant.endpoint),
                 "UserManager" => runtime.usersd = Channel(grant.endpoint),
+                "PackageResolver" => runtime.remote.endpoint = grant.endpoint,
+                "bexos.app.service_directory.ServiceDirectory" => {
+                    runtime.remote.directory = grant.endpoint
+                }
                 _ => {}
             }
         }
@@ -71,10 +76,13 @@ async fn serve(mut runtime: Runtime) -> ! {
             }
         }
         if wire::poll(&mut runtime) {
-            source.changed_keys([0, 1, 2]);
+            source.changed_keys([0, 1, 2, 3]);
+        }
+        if remote::poll(&mut runtime) {
+            source.changed(3);
         }
         if wire::poll_users(&mut runtime) {
-            source.changed_keys([0, 1, 2]);
+            source.changed_keys([0, 1, 2, 3]);
         }
         bexos_userspace::yield_now();
     }

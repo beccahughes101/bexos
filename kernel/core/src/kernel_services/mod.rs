@@ -4,6 +4,7 @@ pub mod handle;
 pub mod ipc;
 pub mod memory;
 pub mod power;
+pub mod routing;
 pub mod scheduler;
 pub mod system;
 pub mod task;

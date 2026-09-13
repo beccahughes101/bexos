@@ -68,11 +68,12 @@ The canonical ARM64 QEMU product uses the pinned upstream Trusty secure world.
   system-state providers. Explicitly refresh the gitignored firmware bundle
   with `bazel run //third_party/trusty:refresh_image`.
 - `//device/virtual/qemu/nongui:run` stages Trusty as BL32, TF-A-authenticated
-  saved `//third_party/trusty:bl33.bin` as BL33, and signed standard AVB vbmeta beside the
+  `//third_party/trusty:bl33.bin` as BL33, and signed standard AVB vbmeta beside the
   separately loaded kernel and BootFS. BL33 sets authenticated-boot evidence;
   appd requires the Trusty AVB rollback/lock-state check before pivot. QEMU
-  consumers extract the saved bundle and do not depend on firmware compilation.
-  Firmware source changes require an explicit refresh.
+  consumers extract the source-built bundle, so secure application changes reach
+  the product. Bazel reuses unchanged firmware actions; explicit refresh targets
+  remain available for saved recovery snapshots.
   BL33 and its dependencies are always optimized, including when refreshing
   from a default fastbuild configuration. ARM64 bare-metal SHA-256 compression
   also stays optimized for the kernel's BootFS evidence check. The appd service
@@ -119,6 +120,14 @@ bazel test -c opt //testing/e2e/qemu/... --test_tag_filters=requires-qemu --test
 
 See `third_party/trusty/README.md` for bundle contents and the separate AuthMgr
 acceptance refresh command, and `testing-status.md` for actual verification.
+
+RFC 0064 package-resolution acceptance has not passed on either architecture.
+ARM boots source-built Trusty and provisions sealed package credentials, but
+verified artifact delivery, consumer integration, replacement and reboot
+persistence remain unpassed. Final-tree nongraphical and workstation assemblies
+on both architectures also remain to be checked. See the
+[package-resolution gaps](rfcs/0064/CURRENT.md#current-gaps); the presence of a
+product target or fixture is not acceptance evidence.
 
 ## Graphical boot UI
 

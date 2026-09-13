@@ -39,6 +39,7 @@ services_exposed {
  lifecycle: SINGLETON
  visibility: PUBLIC
  bind_permission: "TEE_MANAGER_ACCESS"
+ capabilities { capability: "PackageState" method_ordinals: 14 }
  capabilities {
   capability: "Public"
   method_ordinals: 1
