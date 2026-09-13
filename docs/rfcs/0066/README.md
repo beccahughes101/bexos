@@ -5,6 +5,13 @@
 * **Target Subsystems:** `localed`, `prefsd`, `pkgd`, `appd`, `libs/ui`, `lib/userspace/i18n`
 * **Applicability:** Dioxus Native WASM/Native Apps, Host UI Runners, System Shell (`sysui`/`userui`)
 
+> Implementation status: local-stack source integration is present with English
+> production catalogs and CLI preferences, but the approved local implementation
+> and acceptance plan are incomplete. See [CURRENT.md](CURRENT.md) for verified
+> checks, the deletion/UID-reuse revocation gap, and outstanding validation.
+> This README retains the full long-term design, including online supplementary
+> packs pending RFC 0064.
+
 ---
 
 ## 1. Summary

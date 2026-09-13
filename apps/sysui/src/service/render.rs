@@ -3,14 +3,22 @@ use bexos_ui_prelude::*;
 
 impl State {
     pub(super) fn render(&mut self) -> Result<(), String> {
+        let locale = self.locale.as_ref().ok_or("locale unavailable")?;
+        let tr = |key| locale.text(key, &Default::default());
         let view = self.view.as_ref().unwrap();
         let x = (self.width as f32 - 440.0) / 2.0;
         let y = (self.height as f32 - 280.0) / 2.0;
 
-        let mut root = Node::element(1, "main").class(CLASS_ROOT).style(format!(
-            "width:{}px;height:{}px;background:var(--bex-bg);",
-            self.width, self.height
-        ));
+        let mut root = Node::element(1, "main")
+            .class(CLASS_ROOT)
+            .attribute("lang", &locale.settings().languages[0])
+            .attribute("dir", locale.direction())
+            .style(format!(
+                "width:{}px;height:{}px;background:var(--bex-bg);direction:{};",
+                self.width,
+                self.height,
+                locale.direction()
+            ));
         if self.snapshot.state != 1 {
             root = root.child(
                 Node::element(2, "section")
@@ -23,7 +31,7 @@ impl State {
                 0.0,
                 240.0,
                 52.0,
-                "BEXOS",
+                &tr("brand"),
                 CLASS_TITLE,
             ));
             if self.snapshot.users.is_empty() {
@@ -35,7 +43,7 @@ impl State {
                         70.0,
                         440.0,
                         24.0,
-                        "NO USERS CONFIGURED",
+                        &tr("no-users"),
                         CLASS_ERROR,
                     ))
                     .child(label(
@@ -44,10 +52,11 @@ impl State {
                         104.0,
                         440.0,
                         24.0,
-                        "USE BEXCTL USERS CREATE TO SET UP",
+                        &tr("create-user"),
                         CLASS_MUTED,
                     ));
             } else {
+                let fallback_user = tr("user");
                 let label_text = self
                     .snapshot
                     .users
@@ -55,7 +64,7 @@ impl State {
                     .find(|(uid, _)| *uid == self.snapshot.uid)
                     .or_else(|| self.snapshot.users.get(self.selected))
                     .map(|(_, name)| name.as_str())
-                    .unwrap_or("USER");
+                    .unwrap_or(&fallback_user);
                 root.children[0] = root.children[0]
                     .clone()
                     .child(
@@ -67,7 +76,7 @@ impl State {
                     .child(
                         TextInput::new(20)
                             .value(self.password.clone())
-                            .placeholder("PASSWORD")
+                            .placeholder(&tr("password"))
                             .masked(true)
                             .error(!self.error.is_empty())
                             .node()
@@ -77,20 +86,32 @@ impl State {
                         Button::new(
                             30,
                             if self.snapshot.uid == 0 {
-                                "SIGN IN"
+                                tr("sign-in")
                             } else {
-                                "UNLOCK"
+                                tr("unlock")
                             },
                         )
                         .primary(true)
                         .node()
                         .style("x:0px;y:164px;width:180px;height:32px;"),
                     )
-                    .child(label(40, 0.0, 218.0, 420.0, 24.0, &self.error, CLASS_ERROR));
+                    .child(label(
+                        40,
+                        0.0,
+                        218.0,
+                        420.0,
+                        24.0,
+                        &if self.error == "sign-in-failed" {
+                            tr("sign-in-failed")
+                        } else {
+                            self.error.clone()
+                        },
+                        CLASS_ERROR,
+                    ));
             }
             if self.snapshot.uid != 0 {
                 root.children[0] = root.children[0].clone().child(
-                    Button::new(50, "LOG OUT")
+                    Button::new(50, &tr("log-out"))
                         .node()
                         .style("x:200px;y:164px;width:180px;height:32px;"),
                 );

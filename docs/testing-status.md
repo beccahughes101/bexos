@@ -1,5 +1,50 @@
 # Testing Status
 
+## Local localization validation (RFC 0066, 2026-09-13)
+
+**Incomplete:** source integration is present, but the approved local acceptance
+plan has not passed. The last successful focused Bazel run passed all nine test
+targets for UserUI, ICU formatting, UI runtime, WASM runtime, appd (application
+and shell-policy tests), localed, prefsd, and the WASM runner. Earlier runs passed
+catalog, settings, locale-context, startup v6–10 compatibility, SysUI, and text
+shaping tests. Native and WASM fixture archives built successfully at that point.
+Later implementation and fixture edits have not completed a regression pass.
+
+The final broader run passed `//:heart_transplant_coverage_test` and reused the
+passing startup compatibility test, then failed because the compiler test's
+output directory collided with its executable. Moving its source to
+`tools/locale_bundle/compiler_tests.rs` addresses the path conflict in source;
+that correction has not been rerun. Product/bootfs closure checks did not complete.
+An earlier scoped Bazel rustfmt pass completed; the final pass was interrupted
+while waiting for Bazel and does not certify later edits.
+
+Neither of these targets has passed or reached its localization scenario:
+
+```sh
+bazel test --config=e2e \
+  //testing/e2e/qemu/localization:localization_e2e_test_aarch64 \
+  //testing/e2e/qemu/localization:localization_e2e_test_x86_64
+```
+
+The first attempt stopped before guest execution because saved firmware was
+missing. ARM's `//third_party/trusty:refresh_image` subsequently succeeded. The
+x86 Trusty refresh was interrupted; the integrated EFI refresh still needs that
+prerequisite and a rerun. Firmware generation is a prerequisite result, not a
+localization acceptance result.
+
+The fixtures select en-US/de-DE/ru/ar and are intended to check visible translation
+changes, retained counter/input/focus/scroll state, native/WASM number and plural
+parity, read-only mappings, account isolation, persistence, and four transplants
+followed by another locale change. These guest results remain unverified.
+Shared backing identity, failed-launch cleanup counts, broader formatting parity,
+and adversarial notification races need additional coverage. A known gap remains
+in distinguishing deletion from lock and revoking old bindings before UID reuse.
+
+Production catalogs are English-only and fall back to English. See
+[localization](localization.md) for APIs and
+[RFC 0066 current gaps](rfcs/0066/CURRENT.md#current-gaps-in-the-approved-local-scope)
+for the complete handoff and remaining work.
+
 ## Local font architecture validation (2026-09-12)
 
 RFC 0063's local implementation adds the `bexos.fonts.FontProvider` protocol,

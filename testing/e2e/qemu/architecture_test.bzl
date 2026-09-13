@@ -18,6 +18,7 @@ architecture_test = rule(
     attrs = {
         "test": attr.label(mandatory = True, cfg = guest_test_transition),
         "architecture": attr.string(mandatory = True, values = ["aarch64", "x86_64"]),
+        "locales": attr.string_list(),
         "scened_standalone": attr.bool(default = False),
         "trusty_variant": attr.string(default = "standard", values = ["standard", "acceptance"]),
         "_allowlist_function_transition": attr.label(default = "@bazel_tools//tools/allowlists/function_transition_allowlist"),

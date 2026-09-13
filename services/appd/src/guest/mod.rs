@@ -2,6 +2,7 @@ mod command_runtime;
 mod graphics;
 mod input_hotplug;
 mod launch_migration;
+mod locale;
 mod migration_adapter;
 mod migration_archive;
 mod preferences;
@@ -5044,6 +5045,15 @@ fn launch_application(
         ));
         return lifecycle::AppLifecycleStatus::Storage;
     }
+    let mut pending_locale =
+        match locale::prepare(registry, services, vfsd, component_configs, package_id, uid) {
+            Ok(locale) => locale,
+            Err(error) => {
+                log(&format!("appd: locale startup failed {error}\n"));
+                mark_launch_failed(registry, &record);
+                return lifecycle::AppLifecycleStatus::LaunchFailed;
+            }
+        };
     let archive = services
         .iter()
         .find(|s| s.package == package_id && s.archive != 0);
@@ -5556,6 +5566,7 @@ fn launch_application(
         config_endpoint,
         linker_data,
         trace_producer.map(|producer| producer.startup),
+        pending_locale.0.as_ref(),
     ) {
         log(&alloc::format!(
             "appd: startup send failed package={package_id} process={process_name} error={error:?}\n"
@@ -5581,6 +5592,7 @@ fn launch_application(
         return lifecycle::AppLifecycleStatus::LaunchFailed;
     }
     startup_guard.startup_sent();
+    pending_locale.sent();
     launch_migration.sent();
     if let Some(pending_trace) = pending_trace.take() {
         trace_registry::register_now(

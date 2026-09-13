@@ -1,0 +1,34 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "formatting",
+    srcs = glob(["src/*.rs"]),
+    crate_name = "bexos_locale_formatting",
+    edition = "2024",
+    deps = [
+        "//lib/i18n/catalog",
+        "//lib/i18n/settings",
+        "@locale_crates//:icu",
+        "@locale_crates//:icu_provider_blob",
+        "@locale_crates//:fixed_decimal",
+        "@locale_crates//:writeable",
+    ],
+)
+
+rust_test(
+    name = "tests",
+    srcs = glob(["src/*.rs"]),
+    crate_root = "src/lib.rs",
+    edition = "2024",
+    deps = [
+        "//lib/i18n/catalog",
+        "//lib/i18n/settings",
+        "@locale_crates//:icu",
+        "@locale_crates//:icu_provider_blob",
+        "@locale_crates//:fixed_decimal",
+        "@locale_crates//:writeable",
+    ],
+    compile_data = ["//data/locale:test_data"],
+    rustc_env = {"TEST_CLDR": "$(execpath //data/locale:test_data)"},
+)

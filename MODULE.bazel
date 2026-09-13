@@ -751,6 +751,33 @@ graphics_crate.annotation(crate = "stylo", build_script_data_glob = ["properties
 graphics_crate.from_specs(name = "graphics_crates", supported_platform_triples = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"])
 use_repo(graphics_crate, "graphics_crates")
 
+# Keep localization tooling and ICU's optional data-source dependencies isolated
+# from the freestanding kernel dependency graph.
+locale_crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate", isolate = True)
+locale_crate.spec(package = "fluent-syntax", version = "=0.12.0")
+locale_crate.spec(package = "icu_locale_core", version = "=2.2.0", default_features = False)
+locale_crate.spec(package = "icu", version = "=2.2.0", default_features = False, features = ["serde", "unstable"])
+locale_crate.spec(package = "icu_provider_blob", version = "=2.2.0")
+locale_crate.spec(package = "icu_provider_export", version = "=2.2.0", features = ["blob_exporter"])
+locale_crate.spec(package = "icu_provider_source", version = "=2.2.0", default_features = False, features = ["unstable"])
+locale_crate.spec(package = "fixed_decimal", version = "=0.7.2")
+locale_crate.spec(package = "writeable", version = "=0.6.4")
+locale_crate.from_specs(name = "locale_crates", supported_platform_triples = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu", "wasm32-wasip2"])
+use_repo(locale_crate, "locale_crates")
+
+http_file(
+    name = "locale_cldr_source",
+    integrity = "sha256-CE2Ys/AUVOeir52/X7StxyBfQqCAip/T7PdOz7EWM5o=",
+    urls = ["https://github.com/unicode-org/cldr-json/releases/download/48.2.0/cldr-48.2.0-json-full.zip"],
+    downloaded_file_path = "cldr-48.2.0-json-full.zip",
+)
+http_file(
+    name = "locale_icu_source",
+    integrity = "sha256-SGdRM16gD7Ess7TVLd79Pfm2H/geFUa6UG08Qc7EWlQ=",
+    urls = ["https://github.com/unicode-org/icu/releases/download/release-78.1rc/icu4x-icuexportdata-78.1rc.zip"],
+    downloaded_file_path = "icu4x-icuexportdata-78.1rc.zip",
+)
+
 # Append host tooling repositories so existing canonical repository names stay stable.
 actionlint_repository = use_repo_rule("//tools/ci:repositories.bzl", "actionlint_repository")
 actionlint_repository(name = "ci_actionlint")

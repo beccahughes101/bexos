@@ -468,3 +468,18 @@ UID 0 uses system preferences; nonzero UIDs must be unlocked and use the existin
 user-to-system preference fallback. Debugd verifies the user's password before
 requesting this binding. Provider reuse includes package, process, and UID,
 preventing a user terminal from being routed to another user's process.
+
+## Locale startup handoff
+
+Source integration is present; the local implementation and acceptance plan
+remain incomplete. See [RFC 0066 current gaps](rfcs/0066/CURRENT.md#current-gaps-in-the-approved-local-scope).
+
+Startup version 10 appends an optional locale descriptor containing a read-only
+CLDR VMO, length, data generation, and encoded settings snapshot. The receiver
+has frozen decoders for versions 6–9 in addition to the existing versions 2–5.
+Appd registers the locale preference package before starting localed and resolves
+application locale state through localed's appd-only startup binding. Early
+services start without the descriptor; localed itself does not depend on its own
+provider. A pending descriptor owns its duplicate until startup transfer succeeds,
+so a failed launch closes it. See [localization](localization.md) for native and
+WASM consumption and the [RFC status](rfcs/0066/CURRENT.md) for checks.

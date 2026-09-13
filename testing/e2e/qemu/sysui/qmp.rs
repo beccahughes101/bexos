@@ -83,6 +83,12 @@ impl Qmp {
         self.pointer(x, y, Some(true))?;
         self.pointer(x, y, Some(false))
     }
+    pub fn wheel_down(&mut self) -> Result<(), String> {
+        for down in [true, false] {
+            self.call("input-send-event", json!({"events":[{"type":"btn","data":{"down":down,"button":"wheel-down"}}]}))?;
+        }
+        Ok(())
+    }
     pub fn screenshot(&mut self, name: &str) -> Result<Vec<u8>, String> {
         let path = self.directory.join(format!("{name}.ppm"));
         self.call("screendump", json!({"filename":path}))?;

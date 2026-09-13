@@ -1,0 +1,51 @@
+library bexos.locale;
+
+type Status = strict enum : int32 {
+    OK = 0; NOT_FOUND = -1; ACCESS_DENIED = -2; INVALID_ARGS = -8;
+    BUSY = -11; UNAVAILABLE = -12; IO = -14;
+};
+type MeasurementSystem = strict enum : uint8 {
+    METRIC = 1; US_CUSTOMARY = 2; UK_HYBRID = 3;
+};
+type HourCycle = strict enum : uint8 { H11 = 1; H12 = 2; H23 = 3; H24 = 4; };
+struct LocaleSettings {
+    language_chain vector<string:32>:8;
+    region string:32;
+    measurement MeasurementSystem;
+    hour_cycle HourCycle;
+    first_day_of_week uint8;
+};
+struct LocaleSnapshot { generation uint64; settings LocaleSettings; };
+
+@discoverable
+protocol LocaleProvider {
+    1: GetLocaleSettings() -> (struct { status Status; snapshot LocaleSnapshot; });
+    2: GetCldrDataVmo() -> (resource struct {
+        status Status; data vector<handle>:1; data_len uint64; data_generation uint64;
+    });
+    3: WatchLocale(resource struct { listener handle:CHANNEL; }) -> (struct {
+        status Status; snapshot LocaleSnapshot;
+    });
+};
+protocol LocaleUpdateListener {
+    1: OnLocaleSettingsChanged(struct { snapshot LocaleSnapshot; });
+    2: OnCldrDataReloaded(resource struct {
+        data handle:VMO; data_len uint64; data_generation uint64;
+    });
+};
+
+// appd alone resolves a child's initial state; public callers never choose UID.
+protocol LocaleStartup {
+    1: Resolve(struct { uid uint64; }) -> (resource struct {
+        status Status; snapshot LocaleSnapshot; data vector<handle>:1;
+        data_len uint64; data_generation uint64;
+    });
+};
+
+// prefsd exposes this read-only feed exclusively to authenticated localed.
+protocol LocalePreferences {
+    1: Get(struct { uid uint64; }) -> (struct { status Status; snapshot LocaleSnapshot; });
+    2: Watch(resource struct { uid uint64; listener handle:CHANNEL; }) -> (struct {
+        status Status; snapshot LocaleSnapshot;
+    });
+};

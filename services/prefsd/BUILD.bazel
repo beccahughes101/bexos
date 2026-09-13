@@ -9,7 +9,7 @@ rust_library(
     crate_name = "bexos_prefsd",
     edition = "2024",
     rustc_flags = guest_select([], ["--cfg=bexos_arch_x86_64"]),
-    deps = ["//lib/component_config", "//lib/userspace", "//lib/migration", "//lib/ui/theme", "//idl:preferences_fidl_rust", "//idl:user_manager_fidl_rust", "//idl:kernel_fidl_rust", "//idl:fs_fidl_rust"],
+    deps = ["//lib/component_config", "//lib/userspace", "//lib/migration", "//lib/ui/theme", "//lib/i18n/settings", "//idl:locale_fidl_rust", "//idl:preferences_fidl_rust", "//idl:user_manager_fidl_rust", "//idl:kernel_fidl_rust", "//idl:fs_fidl_rust"],
 )
 
 std_service_binary(
@@ -42,6 +42,7 @@ app_archive(
 
 rust_test(
     name = "prefsd_tests",
+    crate_root = "tests/prefs_tests.rs",
     srcs = glob(["tests/**/*.rs"]),
     edition = "2024",
     deps = [":prefsd", "//lib/component_config", "//lib/ui/theme", "//lib/userspace"],

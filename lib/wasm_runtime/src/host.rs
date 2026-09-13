@@ -12,6 +12,18 @@ use wasmtime::Result;
 /// Every platform operation is supplied explicitly by the embedding process.
 /// Resource handles passed here have already been checked by the guest table.
 pub trait Host: Send + Sync {
+    fn locale_snapshot(&self, _provider: &dyn Handle, _refresh: bool) -> Result<Vec<u8>> {
+        wasmtime::bail!("locale unavailable")
+    }
+    fn locale_format(
+        &self,
+        _provider: &dyn Handle,
+        _operation: u32,
+        _value: &str,
+        _options: &[(String, String)],
+    ) -> Result<String> {
+        wasmtime::bail!("locale formatting unavailable")
+    }
     fn channel_pair(&self) -> Result<(Arc<dyn Handle>, Arc<dyn Handle>)> {
         wasmtime::bail!("channel creation unavailable")
     }

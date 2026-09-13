@@ -10,6 +10,7 @@ wit_bindgen::generate!({
 
 pub use bexos_dioxus_dom as dom;
 pub use bexos_dioxus_scene as scene;
+pub mod locale;
 pub mod rpc;
 pub mod views;
 

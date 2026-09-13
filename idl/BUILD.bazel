@@ -4,6 +4,9 @@ load("@rules_rust//rust:defs.bzl", "rust_library")
 
 package(default_visibility = ["//visibility:public"])
 
+bexos_fidl_rust(name = "locale_fidl_rust_src", src = "bexos/locale/localed.fidl", out = "locale_fidl.rs")
+rust_library(name = "locale_fidl_rust", srcs = [":locale_fidl_rust_src"], crate_name = "locale_fidl", edition = "2024")
+
 bexos_fidl_rust(
     name = "fonts_fidl_rust_src",
     src = "bexos/fonts/provider.fidl",

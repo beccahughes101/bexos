@@ -10,6 +10,8 @@ pub struct TextStyle {
     pub width: f32,
     pub scale: f32,
     pub color: [u8; 4],
+    pub language: Option<String>,
+    pub rtl: bool,
 }
 impl Default for TextStyle {
     fn default() -> Self {
@@ -18,6 +20,8 @@ impl Default for TextStyle {
             width: 1024.,
             scale: 1.,
             color: [255; 4],
+            language: None,
+            rtl: false,
         }
     }
 }
@@ -96,12 +100,19 @@ impl TextEngine {
             self.cache.push_back(cached);
             return Ok(out);
         }
-        let mut builder = self
-            .context
-            .ranged_builder(&mut self.fonts, text, style.scale, true);
+        // Parley infers paragraph direction from the first strong character.
+        // A non-rendering direction mark carries the computed CSS base direction
+        // even for neutral text or a paragraph beginning with an embedded name.
+        let directed = format!("{}{text}", if style.rtl { '\u{200f}' } else { '\u{200e}' });
+        let mut builder =
+            self.context
+                .ranged_builder(&mut self.fonts, &directed, style.scale, true);
         builder.push_default(StyleProperty::FontSize(style.size));
         builder.push_default(StyleProperty::Brush(style.color));
-        let mut layout = builder.build(text);
+        builder.push_default(StyleProperty::Locale(
+            style.language.as_deref().and_then(|v| v.parse().ok()),
+        ));
+        let mut layout = builder.build(&directed);
         layout.break_all_lines(Some(style.width));
         layout.align(Alignment::Start, AlignmentOptions::default());
         let layout = Arc::new(layout);

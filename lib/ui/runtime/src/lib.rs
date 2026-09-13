@@ -244,6 +244,7 @@ pub fn render_document_with_fonts(
     })];
     emit_node(
         &document.root,
+        None,
         0.0,
         0.0,
         theme,
@@ -342,6 +343,13 @@ fn taffy_style(
         DisplayInside::Grid => bexos_flatland_layout::Display::Grid,
         _ => bexos_flatland_layout::Display::Block,
     };
+    style.direction = if computed.get_inherited_box().clone_direction()
+        == bexos_flatland_style::style::properties::longhands::direction::computed_value::T::Rtl
+    {
+        bexos_flatland_layout::Direction::Rtl
+    } else {
+        bexos_flatland_layout::Direction::Ltr
+    };
     style.flex_direction = match position.clone_flex_direction() {
         FlexDirection::Row => bexos_flatland_layout::FlexDirection::Row,
         FlexDirection::Column => bexos_flatland_layout::FlexDirection::Column,
@@ -394,6 +402,7 @@ fn length_percent(
 
 fn emit_node(
     node: &Node,
+    language: Option<&str>,
     parent_x: f32,
     parent_y: f32,
     theme: &RuntimeTheme,
@@ -405,6 +414,7 @@ fn emit_node(
     if matches!(node.kind, NodeKind::Text(_)) {
         return Ok(());
     }
+    let language = node.attributes.get("lang").map(String::as_str).or(language);
     let bounds = layout.bounds(node.id).map_err(Error::Layout)?;
     let overrides = GeometryOverrides::parse(&node.declarations);
     let x = parent_x + overrides.x.unwrap_or(bounds.x);
@@ -442,6 +452,8 @@ fn emit_node(
                         font_size,
                         color,
                         family_stack,
+                        language,
+                        computed.get_inherited_box().clone_direction() == bexos_flatland_style::style::properties::longhands::direction::computed_value::T::Rtl,
                         fonts,
                     )?;
                 }
@@ -453,7 +465,9 @@ fn emit_node(
                     opacity,
                 }));
             }
-            NodeKind::Element => emit_node(child, x, y, theme, layout, resolver, fonts, commands)?,
+            NodeKind::Element => emit_node(
+                child, language, x, y, theme, layout, resolver, fonts, commands,
+            )?,
         }
     }
     Ok(())
@@ -590,6 +604,8 @@ fn shaped_text(
     size: f32,
     color: [u8; 4],
     family_stack: Option<&str>,
+    language: Option<&str>,
+    rtl: bool,
     fonts: &mut FontSet,
 ) -> Result<(), Error> {
     let font = fonts.select(value, family_stack);
@@ -601,6 +617,8 @@ fn shaped_text(
                 size,
                 width,
                 color,
+                language: language.map(str::to_string),
+                rtl,
                 ..Default::default()
             },
         )
@@ -696,4 +714,19 @@ mod tests {
             }));
         }
     }
+    #[test]
+    fn rtl_direction_moves_layout_and_neutral_text_to_the_right() {
+        let doc = |direction| Document {
+            version: bexos_dioxus_dom::VERSION, width: 240, height: 80, scale: 1.0,
+            clear_rgba: [0;4], stylesheets: Vec::new(), author_stylesheets: Vec::new(),
+            root: Node::element(1,"main").attribute("lang","ar").attribute("dir",direction)
+                .style(format!("display:flex;direction:{direction};width:240px;height:80px"))
+                .child(Node::element(2,"div").style("width:100px;height:40px;font-size:24px").child(Node::text(3,"123"))),
+        };
+        let left = render_document(&doc("ltr"),&RuntimeTheme::default()).unwrap();
+        let right = render_document(&doc("rtl"),&RuntimeTheme::default()).unwrap();
+        let x = |rendered: &RenderedDocument| rendered.batch.commands.iter().filter_map(|c| match c {Command::Glyphs(run)=>Some(run.x),_=>None}).fold(f32::INFINITY,f32::min);
+        assert!(x(&right)>x(&left)+100.,"RTL must move the child and align its neutral text at the logical start");
+    }
+
 }

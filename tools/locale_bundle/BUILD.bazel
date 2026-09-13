@@ -1,0 +1,24 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "compiler",
+    srcs = ["src/lib.rs"],
+    crate_name = "bexos_locale_compiler",
+    edition = "2024",
+    deps = [
+        "//lib/i18n/catalog",
+        "@locale_crates//:fluent-syntax",
+        "@locale_crates//:icu_locale_core",
+    ],
+)
+rust_binary(name = "locale_bundle", srcs = ["src/main.rs"], edition = "2024", deps = [":compiler"])
+
+rust_test(
+    name = "tests",
+    srcs = ["compiler_tests.rs"],
+    edition = "2024",
+    deps = [":compiler", "//lib/i18n/catalog", "//lib/i18n/formatting", "//lib/i18n/settings"],
+    compile_data = ["//data/locale:test_data"],
+    rustc_env = {"TEST_CLDR": "$(execpath //data/locale:test_data)"},
+)

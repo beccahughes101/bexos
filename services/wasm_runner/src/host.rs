@@ -22,6 +22,7 @@ use preferences_fidl::{
 use std::sync::{Arc, Mutex};
 use wasmtime::{Result, bail};
 mod filesystem;
+pub(crate) mod locale;
 mod network;
 mod trust;
 pub(crate) mod ui;
@@ -85,6 +86,7 @@ pub fn entry(name: impl Into<String>, raw: u64, kind: Kind, rights: u32) -> Entr
     }
 }
 pub struct NativeHost {
+    pub locale: Mutex<locale::LocaleState>,
     pub trust: Mutex<Option<std::sync::Weak<dyn Handle>>>,
     pub theme: Mutex<ThemeState>,
     fonts: Mutex<FontState>,
@@ -100,6 +102,7 @@ impl NativeHost {
     pub fn new() -> Self {
         Self {
             trust: Mutex::new(None),
+            locale: Mutex::new(locale::LocaleState::default()),
             theme: Mutex::new(ThemeState::default()),
             fonts: Mutex::new(FontState::default()),
             fs_lock: Mutex::new(()),
@@ -437,6 +440,21 @@ fn clone_handle(handle: &dyn Handle) -> Arc<dyn Handle> {
     })
 }
 impl Host for NativeHost {
+    fn locale_snapshot(&self, provider: &dyn Handle, refresh: bool) -> Result<Vec<u8>> {
+        self.locale.lock().unwrap().snapshot(provider, refresh)
+    }
+    fn locale_format(
+        &self,
+        _provider: &dyn Handle,
+        operation: u32,
+        value: &str,
+        options: &[(String, String)],
+    ) -> Result<String> {
+        self.locale
+            .lock()
+            .unwrap()
+            .format(operation, value, options)
+    }
     fn channel_pair(&self) -> Result<(Arc<dyn Handle>, Arc<dyn Handle>)> {
         let (a, b) = Channel::pair().map_err(|e| wasmtime::format_err!("channel pair: {e:?}"))?;
         Ok((

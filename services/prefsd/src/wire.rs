@@ -62,6 +62,10 @@ pub fn mutation_reply(channel: u64, ordinal: u64, status: Status, generation: u6
 pub fn poll(runtime: &mut Runtime) {
     let clients = runtime.clients.clone();
     for client in clients {
+        if client.locale {
+            crate::locale::poll(runtime, &client);
+            continue;
+        }
         if runtime
             .service
             .pending

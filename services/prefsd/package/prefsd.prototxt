@@ -27,3 +27,8 @@ services_exposed {
 }
 services_consumed { name: "bexos.service.vfsd" link_type: REQUIRED capabilities { capability: "Public" methods { ordinal: 61 link_type: REQUIRED } methods { ordinal: 62 link_type: REQUIRED } } }
 services_consumed { name: "bexos.user.UserManager" link_type: REQUIRED capabilities { capability: "Public" methods { ordinal: 1 link_type: REQUIRED } methods { ordinal: 2 link_type: REQUIRED } methods { ordinal: 8 link_type: REQUIRED } } }
+
+services_exposed {
+ name: "bexos.locale.LocalePreferences" protocol: "LocalePreferences" lifecycle: SINGLETON visibility: PUBLIC
+ capabilities { capability: "LocaleRead" method_ordinals: 1 method_ordinals: 2 }
+}

@@ -120,7 +120,7 @@ impl Runtime {
             return Err(Error::InvalidData);
         }
         let mut w = Encoder::new();
-        w.word(2);
+        w.word(3);
         w.word(if cfg!(bexos_arch_x86_64) { 2 } else { 1 });
         for v in [
             self.control.0,
@@ -144,6 +144,7 @@ impl Runtime {
             w.word(u64::from(c.admin));
             w.word(u64::from(c.manage));
             w.word(u64::from(c.theme));
+            w.word(u64::from(c.locale));
             w.word(c.methods.len() as u64);
             for m in &c.methods {
                 w.word(*m);
@@ -190,6 +191,12 @@ impl Runtime {
             w.word(o.uid);
             w.word(o.generation);
         }
+        w.word(self.service.locale_observers.len() as u64);
+        for o in &self.service.locale_observers {
+            w.word(o.channel);
+            w.word(o.uid);
+            w.word(o.generation);
+        }
         words(&mut w, &self.service.locked);
         w.word(u64::from(self.service.pending.is_some()));
         if let Some(p) = &self.service.pending {
@@ -225,7 +232,7 @@ impl Runtime {
         }
         let mut r = Decoder::new(bytes.ok_or(Error::InvalidData)?);
         let snapshot_version = r.word()?;
-        if !(1..=2).contains(&snapshot_version)
+        if !(1..=3).contains(&snapshot_version)
             || r.word()? != if cfg!(bexos_arch_x86_64) { 2 } else { 1 }
         {
             return Err(Error::UnsupportedVersion);
@@ -252,6 +259,7 @@ impl Runtime {
             } else {
                 false
             };
+            let locale = snapshot_version >= 3 && r.flag()?;
             let mut methods = Vec::new();
             for _ in 0..count(&mut r)? {
                 methods.push(r.word()?);
@@ -264,6 +272,7 @@ impl Runtime {
                 admin,
                 manage,
                 theme,
+                locale,
                 methods,
             });
         }
@@ -327,6 +336,15 @@ impl Runtime {
         if snapshot_version >= 2 {
             for _ in 0..count(&mut r)? {
                 next.service.theme_observers.push(ThemeObserver {
+                    channel: r.word()?,
+                    uid: r.word()?,
+                    generation: r.word()?,
+                });
+            }
+        }
+        if snapshot_version >= 3 {
+            for _ in 0..r.count(256)? {
+                next.service.locale_observers.push(ThemeObserver {
                     channel: r.word()?,
                     uid: r.word()?,
                     generation: r.word()?,
@@ -460,7 +478,16 @@ impl State for Runtime {
             return Err(Error::InvalidData);
         }
         for c in &self.clients {
-            if c.channel == 0 || (c.admin && (c.package != "bexos.platform.appd" || c.uid != 0)) {
+            if c.channel == 0
+                || (c.admin && (c.package != "bexos.platform.appd" || c.uid != 0))
+                || (c.locale
+                    && (c.package != "bexos.service.localed"
+                        || c.uid != 0
+                        || c.admin
+                        || c.manage
+                        || c.theme
+                        || c.methods.iter().any(|m| !matches!(m, 1 | 2))))
+            {
                 return Err(Error::InvalidData);
             }
         }
@@ -496,8 +523,18 @@ impl State for Runtime {
                 return Err(Error::InvalidData);
             }
         }
-        for observer in &self.service.theme_observers {
+        for observer in self
+            .service
+            .theme_observers
+            .iter()
+            .chain(&self.service.locale_observers)
+        {
             if observer.channel == 0 {
+                return Err(Error::InvalidData);
+            }
+        }
+        for observer in &self.service.locale_observers {
+            if self.service.locked.contains(&observer.uid) {
                 return Err(Error::InvalidData);
             }
         }
@@ -529,6 +566,7 @@ impl State for Runtime {
         handles.extend(self.clients.iter().map(|c| c.channel));
         handles.extend(self.service.observers.iter().map(|o| o.channel));
         handles.extend(self.service.theme_observers.iter().map(|o| o.channel));
+        handles.extend(self.service.locale_observers.iter().map(|o| o.channel));
         handles.remove(&0);
         handles.into_iter().map(Resource::Handle).collect()
     }
