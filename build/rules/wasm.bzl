@@ -23,4 +23,4 @@ _component = rule(
 
 def wasi_component(name, srcs, deps, crate_name, **kwargs):
     rust_binary(name = name + "_binary", srcs = srcs, deps = deps, crate_name = crate_name, edition = "2024", **kwargs)
-    _component(name = name, binary = ":" + name + "_binary")
+    _component(name = name, binary = ":" + name + "_binary", testonly = kwargs.get("testonly", False))

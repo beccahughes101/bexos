@@ -3,15 +3,21 @@ use bexos_ui_prelude::*;
 
 impl Desktop {
     pub(super) fn render(&mut self) -> Result<(), String> {
+        let locale = self.locale.as_ref().ok_or("locale unavailable")?;
+        let tr = |key| locale.text(key, &Default::default());
         let view = self.view.as_ref().unwrap();
 
         let mut root = Node::element(1, "main")
             .class(CLASS_ROOT)
+            .attribute("lang", &locale.settings().languages[0])
+            .attribute("dir", locale.direction())
             .style(format!(
-                "width:{}px;height:{}px;background:var(--bex-bg);",
-                self.width, self.height
+                "width:{}px;height:{}px;background:var(--bex-bg);direction:{};",
+                self.width,
+                self.height,
+                locale.direction()
             ))
-            .child(label(2, 24.0, 24.0, 180.0, 38.0, "BEXOS", CLASS_TITLE));
+            .child(label(2, 24.0, 24.0, 180.0, 38.0, &tr("brand"), CLASS_TITLE));
         let y = self.height as f32 - 44.0;
         root = root
             .child(
@@ -23,21 +29,22 @@ impl Desktop {
                     )),
             )
             .child(
-                Button::new(20, "APPS")
+                Button::new(20, &tr("apps"))
                     .active(self.launcher)
                     .node()
                     .style(format!("x:8px;y:{}px;width:96px;height:32px;", y + 6.0)),
             )
-            .child(Button::new(30, "LOCK").node().style(format!(
+            .child(Button::new(30, &tr("lock")).node().style(format!(
                 "x:{}px;y:{}px;width:92px;height:32px;",
                 self.width as f32 - 100.0,
                 y + 6.0
             )))
-            .child(Button::new(40, "LOG OUT").node().style(format!(
+            .child(Button::new(40, &tr("log-out")).node().style(format!(
                 "x:{}px;y:{}px;width:104px;height:32px;",
                 self.width as f32 - 212.0,
                 y + 6.0
             )));
+        let fallback_app = tr("app");
         let window_count = self.windows.len();
         for (i, w) in self.windows.iter_mut().enumerate() {
             w.constrain(self.width, self.height);
@@ -54,8 +61,14 @@ impl Desktop {
             )?;
             view.order_child(w.node, i as u32)?;
             let active = i + 1 == window_count;
-            let title = w.view.package.rsplit('.').next().unwrap_or("APP");
-            root = root.child(window_chrome(1000 + i as u64 * 10, w, title, active));
+            let title = w.view.package.rsplit('.').next().unwrap_or(&fallback_app);
+            root = root.child(window_chrome(
+                1000 + i as u64 * 10,
+                w,
+                title,
+                active,
+                &tr("close"),
+            ));
             if 112 + i as u32 * 120 + 120 < self.width.saturating_sub(212) {
                 root = root.child(
                     Button::new(
@@ -87,7 +100,7 @@ impl Desktop {
                     24.0,
                     300.0,
                     24.0,
-                    "NO GRAPHICAL APPS",
+                    &tr("no-apps"),
                     CLASS_MUTED,
                 ));
             }
@@ -146,6 +159,7 @@ fn window_chrome(
     w: &bexos_shell_guest::windows::Window,
     title: &str,
     active: bool,
+    close: &str,
 ) -> Node {
     Node::element(id, "section")
         .class(CLASS_PANEL)
@@ -164,7 +178,7 @@ fn window_chrome(
             9.0,
             16.0,
             18.0,
-            "X",
+            close,
             CLASS_MUTED,
         ))
         .child(Node::element(id + 3, "div").style(format!(

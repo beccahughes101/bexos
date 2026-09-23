@@ -46,3 +46,8 @@ autoinstall_packages { package: "//apps/brush_shell:brush_shell" }
 
 base_packages: "//services/prefsd:prefsd_archive"
 autoinstall_packages { package: "//services/prefsd:prefsd_archive" }
+
+base_packages: "//lib/i18n/settings:locale_archive"
+autoinstall_packages { package: "//lib/i18n/settings:locale_archive" }
+base_packages: "//services/localed:localed_archive"
+autoinstall_packages { package: "//services/localed:localed_archive" }

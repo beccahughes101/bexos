@@ -27,6 +27,9 @@ impl CommandInstance {
         crate::bindings::bexos::wasm::kernel::add_to_linker::<_, HasSelf<_>>(&mut linker, |ctx| {
             ctx
         })?;
+        crate::bindings::bexos::wasm::locale::add_to_linker::<_, HasSelf<_>>(&mut linker, |ctx| {
+            ctx
+        })?;
         crate::bindings::bexos::wasm::ui::add_to_linker::<_, HasSelf<_>>(&mut linker, |ctx| ctx)?;
         crate::component_sandbox::link(&mut linker)?;
         crate::bindings::bexos::wasm::checkpoint_resources::add_to_linker::<_, HasSelf<_>>(

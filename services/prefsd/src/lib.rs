@@ -1,5 +1,6 @@
 extern crate alloc;
 pub mod binding;
+pub mod locale;
 pub mod migration;
 pub mod runtime;
 pub mod service;

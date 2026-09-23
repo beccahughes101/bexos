@@ -184,7 +184,7 @@ pub fn init(
     let linker_refs = [bootstrap_fidl::HandleRef { raw: metadata_vmo }];
     let namespace: [bootstrap_fidl::NamespaceEntry<'_>; 0] = [];
     let startup = bootstrap_fidl::Startup {
-        version: 9,
+        version: 10,
         resources: &refs,
         arg0: handoff.bootfs_len,
         arg1: handoff.boot_evidence_len,
@@ -199,6 +199,10 @@ pub fn init(
         incoming_service_descriptors: "",
         lazy_idle_timeout_ms: 0,
         lazy_generation: 0,
+        locale_data: &[],
+        locale_data_len: 0,
+        locale_data_generation: 0,
+        locale_settings: &[],
         config: &[],
         config_len: 0,
         config_endpoint: &[],

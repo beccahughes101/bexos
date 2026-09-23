@@ -1,3 +1,4 @@
+mod locale;
 use bexos_component_config::{schema::*, transaction::Phase};
 use bexos_prefsd::{binding::Client, runtime::Runtime, service::*};
 use bexos_userspace::{Channel, live_migration::State, service_binding::ServiceBinding};
@@ -259,6 +260,7 @@ fn transplant_chunks_large_records_and_retains_authenticated_clients() {
         admin: false,
         manage: false,
         theme: false,
+        locale: false,
     });
     r.service.observers.push(Observer {
         channel: 5,

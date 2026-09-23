@@ -1,0 +1,50 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("//build/rules:app_archive.bzl", "app_archive")
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "localed",
+    srcs = glob(["src/*.rs"], exclude = ["src/main.rs"]),
+    crate_name = "bexos_localed",
+    edition = "2024",
+    deps = [
+        "//lib/userspace",
+        "//lib/migration",
+        "//lib/i18n/settings",
+        "//lib/i18n/formatting",
+        "//idl:locale_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//idl:fs_fidl_rust",
+    ],
+)
+
+std_service_binary(
+    name = "localed_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_localed_elf",
+    deps = [":localed"],
+)
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_localed_replacement",
+    deps = [":localed"],
+)
+app_manifest(name = "manifest", src = "package/localed.prototxt")
+
+app_archive(
+    name = "localed_archive",
+    manifest = ":manifest",
+    entries = {"bin/localed": ":localed_elf", "data/locale/cldr.bexloc": "//data/locale:base"},
+    compression = "zstd",
+)
+
+app_archive(
+    name = "replacement_archive",
+    manifest = ":manifest",
+    entries = {"bin/localed": ":replacement_elf", "data/locale/cldr.bexloc": "//data/locale:base"},
+    compression = "zstd",
+)
+rust_test(name = "tests", crate = ":localed")

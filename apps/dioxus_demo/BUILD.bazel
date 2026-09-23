@@ -1,3 +1,4 @@
+load("//build/rules:locale.bzl", "bexos_locale_bundle")
 load("//build/rules:app_archive.bzl", "app_archive")
 load("//build/rules:userspace.bzl", "app_manifest")
 load("//build/rules:wasm.bzl", "wasi_component")
@@ -6,6 +7,8 @@ package(default_visibility = ["//visibility:public"])
 
 wasi_component(
     name = "wasm",
+    compile_data = [":strings"],
+    rustc_env = {"BEXOS_STRINGS": "$(execpath :strings)"},
     crate_name = "bexos_dioxus_demo",
     srcs = glob(["src/**/*.rs"]),
     deps = ["//lib/dioxus_guest", "//lib/dioxus_dom", "//lib/dioxus_scene"],
@@ -17,13 +20,15 @@ app_manifest(name = "replacement_manifest", src = "package/replacement.prototxt"
 app_archive(
     name = "dioxus_demo",
     manifest = ":manifest",
-    entries = {"bin/dioxus_demo.wasm": ":wasm"},
+    entries = {"data/locale/strings.bexres": ":strings", "bin/dioxus_demo.wasm": ":wasm"},
     compression = "zstd",
 )
 
 app_archive(
     name = "replacement_archive",
     manifest = ":replacement_manifest",
-    entries = {"bin/dioxus_demo.wasm": ":wasm"},
+    entries = {"data/locale/strings.bexres": ":strings", "bin/dioxus_demo.wasm": ":wasm"},
     compression = "zstd",
 )
+
+bexos_locale_bundle(name = "strings", srcs = glob(["locales/en-US/*.ftl"]))

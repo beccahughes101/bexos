@@ -1,0 +1,10 @@
+load("//build/rules:locale.bzl", "bexos_cldr_data", "locale_list")
+package(default_visibility = ["//visibility:public"])
+locale_list(name = "locales", build_setting_default = ["en-US"])
+bexos_cldr_data(name = "base", locale_config = ":locales")
+
+bexos_cldr_data(
+    name = "test_data",
+    locales = ["en-US", "de-DE", "es", "es-MX", "ru", "ar", "ja"],
+    testonly = True,
+)

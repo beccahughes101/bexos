@@ -73,7 +73,8 @@ pub fn run(channel: Channel) -> Result<u8> {
             "dependency payload",
         )?);
     }
-    let startup = Startup::receive(channel).map_err(|e| wasmtime::format_err!("startup: {e:?}"))?;
+    let mut startup =
+        Startup::receive(channel).map_err(|e| wasmtime::format_err!("startup: {e:?}"))?;
     bexos_libc::install_startup(&startup);
     let engine = bexos_wasm_runtime::engine::configured_engine(&launch.options.limits)?;
     let component_payloads: Vec<_> = launch
@@ -111,6 +112,7 @@ pub fn run(channel: Channel) -> Result<u8> {
         )?;
         return crate::service::serve(runtime);
     }
+    host.locale.lock().unwrap().install(startup.locale.take())?;
     let mut context = Context::new(launch.options, host.clone(), Origin::Signed, budget);
     context.component_dependencies = component_payloads;
     crate::command::install(&mut context, &startup)?;

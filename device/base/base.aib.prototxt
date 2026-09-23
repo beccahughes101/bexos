@@ -29,3 +29,6 @@ packages { label: "//services/wasm_runner:wasm_runner_archive" package_id: "bexo
 packages { label: "//apps/brush_shell:brush_shell" package_id: "bexos.app.brush_shell" placement: SYSTEM_IMAGE }
 
 packages { label: "//services/prefsd:prefsd_archive" package_id: "bexos.service.prefsd" placement: SYSTEM_IMAGE }
+
+packages { label: "//lib/i18n/settings:locale_archive" package_id: "bexos.locale.preferences" placement: SYSTEM_IMAGE }
+packages { label: "//services/localed:localed_archive" package_id: "bexos.service.localed" placement: SYSTEM_IMAGE }

@@ -1,0 +1,8 @@
+package_name: "bexos.test.locale_native"
+name: "Native locale ownership probe"
+package_version { major: 0 minor: 1 patch: 0 }
+processes {
+  name: "native" runner: "elf"
+  runner_options { [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/native" } }
+}
+services_consumed { name: "bexos.locale.LocaleProvider" link_type: REQUIRED capabilities { capability: "Public" methods { ordinal: 1 link_type: REQUIRED } methods { ordinal: 2 link_type: REQUIRED } methods { ordinal: 3 link_type: REQUIRED } } }

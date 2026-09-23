@@ -91,3 +91,5 @@ services_consumed {
   }
 }
 services_consumed { name: "ServiceDirectory" link_type: REQUIRED capabilities { capability: "Public" methods { ordinal: 3 link_type: REQUIRED } } }
+
+services_consumed { name: "bexos.locale.LocaleProvider" link_type: REQUIRED capabilities { capability: "Public" methods { ordinal: 1 link_type: REQUIRED } methods { ordinal: 2 link_type: REQUIRED } methods { ordinal: 3 link_type: REQUIRED } } }

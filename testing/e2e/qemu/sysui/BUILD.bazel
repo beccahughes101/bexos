@@ -75,3 +75,5 @@ qemu_e2e_test(
     deps = ["//host/debug_client", "//lib/debug_wire", "//lib/component_config", "//testing/e2e", "//tools/qemu:qemu_test", "@crates//:serde_json"],
 )
 qemu_suites()
+
+exports_files(["qmp.rs", "checks.rs"])

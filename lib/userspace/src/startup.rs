@@ -43,7 +43,17 @@ pub struct TraceProducerDescriptor {
     pub main_tid: u64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LocaleDescriptor {
+    pub data: u64,
+    pub data_len: u64,
+    pub data_generation: u64,
+    /// Encoded bexos.locale.LocaleSnapshot; decoded by the i18n client.
+    pub settings: Vec<u8>,
+}
+
 pub struct Startup {
+    pub locale: Option<LocaleDescriptor>,
     pub resources: Vec<u64>,
     pub driver_resources: Vec<StartupHardwareResource>,
     pub driver_lifecycle: Option<Channel>,
@@ -73,7 +83,7 @@ impl Startup {
             2 => decode_v2_startup(&m.bytes, &hs),
             3 => decode_v3_startup(&m.bytes, &hs),
             4 | 5 => decode_v4_or_v5_startup(&m.bytes, &hs),
-            6 | 7 | 8 | 9 => decode_v6_or_later_startup(&m.bytes, &hs),
+            6 | 7 | 8 | 9 | 10 => decode_v6_or_later_startup(&m.bytes, &hs),
             _ => Err(Status::ErrInvalidArgs),
         }
     }
@@ -358,6 +368,7 @@ impl Startup {
             &[],
             0,
             0,
+            None,
         )
     }
 
@@ -377,6 +388,7 @@ impl Startup {
         config_endpoint: Option<Channel>,
         linker_data: Option<(u64, u64)>,
         trace_producer: Option<TraceProducerDescriptor>,
+        locale: Option<&LocaleDescriptor>,
     ) -> Result<(), Status> {
         Self::send_full(
             channel,
@@ -397,6 +409,7 @@ impl Startup {
             incoming_service_grants,
             lazy_idle_timeout_ms,
             lazy_generation,
+            locale,
         )
     }
 
@@ -431,6 +444,7 @@ impl Startup {
             &[],
             0,
             0,
+            None,
         )
     }
 
@@ -453,7 +467,12 @@ impl Startup {
         incoming_service_grants: &[ServiceGrant],
         lazy_idle_timeout_ms: u32,
         lazy_generation: u64,
+        locale: Option<&LocaleDescriptor>,
     ) -> Result<(), Status> {
+        let locale_handles: Vec<_> = locale
+            .into_iter()
+            .map(|d| HandleRef { raw: d.data })
+            .collect();
         let hs: Vec<_> = resources.iter().map(|h| HandleRef { raw: *h }).collect();
         let driver_resource_handles: Vec<_> = driver_resources
             .iter()
@@ -531,7 +550,7 @@ impl Startup {
             encode_service_grant_descriptors(incoming_service_grants)?;
         let paths = namespace_paths(namespace)?;
         let s = bootstrap_fidl::Startup {
-            version: 9,
+            version: 10,
             resources: &hs,
             arg0,
             arg1,
@@ -567,8 +586,12 @@ impl Startup {
             incoming_service_descriptors: &incoming_service_descriptors,
             lazy_idle_timeout_ms,
             lazy_generation,
+            locale_data: &locale_handles,
+            locale_data_len: locale.map_or(0, |d| d.data_len),
+            locale_data_generation: locale.map_or(0, |d| d.data_generation),
+            locale_settings: locale.map_or(&[], |d| d.settings.as_slice()),
         };
-        let mut bytes = [0; 4096];
+        let mut bytes = [0; 8192];
         let mut handles = [HandleRef { raw: 0 }; 80];
         let e = s
             .encode(&mut bytes, &mut handles)
@@ -593,6 +616,9 @@ impl Startup {
     }
     pub fn close_resources(self) {
         let mut closed = Vec::new();
+        if let Some(locale) = self.locale {
+            close_once(locale.data, &mut closed);
+        }
         for h in self.resources {
             close_once(h, &mut closed);
         }
@@ -821,6 +847,7 @@ fn decode_v2_startup(bytes: &[u8], handles: &[HandleRef]) -> Result<Startup, Sta
         return Err(Status::ErrInvalidArgs);
     }
     Ok(Startup {
+        locale: None,
         resources: decode_handle_vector(bytes, handles, 4)?,
         driver_resources: Vec::new(),
         driver_lifecycle: None,
@@ -852,6 +879,7 @@ fn decode_v2_startup(bytes: &[u8], handles: &[HandleRef]) -> Result<Startup, Sta
 
 fn decode_v3_startup(bytes: &[u8], handles: &[HandleRef]) -> Result<Startup, Status> {
     Ok(Startup {
+        locale: None,
         resources: decode_handle_vector(bytes, handles, 4)?,
         driver_resources: Vec::new(),
         driver_lifecycle: None,
@@ -913,6 +941,7 @@ fn decode_v4_or_v5_startup(bytes: &[u8], handles: &[HandleRef]) -> Result<Startu
         Vec::new()
     };
     let startup = Startup {
+        locale: None,
         resources: resources.clone(),
         driver_resources: Vec::new(),
         driver_lifecycle: None,
@@ -955,8 +984,15 @@ fn decode_v4_or_v5_startup(bytes: &[u8], handles: &[HandleRef]) -> Result<Startu
 }
 
 fn decode_v6_or_later_startup(bytes: &[u8], handles: &[HandleRef]) -> Result<Startup, Status> {
-    let s = bootstrap_fidl::Startup::decode(bytes, handles).map_err(|_| Status::ErrInvalidArgs)?;
-    if s.version != 6 && s.version != 7 && s.version != 8 && s.version != 9 {
+    let s = super::startup_compat::decode(bytes, handles)?;
+    if s.locale_data.is_empty()
+        && (s.locale_data_len != 0
+            || s.locale_data_generation != 0
+            || !s.locale_settings.is_empty())
+    {
+        return Err(Status::ErrInvalidArgs);
+    }
+    if !(6..=10).contains(&s.version) {
         return Err(Status::ErrInvalidArgs);
     }
     let descriptors = parse_service_grant_descriptors(s.service_grant_descriptors)?;
@@ -980,6 +1016,23 @@ fn decode_v6_or_later_startup(bytes: &[u8], handles: &[HandleRef]) -> Result<Sta
         }
     }
     let startup = Startup {
+        locale: if s.version >= 10 && !s.locale_data.is_empty() {
+            if s.locale_data.len() != 1
+                || s.locale_data_len == 0
+                || s.locale_data_len > 64 * 1024 * 1024
+                || s.locale_settings.is_empty()
+            {
+                return Err(Status::ErrInvalidArgs);
+            }
+            Some(LocaleDescriptor {
+                data: s.locale_data[0].raw,
+                data_len: s.locale_data_len,
+                data_generation: s.locale_data_generation,
+                settings: s.locale_settings.to_vec(),
+            })
+        } else {
+            None
+        },
         resources: s.resources.iter().map(|h| h.raw).collect(),
         driver_resources: if s.version >= 8 {
             decode_driver_resources(s.driver_resources)?

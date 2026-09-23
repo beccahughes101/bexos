@@ -1,3 +1,5 @@
+use bexos_dioxus_guest::locale::{self, LocaleContext};
+const STRINGS: &[u8] = include_bytes!(env!("BEXOS_STRINGS"));
 mod render;
 use bexos_dioxus_guest::{View, bexos::wasm::kernel, exports::bexos::wasm::lifecycle::Guest, rpc};
 use bexos_migration::codec::{Decoder, Encoder};
@@ -6,6 +8,7 @@ use std::cell::RefCell;
 pub struct Service;
 #[derive(Default)]
 struct State {
+    locale: Option<LocaleContext>,
     view: Option<View>,
     client: Option<Client>,
     snapshot: Snapshot,
@@ -80,6 +83,7 @@ impl Guest for Service {
 }
 impl State {
     fn tick(&mut self) -> Result<(), String> {
+        self.dirty |= locale::poll(&mut self.locale, STRINGS)?;
         // Reserve before accepting input so reallocations never leave old
         // password prefixes in freed allocations.
         if self.password.is_empty() && self.password.capacity() < 256 {
@@ -199,7 +203,7 @@ impl State {
                     clear_password(&mut self.password);
                     self.error = result
                         .err()
-                        .map_or(String::new(), |_| "SIGN IN FAILED - TRY AGAIN".into());
+                        .map_or(String::new(), |_| "sign-in-failed".into());
                     self.next_poll = 0;
                 }
             }

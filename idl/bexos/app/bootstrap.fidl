@@ -54,6 +54,110 @@ resource struct Startup {
     incoming_service_descriptors string:1024;
     lazy_idle_timeout_ms uint32;
     lazy_generation uint64;
+    locale_data vector<handle>:1;
+    locale_data_len uint64;
+    locale_data_generation uint64;
+    locale_settings vector<uint8>:4096;
 };
 
 struct Ready { status int32; };
+
+// Frozen wire layouts used to decode already-built clients.
+resource struct StartupV6 {
+    version uint32;
+    resources vector<handle>:16;
+    arg0 uint64;
+    arg1 uint64;
+    namespace vector<NamespaceEntry>:16;
+    namespace_paths string:256;
+    migration vector<handle>:1;
+    migration_generation uint64;
+    migration_target bool;
+    service_grant_endpoints vector<handle>:16;
+    service_grant_descriptors string:1024;
+    config vector<handle>:1;
+    config_len uint64;
+    config_endpoint vector<handle>:1;
+    linker_data vector<handle>:1;
+    linker_data_len uint64;
+
+};
+resource struct StartupV7 {
+    version uint32;
+    resources vector<handle>:16;
+    arg0 uint64;
+    arg1 uint64;
+    namespace vector<NamespaceEntry>:16;
+    namespace_paths string:256;
+    migration vector<handle>:1;
+    migration_generation uint64;
+    migration_target bool;
+    service_grant_endpoints vector<handle>:16;
+    service_grant_descriptors string:1024;
+    config vector<handle>:1;
+    config_len uint64;
+    config_endpoint vector<handle>:1;
+    linker_data vector<handle>:1;
+    linker_data_len uint64;
+    trace_producer vector<handle>:1;
+    trace_mapped_len uint64;
+    trace_producer_id uint64;
+    trace_pid uint64;
+    trace_main_tid uint64;
+
+};
+resource struct StartupV8 {
+    version uint32;
+    resources vector<handle>:16;
+    arg0 uint64;
+    arg1 uint64;
+    namespace vector<NamespaceEntry>:16;
+    namespace_paths string:256;
+    migration vector<handle>:1;
+    migration_generation uint64;
+    migration_target bool;
+    service_grant_endpoints vector<handle>:16;
+    service_grant_descriptors string:1024;
+    config vector<handle>:1;
+    config_len uint64;
+    config_endpoint vector<handle>:1;
+    linker_data vector<handle>:1;
+    linker_data_len uint64;
+    trace_producer vector<handle>:1;
+    trace_mapped_len uint64;
+    trace_producer_id uint64;
+    trace_pid uint64;
+    trace_main_tid uint64;
+    driver_resources vector<DriverResource>:16;
+    driver_lifecycle vector<handle>:1;
+
+};
+resource struct StartupV9 {
+    version uint32;
+    resources vector<handle>:16;
+    arg0 uint64;
+    arg1 uint64;
+    namespace vector<NamespaceEntry>:16;
+    namespace_paths string:256;
+    migration vector<handle>:1;
+    migration_generation uint64;
+    migration_target bool;
+    service_grant_endpoints vector<handle>:16;
+    service_grant_descriptors string:1024;
+    config vector<handle>:1;
+    config_len uint64;
+    config_endpoint vector<handle>:1;
+    linker_data vector<handle>:1;
+    linker_data_len uint64;
+    trace_producer vector<handle>:1;
+    trace_mapped_len uint64;
+    trace_producer_id uint64;
+    trace_pid uint64;
+    trace_main_tid uint64;
+    driver_resources vector<DriverResource>:16;
+    driver_lifecycle vector<handle>:1;
+    incoming_service_endpoints vector<handle>:16;
+    incoming_service_descriptors string:1024;
+    lazy_idle_timeout_ms uint32;
+    lazy_generation uint64;
+};

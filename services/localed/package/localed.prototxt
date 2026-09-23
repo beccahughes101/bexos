@@ -1,0 +1,20 @@
+package_name: "bexos.service.localed"
+name: "Locale service"
+package_version { major: 0 minor: 1 patch: 0 }
+processes {
+ name: "localed" runner: "elf" service: true wave: 6 resource_group: "system"
+ lifecycle { update_strategy: HEART_TRANSPLANT migration_timeout_ms: 1000 }
+ runner_options { [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/localed" } }
+}
+services_exposed {
+ name: "bexos.locale.LocaleProvider" protocol: "LocaleProvider" lifecycle: SINGLETON visibility: PUBLIC
+ capabilities { capability: "Public" method_ordinals: 1 method_ordinals: 2 method_ordinals: 3 }
+}
+services_exposed {
+ name: "bexos.locale.LocaleStartup" protocol: "LocaleStartup" lifecycle: SINGLETON visibility: PUBLIC
+ capabilities { capability: "Startup" method_ordinals: 1 }
+}
+services_consumed {
+ name: "bexos.locale.LocalePreferences" link_type: REQUIRED
+ capabilities { capability: "LocaleRead" methods { ordinal: 1 link_type: REQUIRED } methods { ordinal: 2 link_type: REQUIRED } }
+}

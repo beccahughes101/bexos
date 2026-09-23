@@ -75,6 +75,7 @@ pub struct Service {
     pub preferences: BTreeMap<(u64, String, u64), Preferences>,
     pub observers: Vec<Observer>,
     pub theme_observers: Vec<ThemeObserver>,
+    pub locale_observers: Vec<ThemeObserver>,
     pub locked: BTreeSet<u64>,
     pub pending: Option<Pending>,
     pub sequence: u64,
@@ -273,6 +274,7 @@ impl Service {
         let response_generation = expected.checked_add(1).ok_or(Error::Overflow)?;
         let mut candidate = self.clone();
         candidate.apply(&mutation)?;
+        crate::locale::validate_mutation(&candidate, &mutation)?;
         let mut participants = BTreeSet::new();
         let mut snapshots = Vec::new();
         for o in self.observers.iter().filter(|o| o.registered) {

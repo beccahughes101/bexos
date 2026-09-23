@@ -149,3 +149,15 @@ Format Rust:
 ```sh
 bazel run @rules_rust//:rustfmt
 ```
+
+## Locale assets
+
+Source integration is present; the local implementation and acceptance plan
+remain incomplete. See [RFC 0066 current gaps](rfcs/0066/CURRENT.md#current-gaps-in-the-approved-local-scope).
+
+`build/rules/locale.bzl` adds `bexos_locale_bundle` (FTL to indexed BEXRES) and
+`bexos_cldr_data` (pinned ICU4X export to BEXLOC). Generated catalogs, CLDR blobs,
+FIDL bindings, and archives remain Bazel outputs. The base products include
+localed and its config-only preference package on both architectures. The
+`//data/locale:locales` build setting defaults to `en-US`; additional locales are
+opt-in build data. See [localization](localization.md) for packaging examples.

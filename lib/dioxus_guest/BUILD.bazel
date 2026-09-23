@@ -11,6 +11,8 @@ rust_library(
     rustc_env = {"CARGO_MANIFEST_DIR": "."},
     deps = [
         "//idl:graphics_fidl_rust",
+        "//idl:locale_fidl_rust",
+        "//lib/ui/i18n",
         "//lib/dioxus_dom",
         "//lib/dioxus_scene",
         "@brush_crates//:wit-bindgen",

@@ -139,6 +139,7 @@ world service {
   import kernel;
   import sandbox;
   import ui;
+  import locale;
   import checkpoint-resources;
   export lifecycle;
 }
@@ -153,8 +154,21 @@ world dioxus-app {
   import kernel;
   import sandbox;
   import dioxus;
+  import locale;
   import checkpoint-resources;
   export lifecycle;
+}
+
+/// Local formatting uses shared native CLDR mappings, never guest table copies.
+interface locale {
+  record format-option { name: string, value: string }
+  snapshot: func(provider: u32) -> result<list<u8>, string>;
+  number: func(provider: u32, value: string, options: list<format-option>) -> result<string, string>;
+  datetime: func(provider: u32, value: string, timestamp: bool, options: list<format-option>) -> result<string, string>;
+  currency: func(provider: u32, value: string, code: string) -> result<string, string>;
+  %list: func(provider: u32, values: list<string>, disjunction: bool) -> result<string, string>;
+  plural: func(provider: u32, language: string, value: string) -> result<string, string>;
+  direction: func(provider: u32, language: string) -> result<string, string>;
 }
 
 /// Stable, typed checkpoint tokens; adoption is permitted only during restore.

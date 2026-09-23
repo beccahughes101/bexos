@@ -44,6 +44,14 @@ QEMU_STORAGE_PREINSTALLS = [
         "path": "pkg/bexos.lib.tee_driver.trusty.bex",
     },
     {
+        "archive": "//lib/i18n/settings:locale_archive",
+        "path": "pkg/bexos.locale.preferences.bex",
+    },
+    {
+        "archive": "//services/localed:localed_archive",
+        "path": "pkg/bexos.service.localed.bex",
+    },
+    {
         "archive": "//lib/ui/theme:theme_archive",
         "path": "pkg/bexos.ui.theme.bex",
     },

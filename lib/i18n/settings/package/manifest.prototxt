@@ -1,0 +1,30 @@
+package_name: "bexos.locale.preferences"
+name: "Locale preferences"
+package_version { major: 0 minor: 1 patch: 0 }
+config_schema {
+  fields {
+    name: "language_priority" type: CONFIG_STRING max_size: 263 scope: SCOPE_MDM_LOCKABLE
+    default_value { string_value: "en-US" }
+    display_name: "Display languages" description: "Ordered comma-separated BCP 47 tags, at most eight."
+  }
+  fields {
+    name: "override_region" type: CONFIG_STRING max_size: 32 scope: SCOPE_MDM_LOCKABLE
+    default_value { string_value: "" }
+    display_name: "Regional locale" description: "Empty follows the first display language."
+  }
+  fields {
+    name: "measurement_system" type: CONFIG_STRING max_size: 16 scope: SCOPE_MDM_LOCKABLE
+    default_value { string_value: "us" }
+    string_enum { values: "metric" values: "us" values: "uk" }
+  }
+  fields {
+    name: "hour_cycle" type: CONFIG_STRING max_size: 3 scope: SCOPE_MDM_LOCKABLE
+    default_value { string_value: "h12" }
+    string_enum { values: "h11" values: "h12" values: "h23" values: "h24" }
+  }
+  fields {
+    name: "first_day_of_week" type: CONFIG_UINT32 scope: SCOPE_MDM_LOCKABLE
+    default_value { uint32_value: 7 }
+    uint_range { min: 1 max: 7 }
+  }
+}

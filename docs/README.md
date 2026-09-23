@@ -39,6 +39,7 @@ image/autoinstall set. The storage-image packages are preinstalled on the
 - [WASM Runtime](wasm-runtime.md): implementation status, guest interfaces, limits, lifecycle, and verification.
 - [System and User UI](sysui.md): package selection, authentication, desktop windows, isolation, and recovery.
 - [Dioxus WASM native UI](dioxus.md): Rust WASI component apps, shared UI component packaging, native GPU/CPU rendering, input, and transplant behavior.
+- [Localization](localization.md): compiled Fluent catalogs, shared CLDR data, locale preferences, native/WASM ownership, and current coverage.
 - [Local Fonts](fonts.md): `fontd`, system/user tiers, read-only shared VMOs, matching, shaping clients, and the disabled dynamic-fetch boundary.
 - [Drivers And Storage](drivers-storage.md): D1 drivers, block/filesystem stack, Linux shim, and D2 smoke target.
 - [I2C And SPI Services](i2c_spi.md): scoped D1 I2C/SPI controllers, deterministic backend, topology, migration, and validation state.

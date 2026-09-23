@@ -6,7 +6,7 @@ pub use taffy::{
     Style,
     geometry::{Rect, Size},
     style::{
-        AlignItems, AvailableSpace, Dimension, Display, FlexDirection, JustifyContent,
+        AlignItems, AvailableSpace, Dimension, Direction, Display, FlexDirection, JustifyContent,
         LengthPercentage, LengthPercentageAuto,
     },
 };

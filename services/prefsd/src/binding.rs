@@ -10,6 +10,7 @@ pub struct Client {
     pub admin: bool,
     pub manage: bool,
     pub theme: bool,
+    pub locale: bool,
 }
 impl Client {
     pub fn from_binding(channel: u64, b: &ServiceBinding) -> Option<Self> {
@@ -24,8 +25,17 @@ impl Client {
         let admin =
             b.protocol == "PreferencesAdmin" && package == "bexos.platform.appd" && uid == 0;
         let theme = b.service == "bexos.ui.theme.ThemeManager" && b.protocol == "ThemeManager";
+        let locale = b.service == "bexos.locale.LocalePreferences"
+            && b.protocol == "LocalePreferences"
+            && package == "bexos.service.localed"
+            && uid == 0
+            && b.capability == "LocaleRead";
+        if locale && b.method_ordinals.iter().any(|m| !matches!(m, 1 | 2)) {
+            return None;
+        }
         if !admin
             && !theme
+            && !locale
             && (b.service != "bexos.preferences.UserPreferences" || b.protocol != "UserPreferences")
         {
             return None;
@@ -38,6 +48,7 @@ impl Client {
         }
         if !admin
             && !theme
+            && !locale
             && !manage
             && (b.capability != "Public"
                 || b.method_ordinals.iter().any(|m| !matches!(m, 1 | 2 | 3)))
@@ -53,6 +64,7 @@ impl Client {
             admin,
             manage,
             theme,
+            locale,
         })
     }
 }

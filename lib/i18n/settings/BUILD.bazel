@@ -1,0 +1,15 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//build/rules:userspace.bzl", "app_manifest")
+load("//build/rules:app_archive.bzl", "app_archive")
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "settings",
+    srcs = glob(["src/*.rs"]),
+    crate_name = "bexos_locale_settings",
+    edition = "2024",
+    deps = ["//lib/component_config", "//idl:locale_fidl_rust", "@locale_crates//:icu_locale_core"],
+)
+rust_test(name = "tests", crate = ":settings")
+app_manifest(name = "manifest", src = "package/manifest.prototxt", architecture = "MULTI")
+app_archive(name = "locale_archive", manifest = ":manifest", entries = {}, compression = "zstd")

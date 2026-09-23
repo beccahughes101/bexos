@@ -141,3 +141,21 @@ bazel test --test_tag_filters= //testing/e2e/qemu/graphics:dioxus_smoke_x86_64
 Local verification on this branch has passed Rust formatting, the focused host suite, and the userspace AArch64 build. Host tests cover document encoding/validation, selector/declaration parsing, WASM-side layout/text projection, scene validation/rejection, CPU replay, Vello conversion, WASM runner option bounds, dependency composition with the actual demo app and separately packaged shared component, appd legacy/native compatibility, native substitution rejection, and component payload delivery to the runner.
 
 The graphics QEMU smoke targets are checked in as `//testing/e2e/qemu/graphics:dioxus_smoke_aarch64` and `//testing/e2e/qemu/graphics:dioxus_smoke_x86_64`. They boot the graphical workstation image, launch `bexos.app.dioxus_demo`, and assert component graph composition, service instantiation, scened readiness, virtio GPU readiness, and the runner marker `wasm_runner: native UI first frame submitted backend=...`. Current local QEMU runs are blocked before Dioxus rendering is reached: the AArch64 run reaches scened and debugd but wedges in the debug app-launch proxy after probe connection, while the x86_64 run fails during graphics workstation pivot with `appd: boot failed: driver library cache VMO bexos.lib.crypto; pivot not completed`. Because both failures occur before the app can render, this branch does not claim QEMU Dioxus rendering as locally verified yet. Existing scened validation continues to distinguish software Vulkan functional evidence from physical-GPU acceleration; this change does not add new physical-GPU performance measurements.
+
+## Localized retained documents
+
+Source integration is present; the local implementation and acceptance plan
+remain incomplete. See [RFC 0066 current gaps](rfcs/0066/CURRENT.md#current-gaps-in-the-approved-local-scope).
+
+`lib/ui/i18n` supplies `LocaleContext`, `I18nProvider`, `use_locale(context)`, and
+`t!(context, key, ...)`. The guest SDK polls the runner's native locale watch
+before a frame and marks the existing document dirty on a new generation. State
+such as input, counters, focus, scroll, and logical view IDs remains outside the
+context. Stylo passes computed direction to Taffy; Parley receives language and
+paragraph direction as part of its shaping cache key. The demo checkpoint now
+also retains its view ID and accepts the previous checkpoint layout.
+
+SysUI, UserUI, and the demo embed build-time English catalogs. They fall back to
+English when another language is selected; multilingual test catalogs are built
+separately. [Localization](localization.md) describes FTL support, Bazel rules,
+CLI preferences, native/WASM ownership, and the current verification boundary.
