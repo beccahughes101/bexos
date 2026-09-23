@@ -77,3 +77,4 @@ An RFC number does not indicate approval or implementation status.
 | [0066](0066/README.md) |  i18n  | 2026-09-13 | [Implementation and gaps](0066/CURRENT.md) |
 | [0067](0067/README.md) |  Drivers  | 2026-09-23 | [Implementation and gaps](0067/CURRENT.md) |
 | [0068](0068/README.md) |  Multi network  | 2026-09-23 | [Implementation and gaps](0068/CURRENT.md) |
+| [0069](0069/README.md) |  SDK  | 2026-09-23 | [Implementation and gaps](0069/CURRENT.md) |
