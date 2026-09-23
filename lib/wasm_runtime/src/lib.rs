@@ -20,6 +20,7 @@ pub mod bindings;
 pub mod child;
 pub mod component;
 pub mod component_host;
+mod component_locale;
 pub mod component_sandbox;
 pub mod lifecycle;
 pub mod migration;

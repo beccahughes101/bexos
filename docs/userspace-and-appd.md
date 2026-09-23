@@ -267,3 +267,15 @@ Launch sequence:
 
 The generated FIDL bindings currently represent `handle:OPTIONAL` as a raw
 handle value; raw handle `0` is the no-handle convention.
+
+## Locale descriptor
+
+Source integration is present; the local implementation and acceptance plan
+remain incomplete. See [RFC 0066 current gaps](rfcs/0066/CURRENT.md#current-gaps-in-the-approved-local-scope).
+
+The current envelope is version 10. Its optional locale descriptor carries a
+read-only CLDR VMO, length, data generation, and encoded locale snapshot. Legacy
+startup versions remain decodable. Appd supplies locale state after localed is
+ready; early boot services do not wait on localed. Native applications transfer
+the descriptor into `bexos_i18n_client::Client` or its context adapter, whose
+mapping lifetime covers the borrowed ICU provider. See [localization](localization.md).

@@ -62,7 +62,8 @@ def qemu_e2e_test(
         architectures = ["aarch64", "x86_64"],
         development = False,
         trusty_variant = "standard",
-        package_config = ""):
+        package_config = "",
+        locales = []):
     if native.existing_rule("declared_tests") != None:
         fail("qemu_suites() must follow every QEMU scenario in this package")
     test_env = {
@@ -168,6 +169,7 @@ def qemu_e2e_test(
 
     for arch in architectures:
         architecture_test(
+            locales = locales,
             name = name + "_" + arch,
             test = ":" + name + "_implementation",
             architecture = arch,

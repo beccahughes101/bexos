@@ -1,0 +1,9 @@
+brand = BEXOS
+no-users = NO USERS CONFIGURED
+create-user = USE BEXCTL USERS CREATE TO SET UP
+user = USER
+password = PASSWORD
+sign-in = SIGN IN
+unlock = UNLOCK
+log-out = LOG OUT
+sign-in-failed = SIGN IN FAILED - TRY AGAIN

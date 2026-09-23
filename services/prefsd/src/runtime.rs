@@ -62,6 +62,14 @@ impl Runtime {
         Ok(())
     }
     pub fn lock(&mut self, uid: u64) {
+        self.service.locale_observers.retain(|observer| {
+            if observer.uid == uid {
+                let _ = bexos_userspace::Memory::close(observer.channel);
+                false
+            } else {
+                true
+            }
+        });
         let affected = self.service.pending.as_ref().is_some_and(|p| {
             matches!(&p.mutation,crate::service::Mutation::User{uid:u,..}if *u==uid)
                 || self
@@ -505,6 +513,7 @@ pub async fn main(channel: u64) -> ! {
         crate::wire::poll(&mut runtime);
         runtime.poll_observers();
         runtime.advance();
+        crate::locale::broadcast(&mut runtime.service);
         // User-manager events are authoritative, and requests additionally check
         // current unlock state before touching an encrypted store.
         crate::wire::poll_users(&mut runtime);

@@ -18,6 +18,7 @@ architecture_test = rule(
     attrs = {
         "test": attr.label(mandatory = True, cfg = guest_test_transition),
         "architecture": attr.string(mandatory = True, values = ["aarch64", "x86_64"]),
+        "locales": attr.string_list(),
         "scened_standalone": attr.bool(default = False),
         "package_config": attr.string(default = ""),
         "trusty_variant": attr.string(default = "standard", values = ["standard", "acceptance"]),

@@ -238,3 +238,20 @@ Cold component startup has a separate deadline from ordinary window operations.
 The x86 targets consume the authenticated EFI loader, enrolled variable store,
 kernel, and workstation vbmeta directly from their Bazel build graph, so the
 run cannot silently reuse an older locally saved firmware image.
+
+## Locale changes
+
+Source integration is present; the local implementation and acceptance plan
+remain incomplete. See [RFC 0066 current gaps](rfcs/0066/CURRENT.md#current-gaps-in-the-approved-local-scope).
+
+The shells embed English Fluent catalogs compiled by Bazel. Each polls a shared
+locale context before rendering; a new committed generation dirties the retained
+document without recreating the password/input model, window list, focus state,
+scroll offsets, or view IDs. Root documents carry display language and direction.
+Subscriptions live in the native runner's migration checkpoint; shell restore
+rebuilds its application context. Production catalogs currently fall back to
+English for other languages. Separate multilingual fixtures are intended to
+exercise translation switching; live switching and retained-state acceptance
+have not passed. Existing credential-clearing behavior during shell migration
+is separate from locale redraw behavior. See [localization](localization.md) for preferences and
+[RFC 0066 status](rfcs/0066/CURRENT.md) for validation results.

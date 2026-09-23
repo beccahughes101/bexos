@@ -14,3 +14,4 @@ rust_test(
     edition = "2024",
     deps = [":userspace", "//idl:migration_fidl_rust", "//lib/migration"],
 )
+rust_test(name = "startup_compat_tests", crate = ":userspace")

@@ -278,3 +278,23 @@ transport result is uncertain.
 
 See [preference validation](services.md#preference-validation) for the host and
 QEMU coverage of these commands and their service transport.
+
+## Locale preferences
+
+Source integration is present; the local implementation and acceptance plan
+remain incomplete. See [RFC 0066 current gaps](rfcs/0066/CURRENT.md#current-gaps-in-the-approved-local-scope).
+
+Locale settings use the existing preference commands and the package
+`bexos.locale.preferences`; there is no separate settings panel. For example,
+after reading the current generation:
+
+```sh
+bexctl prefs get bexos.locale.preferences --uid 1000
+bexctl prefs set bexos.locale.preferences 0 --uid 1000 \
+  language_priority=string:de-DE,en-US override_region=string:en-US
+```
+
+Replace `0` with the reported generation. The comma-separated language list
+accepts up to eight distinct canonical tags. English-only production catalogs
+fall back to English; regional data coverage is build-configured. See
+[localization](localization.md) for all fields and defaults.

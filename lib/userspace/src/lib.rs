@@ -28,6 +28,7 @@ pub mod ipc;
 pub mod memory;
 pub mod preferences;
 pub mod startup;
+mod startup_compat;
 pub mod syscall;
 pub mod vfs;
 pub use executor::block_on;
@@ -196,3 +197,6 @@ pub mod checkpoint;
 pub mod clock;
 pub mod config;
 pub mod random;
+
+#[cfg(test)]
+mod startup_compat_tests;

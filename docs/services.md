@@ -837,7 +837,6 @@ Appd coordinates milestones and marks a successfully exited splash as a complete
 boot service, preventing restart. Graphics readiness failures are nonfatal.
 See [boot UI](bootui.md) for protocol, migration, validation, and current limits.
 
-
 RFC 0064 now adds the centralized pkgd source implementation, including a
 configured font miss path, asynchronous app installation, OCI/TUF verification
 and a protected package-state endpoint. Default products contain no remote
@@ -848,3 +847,23 @@ the shared TLS root-service path needs VMO ownership cleanup. Live consumer
 delivery and replacement have not passed guest acceptance. See the
 [current gaps](rfcs/0064/CURRENT.md#current-gaps) for implementation limitations
 and missing lifecycle assertions.
+
+## Locale Provider (`localed`)
+
+Source integration is present; the local implementation and acceptance plan
+remain incomplete. See [RFC 0066 current gaps](rfcs/0066/CURRENT.md#current-gaps-in-the-approved-local-scope).
+
+Package `bexos.service.localed` starts in wave 6, after prefsd. It loads one
+Bazel-generated CLDR blob and distributes read-only VMO duplicates. Its public
+`LocaleProvider` binding supplies the caller's UID; the explicit-UID startup
+resolver admits only appd. Prefsd's private `LocalePreferences` feed admits only
+localed and publishes per-user snapshots after durable commits. User lock or
+deletion close watches and clear snapshots. Public bindings are retained for
+unlock recovery, leaving an unresolved stale-binding risk when a deleted UID is
+reused. The feed must distinguish deletion from lock. Queued generations are
+recorded for backpressure and migration, but guest acceptance is outstanding.
+The config-only `bexos.locale.preferences` package uses existing encrypted
+persistence and policy locks. Both service and replacement archives are under
+`//services/localed`; the original VMO and subscriptions are migration resources.
+See [localization](localization.md) for CLI commands, shipped coverage, APIs,
+and validation status. Online supplementary packs remain deferred.

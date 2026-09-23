@@ -1,4 +1,4 @@
-def app_archive(name, manifest, entries = {}, compression = "none", signing_key = "//ecosystem/bexos:app_signing_key", config = None, config_policy = None):
+def app_archive(name, manifest, entries = {}, compression = "none", signing_key = "//ecosystem/bexos:app_signing_key", config = None, config_policy = None, testonly = False):
     """Builds a signed .bex app archive.
 
     Args:
@@ -24,6 +24,7 @@ def app_archive(name, manifest, entries = {}, compression = "none", signing_key 
         cmd += " --entry %s=$(location %s)" % (archive_path, label)
     native.genrule(
         name = name,
+        testonly = testonly,
         srcs = srcs,
         outs = [name + ".bex"],
         cmd = cmd,

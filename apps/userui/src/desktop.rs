@@ -1,3 +1,5 @@
+use bexos_dioxus_guest::locale::{self, LocaleContext};
+const STRINGS: &[u8] = include_bytes!(env!("BEXOS_STRINGS"));
 mod render;
 #[cfg(test)]
 mod tests;
@@ -14,6 +16,7 @@ const VERTICAL_CHROME: u32 = TITLE_HEIGHT + RESIZE_BORDER;
 
 #[derive(Default)]
 pub struct Desktop {
+    locale: Option<LocaleContext>,
     view: Option<View>,
     client: Option<Client>,
     snapshot: Snapshot,
@@ -31,6 +34,7 @@ pub struct Desktop {
 }
 impl Desktop {
     pub fn tick(&mut self) -> Result<(), String> {
+        self.dirty |= locale::poll(&mut self.locale, STRINGS)?;
         if self.view.is_none() {
             self.view = Some(View::open(800, 600)?);
             self.width = 800;

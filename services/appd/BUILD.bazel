@@ -41,6 +41,7 @@ rust_library(
         "//lib/boot",
         "//lib/crypto",
         "//idl:bootstrap_fidl_rust",
+        "//idl:locale_fidl_rust",
         "//idl:hardware_manager_fidl_rust",
         "//drivers/d1/storage/bexos/bexfs:bexfs",
         "//idl:vfs_manager_fidl_rust",

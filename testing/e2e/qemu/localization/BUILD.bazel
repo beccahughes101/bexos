@@ -1,0 +1,35 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:locale.bzl", "bexos_locale_bundle")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("//build/rules:wasm.bzl", "wasi_component")
+load("//testing/e2e/qemu:qemu_e2e.bzl", "qemu_e2e_test", "QEMU_BOOT_DATA")
+load("//testing/e2e/qemu:architecture_test.bzl", "qemu_suites")
+package(default_visibility = ["//visibility:public"])
+bexos_locale_bundle(name = "strings", srcs = glob(["locales/**/*.ftl"]), testonly = True)
+wasi_component(name = "fixture", testonly = True, srcs = ["fixture.rs"], crate_root = "fixture.rs", crate_name = "locale_fixture", deps = ["//lib/dioxus_guest", "//lib/migration"], compile_data = [":strings"], rustc_env = {"BEXOS_STRINGS": "$(execpath :strings)"})
+app_manifest(name = "manifest", src = "fixture.prototxt")
+app_archive(name = "fixture_archive", testonly = True, manifest = ":manifest", entries = {"bin/locale_fixture.wasm": ":fixture", "data/locale/strings.bexres": ":strings"}, compression = "zstd")
+app_manifest(name = "native_manifest", src = "native.prototxt")
+std_service_binary(name = "native", srcs = ["native.rs"], crate_name = "locale_native", deps = ["//lib/userspace/i18n", "//lib/i18n/catalog", "//idl:locale_fidl_rust"])
+app_archive(name = "native_archive", manifest = ":native_manifest", entries = {"bin/native": ":native"})
+# Reuse the existing authenticated shell and QMP acceptance helpers.
+genrule(name = "test_helpers", srcs = ["//testing/e2e/qemu/sysui:qmp.rs", "//testing/e2e/qemu/sysui:checks.rs"], outs = ["qmp.rs", "checks.rs"], cmd = "cp $(location //testing/e2e/qemu/sysui:qmp.rs) $(location qmp.rs) && cp $(location //testing/e2e/qemu/sysui:checks.rs) $(location checks.rs)")
+BOOT = {k: v.replace("/nongui:", "/workstation:") for k, v in QEMU_BOOT_DATA.items()}
+UPDATES = {"locale-localed": "//services/localed:replacement_archive", "locale-prefsd": "//services/prefsd:replacement_archive", "locale-appd": "//services/appd:replacement_archive", "locale-fixture": ":fixture_archive"}
+genrule(
+    name = "test_disk", testonly = True,
+    srcs = [BOOT["disk"], BOOT["key"], ":native_archive"] + UPDATES.values(),
+    outs = ["localization_nvme.img"], tools = ["//tools/image:bexfs_image"],
+    cmd = "cp $(location " + BOOT["disk"] + ") $@ && chmod u+w $@ && $(location //tools/image:bexfs_image) --inspect --image $@ --partition STORAGE --label STORAGE --key-file $(location " + BOOT["key"] + ") --entry pkg/bexos.test.locale.bex=$(location :fixture_archive) --entry pkg/bexos.test.locale_native.bex=$(location :native_archive) " + " ".join(["--entry updates/" + key + ".bex=$(location " + label + ")" for key, label in UPDATES.items()]),
+)
+BOOT = dict(BOOT, disk = ":test_disk")
+qemu_e2e_test(
+    name = "localization_e2e_test", src = "localization_e2e_test.rs", crate_name = "localization_e2e",
+    extra_srcs = [":test_helpers"], boot_data = BOOT,
+    locales = ["en-US", "de-DE", "ru", "ar"],
+    env = {"BEXOS_QEMU_TIMEOUT_SECONDS": "1800", "BEXOS_QEMU_LIVE_LOG": "1"},
+    x86_extra_data = ["//boot/efi:authenticated_nucleus_product", "//boot/efi:enrolled.fd", "//device/virtual/qemu/workstation:vbmeta.elf.img", "//kernel:kernel"],
+    x86_env_overrides = {"BEXOS_QEMU_X86_EFI_LOADER": "$(rootpath //boot/efi:authenticated_nucleus_product)", "BEXOS_QEMU_X86_OVMF_VARS": "$(rootpath //boot/efi:enrolled.fd)", "BEXOS_QEMU_VBMETA": "$(rootpath //device/virtual/qemu/workstation:vbmeta.elf.img)", "BEXOS_QEMU_KERNEL": "$(rootpath //kernel:kernel)"},
+    deps = ["//host/debug_client", "//lib/debug_wire", "//lib/component_config", "//testing/e2e", "//tools/qemu:qemu_test", "@crates//:serde_json"],
+)
+qemu_suites()

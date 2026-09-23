@@ -1,3 +1,5 @@
+use bexos_dioxus_guest::locale::{self, LocaleContext, t};
+const STRINGS: &[u8] = include_bytes!(env!("BEXOS_STRINGS"));
 use bexos_dioxus_guest::exports::bexos::wasm::lifecycle::Guest;
 use bexos_dioxus_guest::{AssetKind, View, dom};
 use std::cell::RefCell;
@@ -11,6 +13,8 @@ pub struct Service;
 
 #[derive(Default)]
 struct State {
+    locale: Option<LocaleContext>,
+    initialized: bool,
     view: Option<View>,
     counter: u32,
     text: String,
@@ -21,9 +25,11 @@ struct State {
 
 thread_local! {
     static STATE: RefCell<State> = RefCell::new(State {
+        locale: None,
+        initialized: false,
         view: None,
         counter: 0,
-        text: "edit me".into(),
+        text: String::new(),
         scroll: 0.0,
         backend: "starting".into(),
         failure: String::new(),
@@ -33,6 +39,15 @@ thread_local! {
 impl Guest for Service {
     fn dispatch(_resource_id: u32) {
         STATE.with_borrow_mut(|state| {
+            let initial = !state.initialized;
+            if let Err(error) = locale::poll(&mut state.locale, STRINGS) {
+                state.failure = error;
+                return;
+            }
+            if initial && state.text.is_empty() && state.view.is_none() {
+                state.text = t!(state.locale.as_ref().unwrap(), "edit");
+            }
+            state.initialized = true;
             if state.view.is_none() {
                 match View::open(WIDTH, HEIGHT) {
                     Ok(view) => {
@@ -90,6 +105,7 @@ impl Guest for Service {
             out.extend_from_slice(&state.scroll.to_le_bytes());
             out.extend_from_slice(&(state.text.len() as u32).to_le_bytes());
             out.extend_from_slice(state.text.as_bytes());
+            out.extend_from_slice(&state.view.as_ref().map_or(0, |v| v.id()).to_le_bytes());
             out
         })
     }
@@ -103,8 +119,21 @@ impl Guest for Service {
         let len = u32::from_le_bytes(checkpoint[8..12].try_into().map_err(|_| ())?) as usize;
         let text_bytes = checkpoint.get(12..12 + len).ok_or(())?;
         let text = std::str::from_utf8(text_bytes).map_err(|_| ())?.to_string();
+        let tail = checkpoint.get(12 + len..).ok_or(())?;
+        let view = if tail.is_empty() {
+            0
+        } else if tail.len() == 4 {
+            u32::from_le_bytes(tail.try_into().map_err(|_| ())?)
+        } else {
+            return Err(());
+        };
+        if !scroll.is_finite() || text.len() > 64 {
+            return Err(());
+        }
         STATE.with_borrow_mut(|state| {
-            state.view = None;
+            state.locale = None;
+            state.initialized = true;
+            state.view = (view != 0).then(|| View::adopt(view));
             state.counter = counter;
             state.scroll = scroll;
             state.text = text;
@@ -118,6 +147,7 @@ impl Guest for Service {
 }
 
 fn render(state: &State) -> dom::Document {
+    let locale = state.locale.as_ref().unwrap();
     let backend_color = if state.backend == "gpu" {
         "#27ae60"
     } else {
@@ -167,12 +197,12 @@ fn render(state: &State) -> dom::Document {
                 origin: dom::StyleOrigin::Author,
             },
         ],
-        root: dom::Node::element(1, "main").class("root").children([
+        root: dom::Node::element(1, "main").class("root").attribute("lang", &locale.settings().languages[0]).attribute("dir", locale.direction()).style(format!("direction:{}", locale.direction())).children([
             dom::Node::element(2, "section").class("top").children([
                 dom::Node::element(3, "button")
                     .class("counter")
                     .listeners(dom::LISTENER_POINTER)
-                    .child(dom::Node::text(4, format!("counter {}", state.counter))),
+                    .child(dom::Node::text(4, t!(locale, "counter", count = state.counter))),
                 dom::Node::element(5, "input")
                     .class("editor")
                     .listeners(dom::LISTENER_KEYBOARD | dom::LISTENER_TEXT | dom::LISTENER_FOCUS)
@@ -184,21 +214,21 @@ fn render(state: &State) -> dom::Document {
                 .children([
                     dom::Node::element(8, "article")
                         .class("tile")
-                        .child(dom::Node::text(9, "flex + grid CSS")),
+                        .child(dom::Node::text(9, t!(locale, "layout"))),
                     dom::Node::image(10, IMAGE).style("background:#ffffff"),
                     dom::Node::element(11, "article")
                         .class("tile")
-                        .child(dom::Node::text(12, "WASM layout/text")),
+                        .child(dom::Node::text(12, t!(locale, "wasm"))),
                     dom::Node::element(13, "article")
                         .class("tile")
-                        .child(dom::Node::text(14, "native renderer")),
+                        .child(dom::Node::text(14, t!(locale, "renderer"))),
                 ]),
             dom::Node::element(15, "footer").class("status").child(dom::Node::text(
                 16,
                 if state.failure.is_empty() {
-                    format!("backend {}", state.backend)
+                    t!(locale, "backend", name = state.backend.as_str())
                 } else {
-                    format!("backend {}: {}", state.backend, state.failure)
+                    t!(locale, "backend-failure", name = state.backend.as_str(), error = state.failure.as_str())
                 },
             )),
         ]),

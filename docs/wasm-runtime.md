@@ -283,3 +283,18 @@ and `//testing/e2e/qemu/graphics:dioxus_smoke_x86_64` to launch the packaged app
 in the graphical workstation image and assert the native first-frame marker when
 the image reaches scened, debugd, and the app-launch path.
 QuickJS compilation/packaging and native JIT execution remain future designs.
+
+## Locale host interface
+
+Source integration is present; the local implementation and acceptance plan
+remain incomplete. See [RFC 0066 current gaps](rfcs/0066/CURRENT.md#current-gaps-in-the-approved-local-scope).
+
+The additive `bexos:wasm/locale` interface provides a bounded settings snapshot,
+number/currency/date/list formatting, plural selection, and direction queries.
+An authenticated LocaleProvider grant is required. Translation catalogs and
+Fluent expression resolution stay in the application; the native host owns the
+shared CLDR VMO and read-only mapping, outside WASM linear memory. Calls return
+owned strings or small metadata, never CLDR tables. Formatting is rejected during
+candidate restore. Runner checkpoints retain the locale VMO, settings generation,
+and listener, and rebuild native mappings after resource adoption. See
+[localization](localization.md) and [RFC 0066 status](rfcs/0066/CURRENT.md).

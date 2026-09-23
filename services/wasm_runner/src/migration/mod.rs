@@ -93,6 +93,17 @@ impl Runtime {
             .map_err(|e| wasmtime::format_err!("UI checkpoint: {e:?}"))?;
         let ui_len = ui.len();
         encoded.extend(ui);
+        let locale = self
+            .host
+            .as_ref()
+            .unwrap()
+            .locale
+            .lock()
+            .unwrap()
+            .encode()
+            .map_err(|e| wasmtime::format_err!("locale checkpoint: {e:?}"))?;
+        let locale_len = locale.len();
+        encoded.extend(locale);
         if encoded.len() > MAX_RUNTIME_STATE {
             return Err(wasmtime::format_err!("runtime checkpoint capacity"));
         }
@@ -102,6 +113,7 @@ impl Runtime {
         meta.extend_from_slice(&(encoded.len() as u64).to_le_bytes());
         meta.extend_from_slice(&self.migration.map_or(0, |c| c.0).to_le_bytes());
         meta.extend_from_slice(&(ui_len as u64).to_le_bytes());
+        meta.extend_from_slice(&(locale_len as u64).to_le_bytes());
         self.records.insert(0, meta);
         for (i, chunk) in encoded.chunks(CHUNK).enumerate() {
             self.records.insert(i as u64 + 1, chunk.to_vec());
@@ -140,7 +152,7 @@ impl State for Runtime {
         }
     }
     fn migration_state_limit() -> usize {
-        MAX_RUNTIME_STATE + 32
+        MAX_RUNTIME_STATE + 40
     }
     fn keys(&self) -> Vec<u64> {
         self.records.keys().copied().collect()
@@ -190,7 +202,7 @@ impl State for Runtime {
         let metadata = self
             .records
             .get(&0)
-            .filter(|v| v.len() == 24 || v.len() == 32)
+            .filter(|v| v.len() == 24 || v.len() == 32 || v.len() == 40)
             .ok_or(Error::InvalidData)?;
         let length = usize::try_from(u64::from_le_bytes(metadata[8..16].try_into().unwrap()))
             .map_err(|_| Error::Capacity)?;
@@ -208,13 +220,24 @@ impl State for Runtime {
         if bytes.len() != length {
             return Err(Error::InvalidData);
         }
-        let ui_len = if metadata.len() == 32 {
+        let ui_len = if metadata.len() >= 32 {
             usize::try_from(u64::from_le_bytes(metadata[24..32].try_into().unwrap()))
                 .map_err(|_| Error::Capacity)?
         } else {
             0
         };
-        let split = bytes.len().checked_sub(ui_len).ok_or(Error::InvalidData)?;
+        let locale_len = if metadata.len() >= 40 {
+            usize::try_from(u64::from_le_bytes(metadata[32..40].try_into().unwrap()))
+                .map_err(|_| Error::Capacity)?
+        } else {
+            0
+        };
+        let split = bytes
+            .len()
+            .checked_sub(ui_len)
+            .and_then(|n| n.checked_sub(locale_len))
+            .ok_or(Error::InvalidData)?;
+        let locale = crate::host::locale::LocaleState::decode(&bytes[split + ui_len..], false)?;
         let snapshot = codec::decode(&bytes[..split], self.ownership.clone())?;
         let (engine, replacement, options, _) = self.candidate.as_ref().ok_or(Error::BadState)?;
         if &snapshot.options != options {
@@ -249,6 +272,7 @@ impl State for Runtime {
         let prepared = Arc::new(prepared);
         let host = self.candidate.as_ref().unwrap().3.clone();
         host.replace_grants(snapshot.resources.iter().map(|(_, entry)| entry));
+        *host.locale.lock().unwrap() = locale;
         let context = Context::new(
             options.clone(),
             host,
@@ -278,7 +302,7 @@ impl State for Runtime {
         let metadata = self
             .records
             .get(&0)
-            .filter(|v| v.len() == 24 || v.len() == 32)
+            .filter(|v| v.len() == 24 || v.len() == 32 || v.len() == 40)
             .ok_or(Error::InvalidData)?;
         self.control = Channel(u64::from_le_bytes(metadata[..8].try_into().unwrap()));
         let length = usize::try_from(u64::from_le_bytes(metadata[8..16].try_into().unwrap()))
@@ -299,19 +323,31 @@ impl State for Runtime {
         if bytes.len() != length {
             return Err(Error::InvalidData);
         }
-        let ui_len = if metadata.len() == 32 {
+        let ui_len = if metadata.len() >= 32 {
             usize::try_from(u64::from_le_bytes(metadata[24..32].try_into().unwrap()))
                 .map_err(|_| Error::Capacity)?
         } else {
             0
         };
-        let split = bytes.len().checked_sub(ui_len).ok_or(Error::InvalidData)?;
+        let locale_len = if metadata.len() >= 40 {
+            usize::try_from(u64::from_le_bytes(metadata[32..40].try_into().unwrap()))
+                .map_err(|_| Error::Capacity)?
+        } else {
+            0
+        };
+        let split = bytes
+            .len()
+            .checked_sub(ui_len)
+            .and_then(|n| n.checked_sub(locale_len))
+            .ok_or(Error::InvalidData)?;
+        let locale = crate::host::locale::LocaleState::decode(&bytes[split + ui_len..], false)?;
         let snapshot = codec::decode(&bytes[..split], self.ownership.clone())?;
         bexos_userspace::log("wasm_runner: checkpoint decoded\n");
         let (_, _, _, host) = self.candidate.take().ok_or(Error::BadState)?;
         host.replace_grants(snapshot.resources.iter().map(|(_, entry)| entry));
+        *host.locale.lock().unwrap() = locale;
         *host.ui.lock().unwrap() =
-            crate::host::ui::UiState::decode(&bytes[split..], &snapshot.resources)?;
+            crate::host::ui::UiState::decode(&bytes[split..split + ui_len], &snapshot.resources)?;
         self.host = Some(host.clone());
         self.prepared.take().ok_or(Error::BadState)?;
         self.snapshot = Some(snapshot.clone());
@@ -346,6 +382,7 @@ impl State for Runtime {
         handles.insert(self.control.0);
         if let Some(host) = &self.host {
             handles.extend(host.ui.lock().unwrap().resources());
+            handles.extend(host.locale.lock().unwrap().resources());
         }
         if let Some(snapshot) = &self.snapshot {
             visit(snapshot, &mut handles);
@@ -354,6 +391,9 @@ impl State for Runtime {
     }
     fn activated(&mut self, _generation: u64) {
         self.ownership.store(true, Ordering::Release);
+        if let Some(host) = &self.host {
+            host.locale.lock().unwrap().activate();
+        }
     }
 }
 pub fn receive(
