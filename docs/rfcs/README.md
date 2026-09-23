@@ -75,3 +75,4 @@ An RFC number does not indicate approval or implementation status.
 | [0064](0064/README.md) | Centralized package daemon and secure OCI/TUF resolution | 2026-09-12 | [Implementation and gaps](0064/CURRENT.md) |
 | [0065](0065/README.md) |  Timezones  | 2026-09-13 | [Implementation and gaps](0065/CURRENT.md) |
 | [0066](0066/README.md) |  i18n  | 2026-09-13 | [Implementation and gaps](0066/CURRENT.md) |
+| [0067](0067/README.md) |  Drivers  | 2026-09-23 | [Implementation and gaps](0067/CURRENT.md) |
