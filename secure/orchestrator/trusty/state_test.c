@@ -16,6 +16,16 @@ int main(void) {
     request.component = BEXOS_COMPONENT_KERNEL;
     bexos_orchestrator_dispatch(&state, &request, sizeof(request), &response, sizeof(response));
     assert(response.active_slot == BEXOS_SLOT_B);
+    request.command = BEXOS_ORCHESTRATOR_GET_TRUSTY_GENERATION;
+    request.component = 0;
+    bexos_orchestrator_dispatch(&state, &request, sizeof(request), &response, sizeof(response));
+    assert(response.status == BEXOS_ORCHESTRATOR_OK && response.active_slot == 1 && response.reserved == 0);
+    request.command = BEXOS_ORCHESTRATOR_GET_MIGRATION_ABI;
+    bexos_orchestrator_dispatch(&state, &request, sizeof(request), &response, sizeof(response));
+    assert(response.status == BEXOS_ORCHESTRATOR_OK && response.active_slot == 1 && response.reserved == 0);
+    request.command = BEXOS_ORCHESTRATOR_GET_FIXTURE_MODE;
+    bexos_orchestrator_dispatch(&state, &request, sizeof(request), &response, sizeof(response));
+    assert(response.status == BEXOS_ORCHESTRATOR_OK && response.active_slot == 0 && response.reserved == 0);
     request.version = 99;
     bexos_orchestrator_dispatch(&state, &request, sizeof(request), &response, sizeof(response));
     assert(response.status == BEXOS_ORCHESTRATOR_BAD_VERSION);

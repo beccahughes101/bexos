@@ -26,6 +26,13 @@ impl Prepared {
         }
         self.normal
     }
+
+    /// Install reconstructed software ownership while the permanent resident
+    /// execution owner retains the authoritative hardware VMCBs.
+    pub unsafe fn install_preserving_cpus(self) -> Normal {
+        let Self { normal, cpus: _ } = self;
+        normal
+    }
 }
 
 impl Normal {
@@ -282,21 +289,14 @@ impl Normal {
             record[corrupted] ^= 1;
             let digest = Sha256::digest(&record[..end]);
             record[end..].copy_from_slice(&digest);
-            // Deliberately discard CPU objects to prove restoration is used.
-            *core::ptr::addr_of_mut!(CPUS) = [const { Vmcb::new() }; 4];
-            self.registers = core::array::from_fn(|_| Registers::default());
-            self.platform = Platform::new(
-                DomainMemory {
-                    base: BASE,
-                    length: LENGTH,
-                },
-                false,
-            );
-            self.root = 0;
-            self.entry_approved = false;
-            *self = Self::resume_protected(1, record).unwrap();
+            // Fully decode a replacement owner. The permanent execution owner
+            // retains the live VMCBs; policy replacement installs only decoded
+            // software ownership and transport state.
+            core::hint::black_box(Self::prepare_protected(1, record).unwrap());
             DONE = true;
         }
-        crate::log("monitor-runtime: four BexOS CPUs restored from protected aggregate\n");
+        crate::log(
+            "monitor-runtime: four BexOS CPU records validated under permanent execution owner\n",
+        );
     }
 }

@@ -95,7 +95,70 @@ Its gitignored `authmgr_acceptance_image.bin` cannot be used as the standard
 bundle. Acceptance application sources are excluded from the standard
 firmware build.
 
-## Verification results
+## Replacement fixture images
+
+Trusty replacement fixtures are configured by prototxt under
+`third_party/trusty/configs/`. The shared config fields are `architecture`,
+`generation`, `migration_abi`, and `fixture`. The build injects these fields
+into the pinned Trusty tree through `configure_image.py`, and the orchestrator
+TA reports them through its internal query protocol.
+
+Standard and AuthMgr-acceptance fixture bundle targets exist for both maintained
+architectures:
+
+```sh
+bazel build -c opt //third_party/trusty:aarch64_generation2_built_image
+bazel build -c opt //third_party/trusty:aarch64_generation3_built_image
+bazel build -c opt //third_party/trusty:aarch64_incompatible_state_built_image
+bazel build -c opt //third_party/trusty:aarch64_fault_built_image
+bazel build -c opt //third_party/trusty:aarch64_hang_built_image
+bazel build -c opt //third_party/trusty:aarch64_generation2_acceptance_built_image
+bazel build -c opt //third_party/trusty:aarch64_generation3_acceptance_built_image
+bazel build -c opt //third_party/trusty:aarch64_incompatible_state_acceptance_built_image
+bazel build -c opt //third_party/trusty:aarch64_fault_acceptance_built_image
+bazel build -c opt //third_party/trusty:aarch64_hang_acceptance_built_image
+bazel build -c opt //third_party/trusty:x86_64_generation2_built_image
+bazel build -c opt //third_party/trusty:x86_64_generation3_built_image
+bazel build -c opt //third_party/trusty:x86_64_incompatible_state_built_image
+bazel build -c opt //third_party/trusty:x86_64_fault_built_image
+bazel build -c opt //third_party/trusty:x86_64_hang_built_image
+bazel build -c opt //third_party/trusty:x86_64_generation2_acceptance_built_image
+bazel build -c opt //third_party/trusty:x86_64_generation3_acceptance_built_image
+bazel build -c opt //third_party/trusty:x86_64_incompatible_state_acceptance_built_image
+bazel build -c opt //third_party/trusty:x86_64_fault_acceptance_built_image
+bazel build -c opt //third_party/trusty:x86_64_hang_acceptance_built_image
+```
+
+On 2026-09-09, the generation-2 ARM and x86 bundles built successfully from
+these targets. The generated bundle hashes were:
+
+| Bundle | SHA-256 |
+| --- | --- |
+| `bazel-bin/third_party/trusty/aarch64_generation2/image.bin` | `8468e0e517e5d568222984bbcb77b06067ba21f05c5a3b2b9b491f386067ed22` |
+| `bazel-bin/third_party/trusty/bundle_x86_64_generation2/image.bin` | `09f6229b4b22d35cc000b1a96638822474345a60caf76b5873c63a4952cd19ef` |
+
+These bundles are build artifacts, not refreshed product snapshots. Product live
+Trusty replacement does not yet consume them.
+
+## Current completion work
+
+The [Trusty completion checkpoint](../../docs/current/trusty-completion.md)
+records the current ARM/x86 replacement work. Live Trusty remains unavailable;
+new shared libraries and the ARM platform probe are prerequisites, not product
+replacement acceptance. Firmware source changes require explicit refreshes.
+The checkpoint records the refreshed standard ARM bundle and its secure-stack
+regression result; it also identifies saved variants that have not been
+refreshed. A 2026-09-09 follow-up records the x86 create-user stall
+investigation, the vfsd package-root cache added to avoid repeated ArchiveFS
+mounts, the x86 RPMB-corruption assertion update, the ARM Trusty SMC busy
+restart fix, and the passing integrated ARM/x86 secure-stack reruns. Use its
+consumed hashes and remaining-scope notes when comparing results with this
+source tree.
+
+## Historical verification results
+
+The following results describe the earlier integration baseline, not the
+2026-09-09 working tree or a live Trusty replacement pass.
 
 The results below describe the earlier repository baseline. Results for the
 native Linux host portability changes are tracked separately in

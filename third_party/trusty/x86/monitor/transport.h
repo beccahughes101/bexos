@@ -13,7 +13,10 @@
 #define BEXOS_ROOT_JOURNAL UINT32_C(0x80000001)
 #define BEXOS_ROOT_BOOT_SELECTION UINT32_C(0x80000002)
 #define BEXOS_ROOT_GENERATION UINT32_C(0x80000003)
+#define BEXOS_ROOT_MIGRATION_ABI UINT32_C(0x80000004)
+#define BEXOS_ROOT_SERVICE_PROBE UINT32_C(0x80000005)
 long monitor_journal(unsigned char* bytes, size_t length, size_t capacity);
+long monitor_probe_services(void);
 int bexos_boot_rpmb_release(void);
 struct monitor_reply { uint64_t status, ticket, handle, operation, length, capacity; };
 long monitor_root_request(struct monitor_reply request, unsigned char* bytes);

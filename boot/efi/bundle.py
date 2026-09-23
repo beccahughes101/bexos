@@ -10,7 +10,11 @@ import tarfile
 NAMES = ('loader.efi', 'monitor.elf', 'trusty.elf', 'OVMF_CODE.fd',
          'OVMF_VARS.fd', 'boot_root.avbpubkey', 'rpmb_dev', 'RPMB_DATA',
          'rollback_loader.efi', 'revoked.fd', 'development.pem',
-         'trusty.replacement.fw', 'hypervisor.replacement.fw', 'trusty.candidate.elf',
+         'trusty.replacement.fw', 'trusty.successor.fw',
+         'trusty.incompatible.fw', 'trusty.fault.fw', 'trusty.hang.fw',
+         'hypervisor.replacement.fw', 'trusty.candidate.elf',
+         'trusty.successor.elf', 'trusty.incompatible.elf',
+         'trusty.fault.elf', 'trusty.hang.elf',
          'monitor.policy.elf', 'monitor.fault.elf', 'monitor.hang.elf', 'monitor.successor.elf',
          'hypervisor.fault.fw', 'hypervisor.hang.fw', 'hypervisor.successor.fw',
          'hypervisor.successor_fault.fw')
@@ -28,7 +32,10 @@ def header(variant):
 def validate(files):
     if set(files) != set(NAMES):
         raise ValueError('incomplete integrated firmware closure')
-    for name in ('monitor.elf', 'trusty.elf', 'trusty.candidate.elf', 'monitor.policy.elf', 'monitor.fault.elf', 'monitor.hang.elf', 'monitor.successor.elf'):
+    for name in ('monitor.elf', 'trusty.elf', 'trusty.candidate.elf',
+                 'trusty.successor.elf', 'trusty.incompatible.elf',
+                 'trusty.fault.elf', 'trusty.hang.elf', 'monitor.policy.elf',
+                 'monitor.fault.elf', 'monitor.hang.elf', 'monitor.successor.elf'):
         elf = files[name]
         if (len(elf) < 64 or elf[:7] != b'\x7fELF\x02\x01\x01'
                 or struct.unpack_from('<HH', elf, 16) != (2, 62)):
@@ -47,6 +54,10 @@ def validate(files):
         raise ValueError('firmware payload closure mismatch')
     for component, image, envelope in [
             ('trusty', 'trusty.candidate.elf', 'trusty.replacement.fw'),
+            ('trusty', 'trusty.successor.elf', 'trusty.successor.fw'),
+            ('trusty', 'trusty.incompatible.elf', 'trusty.incompatible.fw'),
+            ('trusty', 'trusty.fault.elf', 'trusty.fault.fw'),
+            ('trusty', 'trusty.hang.elf', 'trusty.hang.fw'),
             ('hypervisor', 'monitor.policy.elf', 'hypervisor.replacement.fw'),
             ('hypervisor', 'monitor.fault.elf', 'hypervisor.fault.fw'),
             ('hypervisor', 'monitor.hang.elf', 'hypervisor.hang.fw'),

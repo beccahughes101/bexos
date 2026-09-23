@@ -29,7 +29,7 @@ impl State for Runtime {
             return Err(Error::InvalidData);
         }
         let mut w = Encoder::new();
-        w.word(4);
+        w.word(5);
         w.word(self.control.0);
         w.word(self.migration.map_or(0, |c| c.0));
         w.word(self.store.is_some() as u64);
@@ -45,6 +45,11 @@ impl State for Runtime {
                 w.word(user.ukek_vmo);
                 w.word(user.active_slot as u64);
                 w.word(user.virtual_size_bytes);
+            }
+            w.word(s.mounted_packages.len() as u64);
+            for mounted in &s.mounted_packages {
+                w.text(&mounted.package_id);
+                w.word(mounted.root.0);
             }
         }
         w.word(self.tmp.is_some() as u64);
@@ -67,7 +72,7 @@ impl State for Runtime {
         }
         let mut r = Decoder::new(bytes.ok_or(Error::InvalidData)?);
         let version = r.word()?;
-        if version != 1 && version != 2 && version != 3 && version != 4 {
+        if version != 1 && version != 2 && version != 3 && version != 4 && version != 5 {
             return Err(Error::UnsupportedVersion);
         }
         self.control = Channel(r.word()?);
@@ -97,6 +102,19 @@ impl State for Runtime {
                 let root = Channel(r.word()?);
                 (Channel(0), Channel(0), storage_root, root, Vec::new())
             };
+            let mut mounted_packages = Vec::new();
+            if version >= 5 {
+                for _ in 0..r.count(256)? {
+                    let package_id = r.text(256)?.to_string();
+                    if package_archive_path(&package_id).is_err() {
+                        return Err(Error::InvalidData);
+                    }
+                    mounted_packages.push(MountedPackage {
+                        package_id,
+                        root: Channel(r.word()?),
+                    });
+                }
+            }
             Some(PackageStore {
                 archivefs,
                 bexfs,
@@ -104,6 +122,7 @@ impl State for Runtime {
                 storage_root,
                 root,
                 users,
+                mounted_packages,
             })
         } else {
             None
@@ -141,6 +160,9 @@ impl State for Runtime {
                     || s.root.0 == 0
                     || s.bexfs.0 == 0
                     || s.diskimage.0 == 0
+                    || s.mounted_packages
+                        .iter()
+                        .any(|m| m.root.0 == 0 || package_archive_path(&m.package_id).is_err())
                     || s.users
                         .iter()
                         .any(|u| u.uid == 0 || u.root.0 == 0 || u.control.0 == 0 || u.ukek_vmo == 0)
@@ -167,6 +189,7 @@ impl State for Runtime {
             for user in &s.users {
                 h.extend([user.root.0, user.control.0, user.ukek_vmo]);
             }
+            h.extend(s.mounted_packages.iter().map(|mounted| mounted.root.0));
         }
         if let Some(tmp) = &self.tmp {
             h.push(tmp.memfs.0);

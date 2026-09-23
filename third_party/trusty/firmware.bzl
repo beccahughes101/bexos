@@ -2,13 +2,19 @@
 
 def trusty_firmware(name, output_dir = "built", acceptance = False, architecture = "aarch64", generation_config = None):
     x86 = architecture == "x86_64"
-    if generation_config and not x86:
-        fail("replacement generation configuration is x86-only")
     x86_sources = ([":x86_runtime_sources"] + ([":x86_acceptance_sources"] if acceptance else [])) if x86 else []
     native.genrule(
         name = name,
         tags = ["manual"],
-        srcs = ([":acceptance_sources", "acceptance/main.rs", "build_acceptance.py"] if acceptance else []) + ([generation_config] if generation_config else []) + x86_sources + (["configure_x86.py"] if x86 else ["//boot/bl33:verifier_bin", "//boot/bl33:rollback_provisioner_bin", "patches/qemu-gicv2-ackctl.patch"]) + [
+        srcs = ([":acceptance_sources", "acceptance/main.rs", "build_acceptance.py"] if acceptance else []) + ([generation_config] if generation_config else []) + x86_sources + ["configure_image.py"] + ([] if x86 else [
+            "//boot/bl33:verifier_bin",
+            "//boot/bl33:rollback_provisioner_bin",
+            "//secure/platform:arm_owner.S",
+            "//secure/platform:arm_owner.ld",
+            "//secure/platform:arm_owner_core",
+            "//secure/platform:qemu_aarch64.h",
+            "patches/qemu-gicv2-ackctl.patch",
+        ]) + [
             "//secure/orchestrator/trusty:all_sources",
             "@trusty_src//:all_sources",
             "@trusty_src//:BUILD.bazel",
@@ -138,7 +144,7 @@ name="$$(grep '^app_name:' "$$manifest" | cut -d: -f2 | tr -d ' \"')"
 heap="$$(grep '^min_heap:' "$$manifest" | tr -dc '0-9')"
 stack="$$(grep '^min_stack:' "$$manifest" | tr -dc '0-9')"
 printf '{\\n  "uuid": "%s",\\n  "app_name": "%s",\\n  "min_heap": %s,\\n  "min_stack": %s\\n}\\n' "$$uuid" "$$name" "$$heap" "$$stack" > "$$WORK/overlay/manifest.json"
-BEXOS_TRUSTY_X86_GENERATION_CONFIG="%X86_GENERATION%" BEXOS_TRUSTY_ROLLBACK_VERIFIER="%ROLLBACK%" BEXOS_TRUSTY_ARCH="%ARCH%" BEXOS_TRUSTY_X86_CONFIG="%X86_CONFIG%" bash "$(location build_firmware.sh)" \
+BEXOS_TRUSTY_IMAGE_CONFIG="%IMAGE_CONFIG%" BEXOS_TRUSTY_ROLLBACK_VERIFIER="%ROLLBACK%" BEXOS_TRUSTY_ARCH="%ARCH%" BEXOS_TRUSTY_IMAGE_CONFIG_TOOL="$(location configure_image.py)" bash "$(location build_firmware.sh)" \
   "$$WORK/source" \
   "$$WORK/overlay" \
   "$(@D)/built" \
@@ -172,9 +178,13 @@ BEXOS_TRUSTY_X86_GENERATION_CONFIG="%X86_GENERATION%" BEXOS_TRUSTY_ROLLBACK_VERI
         "$(location :host_aidl)" \
         "$(location target_compatibility.sh)" \
         "$(location host_prerequisites.sh)" \
-        "$(location reverse_lines.py)"
+        "$(location reverse_lines.py)" \
+        "%OWNER_SOURCE%" \
+        "%OWNER_LINKER%" \
+        "%OWNER_LAYOUT%" \
+        "%OWNER_CORE%"
 """).replace('cp "$(location binder_fd_compat.rs)"', ('patch -d "$$WORK/source" -p1 < "$(location patches/qemu-gicv2-ackctl.patch)"\n' if not x86 else "") + 'cp "$(location binder_fd_compat.rs)"').replace("$(@D)/built", "$(@D)/" + output_dir).replace(
             'bash "$(location build_firmware.sh)"',
             ('python3 "$(location build_acceptance.py)" "$(location build_firmware.sh)" "$(location acceptance/main.rs)"' if acceptance else 'bash "$(location build_firmware.sh)"'),
-        ).replace("%OUTPUT_DIR%", output_dir).replace("%X86_GENERATION%", "$(location " + generation_config + ")" if generation_config else "").replace("%X86_SOURCES%", " ".join(["$(locations " + label + ")" for label in x86_sources])).replace("%X86_CONFIG%", "$(location configure_x86.py)" if x86 else "").replace("%ARCH%", architecture).replace("%ROLLBACK%", "" if x86 else "$(location //boot/bl33:rollback_provisioner_bin)").replace("$(location //boot/bl33:verifier_bin)", "$(location build_firmware.sh)" if x86 else "$(location //boot/bl33:verifier_bin)"),
+        ).replace("%OUTPUT_DIR%", output_dir).replace("%IMAGE_CONFIG%", "$(location " + generation_config + ")" if generation_config else "").replace("%X86_SOURCES%", " ".join(["$(locations " + label + ")" for label in x86_sources])).replace("%ARCH%", architecture).replace("%ROLLBACK%", "" if x86 else "$(location //boot/bl33:rollback_provisioner_bin)").replace("%OWNER_SOURCE%", "$(location //secure/platform:arm_owner.S)" if not x86 else "$(location build_firmware.sh)").replace("%OWNER_LINKER%", "$(location //secure/platform:arm_owner.ld)" if not x86 else "$(location build_firmware.sh)").replace("%OWNER_LAYOUT%", "$(location //secure/platform:qemu_aarch64.h)" if not x86 else "$(location build_firmware.sh)").replace("%OWNER_CORE%", "$(location //secure/platform:arm_owner_core)" if not x86 else "$(location build_firmware.sh)").replace("$(location //boot/bl33:verifier_bin)", "$(location build_firmware.sh)" if x86 else "$(location //boot/bl33:verifier_bin)"),
     )

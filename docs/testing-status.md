@@ -1,5 +1,11 @@
 # Testing Status
 
+## Trusty completion checkpoint (2026-09-09)
+
+The 2026-09-09 Trusty completion work is recorded in
+[Trusty completion checkpoint](trusty-completion.md). Live Trusty replacement
+remains unimplemented; earlier results below retain their original scope and date.
+
 ## Local font architecture validation (2026-09-12)
 
 RFC 0063's local implementation adds the `bexos.fonts.FontProvider` protocol,

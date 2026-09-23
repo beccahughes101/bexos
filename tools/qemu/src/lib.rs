@@ -9,12 +9,15 @@ pub type SecureFirmware = Aarch64Firmware;
 mod architecture;
 pub use architecture::Architecture;
 
+mod arm_rpmb_proxy;
 mod entropy;
+mod firmware_disk;
 mod host_activity;
 mod launch;
 mod shutdown;
 pub use launch::{LaunchConfig, Product};
 mod qmp;
+mod rpmb_relay;
 mod x86_secure;
 use std::fs;
 use std::io::{Read, Write};
@@ -58,6 +61,13 @@ fn secure_boot_rejected(output: &[u8]) -> bool {
     SECURE_BOOT_REJECTIONS
         .iter()
         .any(|marker| contains(output, marker))
+}
+
+fn guest_firmware_started(output: &[u8]) -> bool {
+    contains(output, b"Booting Trusted Firmware")
+        || contains(output, b"UEFI")
+        || contains(output, b"monitor-runtime:")
+        || contains(output, b"SeaBIOS")
 }
 static INSTANCE_ID: AtomicU64 = AtomicU64::new(1);
 pub const DEFAULT_DEVELOPER_DEBUG_SOCKET: &str = "/tmp/bexos-qemu-nongui-aarch64-debugd.sock";
@@ -143,7 +153,7 @@ impl QemuArtifacts {
         let Some(kernel) = env_path("BEXOS_QEMU_KERNEL")? else {
             return Ok(None);
         };
-        let extra_args = split_env_args("BEXOS_QEMU_EXTRA_ARGS");
+        let extra_args = split_env_args("BEXOS_QEMU_DEVICE_ARGS");
         Ok(Some(Self {
             architecture: Architecture::from_env()?,
             development: std::env::var("BEXOS_QEMU_DEVELOPMENT").as_deref() == Ok("1"),
@@ -404,6 +414,9 @@ impl QemuDevice {
         if !artifacts.development {
             prepare_rpmb_image(&artifacts.rpmb_template, &rpmb)?;
         }
+        if artifacts.architecture == Architecture::Aarch64 && artifacts.secure_firmware.is_some() {
+            firmware_disk::prepare(&workdir.join("firmware.raw"))?;
+        }
         let layout = parse_layout(&artifacts.layout)?;
         let secure_firmware_dir = if let Some(firmware) = &artifacts.secure_firmware {
             for (source, name) in [
@@ -477,10 +490,23 @@ impl QemuDevice {
         rejection: &[&[u8]],
         forbidden: &[&[u8]],
     ) -> Result<(), String> {
-        let mut child = self.spawn(None)?;
-        let mut output = Vec::new();
-        read_until_done(&mut child.qemu, None, &mut output, rejection)?;
-        validate_rejection(&output, rejection, forbidden)
+        for attempt in 0..2 {
+            let mut child = self.spawn(None)?;
+            let mut output = Vec::new();
+            read_until_done(&mut child.qemu, None, &mut output, rejection)?;
+            let result = validate_rejection(&output, rejection, forbidden);
+            if result.is_ok() || guest_firmware_started(&output) || attempt == 1 {
+                return result;
+            }
+            // A macOS host can occasionally reap a freshly spawned QEMU before
+            // its first firmware instruction while rapidly cycling negative
+            // boots. This output is not rejection evidence. Drop both managed
+            // children, then retry the host launch once from the same immutable
+            // inputs; a started guest or second failure remains a hard error.
+            drop(child);
+            thread::sleep(Duration::from_millis(250));
+        }
+        unreachable!()
     }
 
     /// The pinned storage TA deliberately terminates the critical application
@@ -612,9 +638,19 @@ impl QemuDevice {
             (Some(child), socket)
         };
         let x86 = self.artifacts.architecture == Architecture::X86_64;
+        let arm_rpmb_proxy = if self.artifacts.architecture == Architecture::Aarch64
+            && self.secure_firmware_dir.is_some()
+        {
+            Some(arm_rpmb_proxy::Proxy::start(
+                &self.workdir,
+                rpmb_socket.clone(),
+            )?)
+        } else {
+            None
+        };
         let idle_socket = self.workdir.join("debug-idle.sock");
         let serial_socket = debug_socket.unwrap_or(&idle_socket);
-        if x86 {
+        if debug_socket.is_some() || x86 {
             remove_stale_socket(serial_socket)?;
         }
         command
@@ -638,7 +674,7 @@ impl QemuDevice {
             command.arg("-serial").arg("stdio");
             command.args([
                 "-device",
-                "virtio-serial-pci,disable-legacy=on,disable-modern=off",
+                "virtio-serial-pci,disable-legacy=on,disable-modern=off,romfile=",
                 "-device",
                 "virtserialport,chardev=debug0,name=debug0,nr=1",
                 "-chardev",
@@ -649,14 +685,35 @@ impl QemuDevice {
             ));
             command.args(["-monitor", "none"]);
         } else {
-            launch::configure_console(&mut command, debug_socket);
+            // Keep architectural diagnostics on PL011 and carry framed debug
+            // RPC over its own heart-transplantable virtio-console instance.
+            // Large firmware uploads must not be serialized one UART byte at
+            // a time.
+            command.arg("-serial").arg("stdio");
+            command.args([
+                "-device",
+                "virtio-serial-pci,id=debugbus,disable-legacy=on,disable-modern=off,romfile=",
+                "-device",
+                "virtserialport,bus=debugbus.0,chardev=debug0,name=debug0,nr=1",
+                "-chardev",
+            ]);
+            command.arg(format!(
+                "socket,id=debug0,path={},server=on,wait=off",
+                serial_socket.display()
+            ));
+            command.args(["-monitor", "none"]);
         }
         if self.artifacts.architecture == Architecture::Aarch64 {
+            if self.secure_firmware_dir.is_some() {
+                command.env("BEXOS_SECURE_FIRMWARE", self.firmware_disk_path());
+            }
             aarch64::configure_boot(
                 &mut command,
                 self.secure_firmware_dir.as_deref(),
                 &self.artifacts.kernel,
-                &rpmb_socket,
+                arm_rpmb_proxy
+                    .as_ref()
+                    .map(|proxy| (proxy.boot_socket.as_path(), proxy.runtime_socket.as_path())),
             );
         }
         command
@@ -672,7 +729,7 @@ impl QemuDevice {
             .arg("-netdev")
             .arg("user,id=net0")
             .arg("-device")
-            .arg("virtio-net-pci,disable-legacy=on,disable-modern=off,netdev=net0,mac=52:54:00:12:34:56")
+            .arg("virtio-net-pci,disable-legacy=on,disable-modern=off,romfile=,netdev=net0,mac=52:54:00:12:34:56")
             .arg("-device")
             .arg(format!(
                 "loader,file={},addr={},force-raw=on",
@@ -724,8 +781,9 @@ impl QemuDevice {
                     _idle_serial: None,
                     readers: Vec::new(),
                     secure_relay: None,
+                    arm_rpmb_proxy,
                 };
-                if x86 && debug_socket.is_none() {
+                if debug_socket.is_none() {
                     child._idle_serial = Some(connect_socket(serial_socket)?);
                 }
                 Ok(child)
@@ -919,7 +977,8 @@ struct ManagedQemuChild {
     rpmb: Option<Child>,
     _idle_serial: Option<UnixStream>,
     readers: Vec<JoinHandle<()>>,
-    secure_relay: Option<x86_secure::Relay>,
+    secure_relay: Option<rpmb_relay::Relay>,
+    arm_rpmb_proxy: Option<arm_rpmb_proxy::Proxy>,
 }
 
 fn prepare_rpmb_image(template: &Path, state: &Path) -> Result<(), String> {
@@ -946,21 +1005,11 @@ fn prepare_rpmb_image(template: &Path, state: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn rpmb_qemu_arguments(socket: &Path) -> [String; 6] {
-    [
-        "-device".into(),
-        "virtio-serial-pci,disable-legacy=on,disable-modern=off".into(),
-        "-device".into(),
-        "virtserialport,chardev=rpmb0,name=rpmb0,nr=1".into(),
-        "-chardev".into(),
-        format!("socket,id=rpmb0,path={}", socket.display()),
-    ]
-}
-
 impl Drop for ManagedQemuChild {
     fn drop(&mut self) {
         kill_child(&mut self.qemu);
         self.secure_relay.take();
+        self.arm_rpmb_proxy.take();
         if let Some(child) = &mut self.rpmb {
             kill_child(child);
         }
@@ -974,7 +1023,7 @@ impl Drop for ManagedQemuChild {
 mod tests {
     use super::{
         QemuArtifacts, RAW_QEMU_AARCH64_MACHINE, SECURE_QEMU_AARCH64_MACHINE, prepare_rpmb_image,
-        qemu_aarch64_machine_configuration, rpmb_qemu_arguments,
+        qemu_aarch64_machine_configuration,
     };
     use std::fs;
 
@@ -1166,19 +1215,6 @@ mod tests {
     }
 
     #[test]
-    fn secure_qemu_attaches_named_rpmb_port() {
-        let args = rpmb_qemu_arguments(std::path::Path::new("/tmp/rpmb.sock"));
-        assert!(
-            args.iter()
-                .any(|arg| arg == "virtserialport,chardev=rpmb0,name=rpmb0,nr=1")
-        );
-        assert!(
-            args.iter()
-                .any(|arg| arg == "socket,id=rpmb0,path=/tmp/rpmb.sock")
-        );
-    }
-
-    #[test]
     fn fragmented_boot_failure_preserves_error_detail() {
         use std::io::Write;
         use std::os::unix::net::UnixStream;
@@ -1192,6 +1228,7 @@ mod tests {
             _idle_serial: None,
             readers: Vec::new(),
             secure_relay: None,
+            arm_rpmb_proxy: None,
         };
         let (mut serial, mut producer) = UnixStream::pair().unwrap();
         let writer = std::thread::spawn(move || {
@@ -1238,6 +1275,7 @@ mod tests {
                 _idle_serial: None,
                 readers: Vec::new(),
                 secure_relay: None,
+                arm_rpmb_proxy: None,
             };
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
                 move || -> Result<(), &str> {
@@ -1398,7 +1436,16 @@ fn validate_rejection(
 }
 
 fn validate_boot(output: &[u8], markers: &[&[u8]]) -> Result<(), String> {
-    assert_markers(output, markers)?;
+    assert_markers(output, markers).map_err(|error| {
+        // COM1 is collected separately from the debug socket. Retain its tail
+        // when boot stops before debugd, so persistent-reboot failures expose
+        // the guest error instead of only listing the missing success markers.
+        let tail = &output[output.len().saturating_sub(8192)..];
+        format!(
+            "{error}\nQEMU boot output tail:\n{}",
+            String::from_utf8_lossy(tail)
+        )
+    })?;
     assert_absent(output, b"panic", "guest panic during QEMU boot")?;
     assert_absent(output, b"guest fault", "guest fault during QEMU boot")
 }
@@ -1520,7 +1567,8 @@ fn read_debug_boot(
     diagnostics: &Arc<Mutex<Vec<u8>>>,
     default_timeout_seconds: u64,
 ) -> Result<(), String> {
-    let timeout = std::env::var("BEXOS_QEMU_TIMEOUT_SECONDS")
+    let timeout = std::env::var("BEXOS_QEMU_DEBUG_BOOT_TIMEOUT_SECONDS")
+        .or_else(|_| std::env::var("BEXOS_QEMU_TIMEOUT_SECONDS"))
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(default_timeout_seconds);
@@ -1532,9 +1580,14 @@ fn read_debug_boot(
     let mut ready_since = None;
     let mut failure_since = None;
     let mut diagnostic_cursor = 0;
+    let mut timed_out = true;
+    let mut terminated = false;
     while Instant::now() < deadline {
         if shutdown::requested() {
-            return Err("QEMU launch interrupted".into());
+            return Err(format!(
+                "QEMU launch interrupted\n{}",
+                diagnostic_tail(output)
+            ));
         }
         {
             let log = diagnostics
@@ -1551,11 +1604,16 @@ fn read_debug_boot(
             // COM1 often delivers a diagnostic one byte at a time. Preserve
             // the error detail after the marker before the owner reaps QEMU.
             if output[start..].contains(&b'\n') || since.elapsed() >= Duration::from_secs(2) {
+                timed_out = false;
                 break;
             }
         }
         match serial.read(&mut buf) {
-            Ok(0) => break,
+            Ok(0) => {
+                timed_out = false;
+                terminated = true;
+                break;
+            }
             Ok(n) => {
                 eprint!("{}", String::from_utf8_lossy(&buf[..n]));
                 output.extend_from_slice(&buf[..n]);
@@ -1565,6 +1623,7 @@ fn read_debug_boot(
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 if ready_since.is_some_and(|ready| ready.elapsed() >= Duration::from_secs(2)) {
+                    timed_out = false;
                     break;
                 }
             }
@@ -1575,9 +1634,31 @@ fn read_debug_boot(
             .map_err(|e| format!("poll QEMU: {e}"))?
             .is_some()
         {
+            timed_out = false;
+            terminated = true;
             break;
         }
         thread::sleep(Duration::from_millis(10));
+    }
+    if timed_out {
+        return Err(format!(
+            "QEMU debug boot marker timeout after {timeout} s\n{}",
+            diagnostic_tail(output)
+        ));
+    }
+    if terminated && ready_since.is_none() {
+        thread::sleep(Duration::from_millis(50));
+        let log = diagnostics
+            .lock()
+            .map_err(|_| "QEMU output lock poisoned")?;
+        output.extend_from_slice(&log[diagnostic_cursor..]);
+        let status = child
+            .try_wait()
+            .map_err(|e| format!("read QEMU exit status: {e}"))?;
+        return Err(format!(
+            "QEMU exited before debug boot markers status={status:?}\n{}",
+            diagnostic_tail(output)
+        ));
     }
     serial
         .set_nonblocking(false)
@@ -1589,6 +1670,12 @@ fn read_debug_boot(
         .set_write_timeout(Some(Duration::from_secs(10)))
         .map_err(|e| format!("set debug serial write timeout: {e}"))?;
     Ok(())
+}
+
+fn diagnostic_tail(output: &[u8]) -> String {
+    const MAX_TAIL: usize = 16 * 1024;
+    let start = output.len().saturating_sub(MAX_TAIL);
+    String::from_utf8_lossy(&output[start..]).into_owned()
 }
 
 fn boot_failure_start(output: &[u8]) -> Option<usize> {
@@ -1842,6 +1929,20 @@ fn parse_int(value: &str) -> Result<u64, String> {
 }
 
 fn find_qemu(architecture: Architecture) -> Result<PathBuf, String> {
+    if architecture == Architecture::Aarch64 {
+        if let Some(path) = std::env::var_os("BEXOS_QEMU_AARCH64_BINARY") {
+            let path = PathBuf::from(path);
+            if !path.is_file() {
+                return Err(format!(
+                    "configured ARM QEMU binary is missing: {}",
+                    path.display()
+                ));
+            }
+            return path
+                .canonicalize()
+                .map_err(|e| format!("resolve configured ARM QEMU binary: {e}"));
+        }
+    }
     let path = std::env::var_os("PATH").ok_or("PATH is not set")?;
     for dir in std::env::split_paths(&path) {
         let qemu = dir.join(architecture.emulator());

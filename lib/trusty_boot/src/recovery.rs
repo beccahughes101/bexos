@@ -1,4 +1,4 @@
-//! Serialized x86 firmware installation and authenticated reboot decisions.
+//! Serialized architecture-bound firmware installation and authenticated reboot decisions.
 //! This module never treats an unavailable reply as permission to roll back.
 //! Its caller owns the recovery domain, firmware disk and client-admission gate.
 use crate::{ql::Transport, selection};
@@ -73,7 +73,11 @@ pub fn commit_prepared(
     if request[8..12] != Operation::Commit.number().to_le_bytes() {
         return Err(Error::InvalidTrial);
     }
-    let state = selection::query(transport).map_err(|_| Error::Journal)?;
+    let architecture = bexos_secure_firmware::Architecture::from_number(u32::from_le_bytes(
+        request[12..16].try_into().unwrap(),
+    ))
+    .ok_or(Error::InvalidTrial)?;
+    let state = selection::query_for(transport, architecture).map_err(|_| Error::Journal)?;
     if state.acknowledges(request) {
         return Ok(state);
     }
@@ -90,31 +94,32 @@ pub fn commit_prepared(
     publish(transport, &state, Operation::Commit, component, image)
 }
 
-/// Start an already authenticated and prepared monitor policy trial. The
-/// permanent execution owner retains current guest state throughout live
-/// rollback; this interface cannot authorize live Trusty replacement.
-pub fn begin_live_monitor(transport: &mut impl Transport, image: Identity) -> Result<Boot, Error> {
+/// Start an already authenticated and prepared live trial. The permanent
+/// execution owner retains the source component until health and commitment.
+pub fn begin_live(
+    transport: &mut impl Transport,
+    component: Component,
+    image: Identity,
+) -> Result<Boot, Error> {
     let before = selection::query(transport).map_err(|_| Error::Journal)?;
     if before.phase != Phase::Pending
-        || before.pending != Some((Component::Hypervisor, image))
+        || before.pending != Some((component, image))
         || before.attempts >= MAX_ATTEMPTS
     {
         return Err(Error::Conflict);
     }
-    let state = publish(
-        transport,
-        &before,
-        Operation::Attempt,
-        Component::Hypervisor,
-        image,
-    )?;
+    let state = publish(transport, &before, Operation::Attempt, component, image)?;
     let mut selected = state.committed;
-    selected[1] = image;
+    selected[index(component)] = image;
     Ok(Boot {
         state,
         selected,
         rolled_back: false,
     })
+}
+
+pub fn begin_live_monitor(transport: &mut impl Transport, image: Identity) -> Result<Boot, Error> {
+    begin_live(transport, Component::Hypervisor, image)
 }
 
 /// Resolve a mutation with authenticated reads and, at most, one exact retry.
@@ -133,7 +138,8 @@ fn publish(
         if let Ok(state) = selection::mutate(transport, &request) {
             return Ok(state);
         }
-        let observed = selection::query(transport).map_err(|_| Error::Journal)?;
+        let observed =
+            selection::query_for(transport, before.architecture()).map_err(|_| Error::Journal)?;
         if observed.acknowledges(&request) {
             return Ok(observed);
         }
@@ -158,7 +164,8 @@ pub fn stage(
     floor: u64,
     scratch: &mut [u8],
 ) -> Result<State, Error> {
-    let before = selection::query(transport).map_err(|_| Error::Journal)?;
+    let before =
+        selection::query_for(transport, device.architecture()).map_err(|_| Error::Journal)?;
     if before.phase != Phase::Idle {
         return Err(Error::Busy);
     }
@@ -185,7 +192,8 @@ pub fn stage_in_place(
     root: &[u8],
     floor: u64,
 ) -> Result<State, Error> {
-    let before = selection::query(transport).map_err(|_| Error::Journal)?;
+    let before =
+        selection::query_for(transport, device.architecture()).map_err(|_| Error::Journal)?;
     if before.phase != Phase::Idle {
         return Err(Error::Busy);
     }
@@ -213,7 +221,8 @@ pub fn prepare_boot(
     floors: [u64; 2],
     scratch: &mut [u8],
 ) -> Result<Boot, Error> {
-    let mut state = selection::query(transport).map_err(|_| Error::Journal)?;
+    let mut state =
+        selection::query_for(transport, device.architecture()).map_err(|_| Error::Journal)?;
     for component in [Component::Trusty, Component::Hypervisor] {
         let committed = state.committed(component);
         if committed.generation < floors[index(component)]

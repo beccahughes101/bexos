@@ -72,11 +72,16 @@ impl ql::Transport for Authority {
 
 #[derive(Default)]
 struct Disk {
+    architecture: Option<bexos_secure_firmware::Architecture>,
     data: BTreeMap<u64, [u8; 512]>,
     fail: bool,
     writes: usize,
 }
 impl BlockDevice for Disk {
+    fn architecture(&self) -> bexos_secure_firmware::Architecture {
+        self.architecture
+            .unwrap_or(bexos_secure_firmware::Architecture::X86_64)
+    }
     fn sectors(&self) -> u64 {
         store::DISK_BYTES / 512
     }
@@ -265,4 +270,47 @@ fn unpublished_mutations_have_a_bounded_exact_retry() {
     );
     assert_eq!(authority.exchanges, 5); // Initial query, two mutation/read pairs.
     assert_eq!(authority.state().revision, 1);
+}
+
+#[test]
+fn arm_recovery_uses_real_authority_and_resolves_a_lost_commit_reply() {
+    use bexos_secure_firmware::Architecture;
+    let mut authority = Authority::new();
+    authority
+        .bytes
+        .copy_from_slice(&include_bytes!(env!("ARM_SELECTION_RECORDS"))[..512]);
+    let mut disk = Disk {
+        architecture: Some(Architecture::Aarch64),
+        ..Disk::default()
+    };
+    let bundle = include_bytes!(env!("ARM_TEST_FIRMWARE"));
+    let mut scratch = vec![0; bundle.len()];
+    let staged = recovery::stage(
+        &mut authority,
+        &mut disk,
+        Component::Trusty,
+        bundle,
+        ROOT,
+        1,
+        &mut scratch,
+    )
+    .unwrap();
+    assert_eq!(staged.architecture(), Architecture::Aarch64);
+    assert_eq!(staged.committed(Component::Hypervisor), Identity::INITIAL);
+    let trial =
+        recovery::prepare_boot(&mut authority, &mut disk, ROOT, [1, 1], &mut scratch).unwrap();
+    assert_eq!(trial.selected(Component::Trusty).generation, 2);
+    authority.lose_mutation_reply = true;
+    let committed = trial.commit(&mut authority).unwrap();
+    assert_eq!(committed.committed(Component::Trusty).generation, 2);
+    let reboot =
+        recovery::prepare_boot(&mut authority, &mut disk, ROOT, [2, 1], &mut scratch).unwrap();
+    assert!(reboot.trial().is_none());
+    assert_eq!(reboot.selected(Component::Trusty).generation, 2);
+    // A foreign owner cannot interpret the ARM protected selection as x86.
+    disk.architecture = Some(Architecture::X86_64);
+    assert!(matches!(
+        recovery::prepare_boot(&mut authority, &mut disk, ROOT, [1, 1], &mut scratch),
+        Err(recovery::Error::Journal)
+    ));
 }

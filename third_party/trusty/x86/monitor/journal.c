@@ -7,6 +7,32 @@
 #include <lib/trusty/uuid.h>
 #include <platform.h>
 
+long monitor_probe_services(void) {
+    static const char* const ports[] = {
+        "com.android.trusty.keymint",
+        "com.android.trusty.gatekeeper",
+        "com.android.trusty.avb",
+        "com.android.trusty.rust.authmgr.V1",
+        "com.android.trusty.storage.proxy",
+        "com.bexos.orchestrator",
+    };
+    uint64_t ready = 0;
+    for (size_t i = 0; i < sizeof(ports) / sizeof(ports[0]); ++i) {
+        struct handle* channel = NULL;
+        int rc = ipc_port_connect_async(&kernel_uuid, ports[i], IPC_PORT_PATH_MAX,
+                                        IPC_CONNECT_WAIT_FOR_PORT, &channel);
+        if (rc == 0) {
+            uint32_t events = 0;
+            rc = handle_wait(channel, &events, 1000);
+            if (rc == 0 && (events & IPC_HANDLE_POLL_READY) && !(events & IPC_HANDLE_POLL_HUP)) {
+                ready |= UINT64_C(1) << i;
+            }
+            handle_decref(channel);
+        }
+    }
+    return (long)ready;
+}
+
 /* Cold TP startup discovers RPMB geometry and authenticates its superblock.
  * Bound the complete exchange by the root's preparation budget, including
  * both connection and response waits, rather than imposing a one-second boot

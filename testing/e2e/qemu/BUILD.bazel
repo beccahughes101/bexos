@@ -30,10 +30,14 @@ test_suite(
 test_suite(
     name = "firmware_acceptance",
     tests = [
+        "//secure/platform:memory_probe_test",
+        "//secure/platform:owner_probe_test",
         "//secure/monitor:acceptance", "//boot/efi:acceptance",
         "//boot/multiboot:handoff_test",
         "//boot/bl33:verification_boot_test",
+        "//third_party/trusty:aarch64_replacement_authentication_test",
         "//third_party/trusty:x86_64_boot_test", "//third_party/trusty:x86_64_acceptance_test",
+        "//third_party/trusty:x86_64_replacement_bundle_test",
     ],
 )
 

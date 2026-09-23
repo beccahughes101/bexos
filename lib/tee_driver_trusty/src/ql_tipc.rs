@@ -50,6 +50,8 @@ pub struct QueuedTipc {
     next_cookie: u64,
     pub storage_handler: Option<StorageProxyHandler>,
     storage_handle: Option<u32>,
+    storage_read_only: bool,
+    shutdown_on_drop: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -92,6 +94,8 @@ impl QueuedTipc {
             next_cookie: 1,
             storage_handler: None,
             storage_handle: None,
+            storage_read_only: false,
+            shutdown_on_drop: true,
         };
         #[cfg(target_arch = "x86_64")]
         {
@@ -109,6 +113,10 @@ impl QueuedTipc {
         self.shutdown()?;
         self.storage_handle = None;
         self.call_create()
+    }
+
+    pub fn fence_storage_writes(&mut self, fenced: bool) {
+        self.storage_read_only = fenced;
     }
 
     pub fn connect(&mut self, id: u64, uuid: [u8; 16], port: &str) -> Result<TipcSession, i32> {
@@ -225,15 +233,20 @@ impl QueuedTipc {
         };
         let mut response = [0u8; 8192];
         let mut written = 0;
-        let status = unsafe {
-            (handler.dispatch)(
-                handler.context,
-                request.as_ptr(),
-                count,
-                response.as_mut_ptr(),
-                response.len(),
-                &mut written,
-            )
+        let status = if self.storage_read_only && !read_only_rpmb_request(&request[..count]) {
+            written = rejected_storage_response(&request[..count], &mut response)?;
+            STATUS_OK
+        } else {
+            unsafe {
+                (handler.dispatch)(
+                    handler.context,
+                    request.as_ptr(),
+                    count,
+                    response.as_mut_ptr(),
+                    response.len(),
+                    &mut written,
+                )
+            }
         };
         if status != STATUS_OK {
             return Err(status);
@@ -371,6 +384,15 @@ impl QueuedTipc {
         }
     }
 
+    /// A live owner cutover destroys the source Trusty device with its private
+    /// bank. Sending its shutdown opcode to the candidate would target the new
+    /// transport, so retirement releases only the normal-world pin and VMO.
+    #[cfg(target_arch = "aarch64")]
+    pub fn retire_after_owner_cutover(&mut self) {
+        self.shutdown_on_drop = false;
+        self.storage_handle = None;
+    }
+
     fn wait_for_event(&mut self, handle: u32, cookie: u64, expected: u32) -> Result<(), i32> {
         for poll in 0..MAX_EVENT_POLLS {
             self.pump_storage()?;
@@ -413,6 +435,46 @@ impl QueuedTipc {
     }
 }
 
+fn read_only_rpmb_request(request: &[u8]) -> bool {
+    if request.len() < 40 {
+        return false;
+    }
+    let word = |offset| u32::from_le_bytes(request[offset..offset + 4].try_into().unwrap());
+    let reliable = word(24) as usize;
+    let written = word(28) as usize;
+    let read = word(32) as usize;
+    let frames = &request[40..];
+    request[0..4] == 16u32.to_le_bytes()
+        && word(12) as usize == request.len()
+        && reliable.checked_add(written) == Some(frames.len())
+        && reliable % 512 == 0
+        && written % 512 == 0
+        && (1..=8).contains(&(read / 512))
+        && read % 512 == 0
+        && !frames.is_empty()
+        && frames.len() <= 8 * 512
+        && frames
+            .chunks_exact(512)
+            .all(|frame| matches!(u16::from_be_bytes([frame[510], frame[511]]), 2 | 4))
+}
+
+fn rejected_storage_response(request: &[u8], response: &mut [u8]) -> Result<usize, i32> {
+    if request.len() < 24 || response.len() < 24 {
+        return Err(STATUS_INVALID_ARGS);
+    }
+    response[..24].copy_from_slice(&request[..24]);
+    let command = u32::from_le_bytes(request[..4].try_into().unwrap()) | 1;
+    response[..4].copy_from_slice(&command.to_le_bytes());
+    response[8..12].fill(0);
+    response[12..16].copy_from_slice(&24u32.to_le_bytes());
+    response[16..20].copy_from_slice(&1u32.to_le_bytes());
+    response[20..24].fill(0);
+    bexos_userspace::syscall::log(
+        "tee-driver-trusty: candidate RPMB mutation fenced before commitment\n",
+    );
+    Ok(24)
+}
+
 #[derive(Clone, Copy)]
 struct TipcEvent {
     event: u32,
@@ -435,7 +497,9 @@ impl TipcEvent {
 
 impl Drop for QueuedTipc {
     fn drop(&mut self) {
-        let _ = self.shutdown();
+        if self.shutdown_on_drop {
+            let _ = self.shutdown();
+        }
         #[cfg(target_arch = "x86_64")]
         crate::ql_monitor::unregister(self.monitor_handle);
         let _ = Memory::unpin(self.pin);
@@ -456,20 +520,27 @@ fn call_with_mem_id(fid: u64, mem_id: u64, size: u64) -> Result<[u64; 8], i32> {
 }
 
 fn call_with_restarts(x0: u64, x1: u64, x2: u64, x3: u64) -> Result<[u64; 8], i32> {
-    let mut call = [x0, x1, x2, x3];
+    let original = [x0, x1, x2, x3];
+    let restart_last = [SMC_SC_RESTART_LAST, 0, 0, 0];
+    let mut call = original;
+    let mut retry_original_after_busy = false;
     let mut restart_count = 0;
     loop {
         let regs = secure_monitor(call[0], call[1], call[2], call[3], 0, 0, 0, 0)?;
         match regs[0] as i32 {
+            0 | SM_ERR_NOP_DONE if retry_original_after_busy && call == restart_last => {
+                retry_original_after_busy = false;
+                call = original;
+            }
             0 => return Ok(regs),
-            SM_ERR_INTERRUPTED => call = [SMC_SC_RESTART_LAST, 0, 0, 0],
+            SM_ERR_INTERRUPTED => call = restart_last,
             SM_ERR_CPU_IDLE => {
                 // The stdcall remains outstanding. Match Trusty's reference
                 // client: yield the normal CPU, then resume that exact call.
                 // A concurrent NOP here can report idle while the stdcall is
                 // still blocked and starve its eventual completion.
                 bexos_userspace::yield_now();
-                call = [SMC_SC_RESTART_LAST, 0, 0, 0];
+                call = restart_last;
             }
             SM_ERR_FIQ_INTERRUPTED => {
                 call = [SMC_SC_RESTART_FIQ, 0, 0, 0];
@@ -478,10 +549,16 @@ fn call_with_restarts(x0: u64, x1: u64, x2: u64, x3: u64) -> Result<[u64; 8], i3
                 call = [SMC_SC_NOP, 0, 0, 0];
             }
             SM_ERR_BUSY => {
-                // Retry whichever operation is current. Before a stdcall has
-                // been accepted this is the original command; after an
-                // interruption it is RESTART_LAST.
+                // A busy response to a fresh stdcall means Trusty still has a
+                // previous stdcall to finish. Resume that outstanding call
+                // before retrying the new command; repeatedly queueing the new
+                // command only produces "std call busy" and starves the
+                // in-flight storage work needed by KeyMint/Gatekeeper boot.
                 bexos_userspace::yield_now();
+                if call != restart_last {
+                    retry_original_after_busy = true;
+                    call = restart_last;
+                }
             }
             _ => return Ok(regs),
         }
@@ -520,6 +597,7 @@ fn drive_secure_work(trace: bool) -> Result<(), i32> {
             }
             SM_ERR_BUSY => {
                 bexos_userspace::yield_now();
+                call = SMC_SC_RESTART_LAST;
             }
             _ => return Err(STATUS_UNAVAILABLE),
         }

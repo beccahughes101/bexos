@@ -1,0 +1,4 @@
+architecture: "aarch64"
+generation: 2
+migration_abi: 99
+fixture: "incompatible_state"

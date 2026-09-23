@@ -54,6 +54,8 @@ mod secure_state;
 #[cfg(feature = "selection_probe")]
 mod selection_probe;
 mod transport;
+#[cfg(all(feature = "resident_nucleus", feature = "secure_product"))]
+mod trusty_owner;
 #[cfg(feature = "trusty_recovery_probe")]
 mod trusty_recovery;
 use bexos_secure_monitor::{
@@ -280,6 +282,12 @@ extern "C" fn runtime_main(entry_header: u64, entry_flags: u64, entry_reserved: 
         let mut monitor = nucleus::Monitor::initialize();
         #[cfg(feature = "nucleus_probe")]
         let mut exercised = false;
+        #[cfg(all(
+            feature = "monitor_transfer",
+            not(feature = "monitor_candidate"),
+            feature = "normal_world"
+        ))]
+        let mut transfer_boundaries = 0u16;
         loop {
             #[cfg(feature = "nucleus_probe")]
             if !exercised && {
@@ -334,7 +342,14 @@ extern "C" fn runtime_main(entry_header: u64, entry_flags: u64, entry_reserved: 
                 feature = "normal_world"
             ))]
             if normal.all_running_for_probe() {
-                monitor_transfer::transfer(&mut normal, vmcb, &mut regs, &mut platform);
+                // Every AP has left startup state, but its first few exits can
+                // still be consuming INIT/SIPI and interrupt-shadow work.
+                // Cut over only after completed scheduling boundaries on all
+                // CPUs so the checkpoint contains an ordinary runnable state.
+                transfer_boundaries = transfer_boundaries.saturating_add(1);
+                if transfer_boundaries >= 32 {
+                    monitor_transfer::transfer(&mut normal, vmcb, &mut regs, &mut platform);
+                }
             }
             #[cfg(feature = "secure_product")]
             replacement::poll();
@@ -346,11 +361,15 @@ extern "C" fn runtime_main(entry_header: u64, entry_flags: u64, entry_reserved: 
         }
     }
 }
-unsafe fn secure_step(vmcb: &mut Vmcb, regs: &mut Registers, platform: &mut platform::Platform<1>) {
+unsafe fn try_secure_step(
+    vmcb: &mut Vmcb,
+    regs: &mut Registers,
+    platform: &mut platform::Platform<1>,
+) -> bool {
     unsafe {
         if !platform.before_entry(0, vmcb, bexos_secure_monitor::clock::now_ns()) {
             bexos_secure_monitor::watchdog::service_pending();
-            return;
+            return true;
         }
         #[cfg(feature = "monitor_transfer")]
         bexos_secure_monitor::watchdog::disarm_recovery();
@@ -362,20 +381,26 @@ unsafe fn secure_step(vmcb: &mut Vmcb, regs: &mut Registers, platform: &mut plat
         platform.devices.after_exit(0, vmcb);
         bexos_secure_monitor::watchdog::service_pending();
         if !platform.exit(0, vmcb, regs) {
-            log("monitor-runtime: rejected exit=");
-            hex(vmcb.exit_code());
-            log("monitor-runtime: info1=");
-            hex(vmcb.exit_info().0);
-            log("monitor-runtime: info2=");
-            hex(vmcb.exit_info().1);
-            log("monitor-runtime: rip=");
-            hex(vmcb.rip());
-            log("monitor-runtime: rax=");
-            hex(vmcb.rax());
-            halt();
+            return false;
         }
         #[cfg(feature = "resident_nucleus")]
         nucleus::completed_boundary(1);
+        true
+    }
+}
+unsafe fn secure_step(vmcb: &mut Vmcb, regs: &mut Registers, platform: &mut platform::Platform<1>) {
+    if !unsafe { try_secure_step(vmcb, regs, platform) } {
+        log("monitor-runtime: rejected exit=");
+        hex(vmcb.exit_code());
+        log("monitor-runtime: info1=");
+        hex(vmcb.exit_info().0);
+        log("monitor-runtime: info2=");
+        hex(vmcb.exit_info().1);
+        log("monitor-runtime: rip=");
+        hex(vmcb.rip());
+        log("monitor-runtime: rax=");
+        hex(vmcb.rax());
+        halt();
     }
 }
 fn halt() -> ! {

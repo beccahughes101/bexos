@@ -11,6 +11,15 @@ Trusty provides independent security services behind explicit transport, storage
 
 The standalone x86 development build and its validation are documented in [current x86_64 support](../../x86_64-support.md). It does not satisfy integrated BexOS transport, isolated x86 execution, production provisioning, or the heart-transplant requirements described here.
 
+The repository has an integrated x86 EFI/SVM Trusty product as well as a
+standalone development build; see [current x86 support](../../x86_64-support.md).
+The [completion checkpoint](../../trusty-completion.md) separates implemented
+replacement foundations from the remaining ARM/x86 live Trusty work. Standalone
+execution alone does not establish the isolation or update guarantees below.
+The [approved live-replacement design](../../design/trusty-live-replacement.md)
+specifies the permanent owners, TA continuity, durable recovery and required
+completion gates.
+
 ## Status and scope
 
 BexOS uses the pinned upstream Trusty revision for its QEMU ARM64 secure-world image. The image includes upstream storage, KeyMint, Gatekeeper, AVB, and AuthMgr FE/BE, plus the BexOS orchestrator TA. The orchestrator is retained solely for Trusty core/update lifecycle and heart-transplant coordination; it is not a general security-service gateway.
@@ -84,6 +93,15 @@ and corruption, and orchestrator update behavior.
 
 ### Current implementation checkpoint
 
+As of 2026-09-09, live Trusty replacement remains incomplete on both QEMU
+products. Architecture-bound slot/selection support, a shared live coordinator
+and writer gate, protected codecs, capability queries, and a source-built ARM
+secure transition platform are being implemented. They do not establish actual
+TA migration, candidate execution, retained-client cutover or product acceptance.
+See the [current checkpoint](../../trusty-completion.md) for exact status.
+
+### Historical implementation checkpoint — 2026-09-04
+
 As of 2026-09-04, the signed firmware builds and contains the complete seven-TA
 set. Host-focused AVB, vbmeta, typed-client, driver, teed, usersd, keychaind,
 debugd, and QEMU-runner tests passed before the final AuthMgr/logger and usersd
@@ -124,6 +142,12 @@ secure-service connection authorization and must not be repurposed as a generic
 credential or Gatekeeper-token broker.
 
 ### x86-64 secure execution
+
+The integrated QEMU product now uses the in-tree SVM/NPT execution owner and
+real BexOS-to-Trusty transport. The requirements below remain applicable to
+other secure execution backends and physical products; live Trusty replacement
+still needs the implementation and validation described in the checkpoint.
+
 
 The earlier x86 design is retained as future work. It may host an equivalent
 Trusty instance inside a hypervisor-isolated VM or enclave and expose the same

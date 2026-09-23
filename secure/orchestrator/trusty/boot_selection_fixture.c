@@ -12,13 +12,15 @@ int main(int argc, char** argv) {
         if (result) return 2;
         return fwrite(next, 1, 512, stdout) == 512 ? 0 : 1;
     }
-    if (argc != 1) return 1;
-    bexos_journal_initial(trusty, 2, 1); bexos_journal_initial(monitor, 2, 2);
-    if (!bexos_boot_initial(state, trusty, monitor)) return 1;
+    unsigned arch = 2, component = 2;
+    if (argc == 2 && !strcmp(argv[1], "--aarch64")) { arch = 1; component = 1; }
+    else if (argc != 1) return 1;
+    bexos_journal_initial(trusty, arch, 1); bexos_journal_initial(monitor, arch, 2);
+    if (!bexos_boot_initial(state, trusty, arch == 1 ? NULL : monitor)) return 1;
     if (fwrite(state, 1, 512, stdout) != 512) return 1;
     for (unsigned op = 2; op <= 4; ++op) {
         memset(request, 0, 256); memcpy(request, "BEXBS002", 8);
-        request[8] = op; request[12] = 2; request[24] = 2;
+        request[8] = op; request[12] = arch; request[24] = component;
         memcpy(request+16, state+16, 8);
         request[32] = 2; request[40] = 2; memset(request+48, 0x5a, 32); request[81] = 1;
         if (bexos_boot_next(state, request, next)) return 1;

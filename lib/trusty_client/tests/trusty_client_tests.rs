@@ -7,10 +7,11 @@ use bexos_trusty_client::protocol::{
 use bexos_trusty_client::services::{
     AVB_CMD_GET_VERSION, AVB_CMD_LOCK_BOOT_STATE, AVB_CMD_READ_LOCK_STATE,
     AVB_CMD_READ_ROLLBACK_INDEX, AVB_CMD_WRITE_LOCK_STATE, AVB_CMD_WRITE_ROLLBACK_INDEX,
-    KeyMintAlgorithm, KeyMintPurpose, ORCHESTRATOR_CMD_GET_KERNEL_SLOT, decode_avb_empty,
-    decode_avb_lock_state, decode_avb_u64, decode_avb_version, decode_gatekeeper_enroll,
-    decode_gatekeeper_verify, decode_keymint_begin, decode_keymint_generated_key,
-    decode_keymint_hmac_sha256, decode_orchestrator_response, encode_authmgr_raw_route,
+    KeyMintAlgorithm, KeyMintPurpose, ORCHESTRATOR_CMD_GET_KERNEL_SLOT,
+    ORCHESTRATOR_CMD_GET_TRUSTY_GENERATION, decode_avb_empty, decode_avb_lock_state,
+    decode_avb_u64, decode_avb_version, decode_gatekeeper_enroll, decode_gatekeeper_verify,
+    decode_keymint_begin, decode_keymint_generated_key, decode_keymint_hmac_sha256,
+    decode_orchestrator_response, decode_orchestrator_value, encode_authmgr_raw_route,
     encode_authmgr_rpc_route, encode_avb_get_version, encode_avb_lock_boot_state,
     encode_avb_read_lock_state, encode_avb_rollback_index, encode_avb_write_lock_state,
     encode_gatekeeper_delete, encode_gatekeeper_enroll, encode_gatekeeper_reenroll,
@@ -328,4 +329,16 @@ fn orchestrator_protocol_is_typed_and_rejects_malformed_responses() {
     assert!(decode_orchestrator_response(&response).is_err());
     assert!(decode_orchestrator_response(&response[..15]).is_err());
     assert!(encode_orchestrator_request(0xffff, 1).is_err());
+    let request = encode_orchestrator_request(ORCHESTRATOR_CMD_GET_TRUSTY_GENERATION, 0).unwrap();
+    assert_eq!(
+        &request[4..8],
+        &ORCHESTRATOR_CMD_GET_TRUSTY_GENERATION.to_le_bytes()
+    );
+    response[4] = 0;
+    response[8..12].copy_from_slice(&7u32.to_le_bytes());
+    response[12..16].copy_from_slice(&2u32.to_le_bytes());
+    assert_eq!(
+        decode_orchestrator_value(&response).unwrap(),
+        (2u64 << 32) | 7
+    );
 }

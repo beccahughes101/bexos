@@ -40,7 +40,6 @@ static uint32_t transact(const uint8_t* request, uint8_t* response) {
         status = BEXOS_JOURNAL_OK;
         goto done;
     }
-#if defined(__x86_64__)
     /* Once boot selection exists, only its atomic two-component transaction
      * may update the compatibility journals. Do not permit a v1 caller to
      * bypass a pending trial or desynchronize the two protected formats. */
@@ -52,7 +51,6 @@ static uint32_t transact(const uint8_t* request, uint8_t* response) {
         goto done;
     }
     if (rc != ERR_NOT_FOUND) goto done;
-#endif
     uint8_t next[BEXOS_JOURNAL_BYTES];
     status = bexos_journal_next(response, request, next);
     if (status != BEXOS_JOURNAL_OK || !memcmp(response, next, sizeof(next))) goto done;
@@ -107,9 +105,7 @@ int bexos_journal_add_service(struct tipc_hset* hset) {
     };
     static const struct tipc_srv_ops ops = { .on_message = on_message };
     int rc = tipc_add_service(hset, &port, 1, 1, &ops);
-#if defined(__x86_64__)
     extern int bexos_boot_selection_add_service(struct tipc_hset* hset);
     if (!rc) rc = bexos_boot_selection_add_service(hset);
-#endif
     return rc;
 }

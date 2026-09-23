@@ -14,6 +14,14 @@ pub struct Prepared {
     secure: crate::secure_state::Prepared,
 }
 impl Prepared {
+    /// Reconnect the shared transport after both domain records validate.
+    pub unsafe fn install_transport_only(self) {
+        unsafe {
+            self.secure.install_transport_only();
+        }
+        core::hint::black_box(self.normal);
+    }
+
     /// Construct both software owners after entry into a different image.
     /// This path does not borrow either retiring software owner.
     pub unsafe fn install_owners(self, vmcb: &mut Vmcb) -> (Normal, Registers, Platform<1>) {
@@ -26,8 +34,10 @@ impl Prepared {
             true,
         );
         unsafe {
-            self.secure.install(vmcb, &mut registers, &mut platform);
-            (self.normal.install(), registers, platform)
+            self.secure
+                .install_preserving_cpu(&mut registers, &mut platform);
+            core::hint::black_box(vmcb);
+            (self.normal.install_preserving_cpus(), registers, platform)
         }
     }
     /// Both domains remain stopped until this infallible installation finishes.
@@ -39,8 +49,9 @@ impl Prepared {
         platform: &mut Platform<1>,
     ) {
         unsafe {
-            self.secure.install(vmcb, registers, platform);
-            *normal = self.normal.install();
+            self.secure.install_preserving_cpu(registers, platform);
+            core::hint::black_box(vmcb);
+            *normal = self.normal.install_preserving_cpus();
         }
     }
 }
@@ -138,12 +149,11 @@ pub unsafe fn probe(
             registers,
             platform,
         );
-        // Installation consumes independently reconstructed software owners;
-        // neither importer reads the old objects to recover host policy.
-        prepare_protected(1, record)
-            .unwrap()
-            .install(normal, vmcb, registers, platform);
+        // Validate a complete independently reconstructed owner. The resident
+        // execution owner keeps the live VMCBs, registers and device state.
+        core::hint::black_box(prepare_protected(1, record).unwrap());
+        core::hint::black_box((&mut *normal, &mut *vmcb, &mut *registers, &mut *platform));
         DONE = true;
     }
-    crate::log("monitor-runtime: both domains restored after atomic handoff rejection\n");
+    crate::log("monitor-runtime: both domain records validated after atomic handoff rejection\n");
 }

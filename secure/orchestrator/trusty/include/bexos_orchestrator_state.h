@@ -6,7 +6,12 @@
 
 #include "bexos_orchestrator_protocol.h"
 
-struct bexos_orchestrator_state { uint32_t kernel_slot; };
+struct bexos_orchestrator_state {
+    uint32_t kernel_slot;
+    uint64_t trusty_generation;
+    uint64_t migration_abi;
+    uint32_t fixture_mode;
+};
 
 void bexos_orchestrator_init(struct bexos_orchestrator_state* state);
 size_t bexos_orchestrator_dispatch(struct bexos_orchestrator_state* state,

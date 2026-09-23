@@ -35,6 +35,10 @@ aidl_tool="${31}"
 compatibility_script="${32}"
 prerequisites_script="${33}"
 reverse_lines_tool="${34}"
+owner_source="${35}"
+owner_linker="${36}"
+owner_layout="${37}"
+owner_core="${38}"
 reverse_lines_tool="$(cd "$(dirname "$reverse_lines_tool")" && pwd)/$(basename "$reverse_lines_tool")"
 architecture="${BEXOS_TRUSTY_ARCH:-aarch64}"
 rollback_verifier="${BEXOS_TRUSTY_ROLLBACK_VERIFIER:-}"
@@ -44,6 +48,11 @@ if [ "$architecture" = aarch64 ]; then
 fi
 x86_config="${BEXOS_TRUSTY_X86_CONFIG:-}"
 if [ -n "$x86_config" ]; then x86_config="$(cd "$(dirname "$x86_config")" && pwd)/$(basename "$x86_config")"; fi
+image_config="${BEXOS_TRUSTY_IMAGE_CONFIG:-}"
+if [ -n "$image_config" ]; then image_config="$(cd "$(dirname "$image_config")" && pwd)/$(basename "$image_config")"; fi
+image_config_tool="${BEXOS_TRUSTY_IMAGE_CONFIG_TOOL:-}"
+test -n "$image_config_tool" || { echo "missing Trusty image config tool" >&2; exit 1; }
+image_config_tool="$(cd "$(dirname "$image_config_tool")" && pwd)/$(basename "$image_config_tool")"
 
 out_root="$(mkdir -p "$out_root" && cd "$out_root" && pwd)"
 src_root="$(cd "$src_root" && pwd)"
@@ -76,6 +85,10 @@ fi
 rpmb_tool="$(cd "$(dirname "$rpmb_tool")" && pwd)/$(basename "$rpmb_tool")"
 aidl_tool="$(cd "$(dirname "$aidl_tool")" && pwd)/$(basename "$aidl_tool")"
 compatibility_script="$(cd "$(dirname "$compatibility_script")" && pwd)/$(basename "$compatibility_script")"
+owner_source="$(cd "$(dirname "$owner_source")" && pwd)/$(basename "$owner_source")"
+owner_linker="$(cd "$(dirname "$owner_linker")" && pwd)/$(basename "$owner_linker")"
+owner_layout="$(cd "$(dirname "$owner_layout")" && pwd)/$(basename "$owner_layout")"
+owner_core="$(cd "$(dirname "$owner_core")" && pwd)/$(basename "$owner_core")"
 rust_src_root="$(cd "$(dirname "$rust_src_marker")/../../.." && pwd)"
 bl33_verifier="$(cd "$(dirname "$bl33_verifier")" && pwd)/$(basename "$bl33_verifier")"
 avb_root_key="$(cd "$(dirname "$avb_root_key")" && pwd)/$(basename "$avb_root_key")"
@@ -265,6 +278,9 @@ cat > "$work/trusty/device/arm/generic-arm64/project/bexos-trusty-qemu-debug.mk"
 SPMC_EL :=
 LIB_SM_WITH_FFA_LOOP := false
 SMP_MAX_CPUS := 4
+# FEAT_SEL2 makes CNTPS_* an EL2-only facility. The resident owner grants
+# S-EL1 access to CNTP through CNTHCTL_EL2 and retains control of its interrupt.
+TIMER_ARM_GENERIC_SELECTED := CNTP
 
 KERNEL_32BIT := false
 DEBUG := 2
@@ -294,7 +310,27 @@ TRUSTY_BUILTIN_USER_TASKS := \
 
 TRUSTY_ALL_USER_TASKS := $(TRUSTY_BUILTIN_USER_TASKS)
 LK_BIN := $(BUILDDIR)/lk.bin
-BL32_BIN := $(LK_BIN)
+BEXOS_OWNER_SOURCE := @BEXOS_OWNER_SOURCE@
+BEXOS_OWNER_LINKER := @BEXOS_OWNER_LINKER@
+BEXOS_OWNER_LAYOUT := @BEXOS_OWNER_LAYOUT@
+BEXOS_OWNER_CORE := @BEXOS_OWNER_CORE@
+BEXOS_OWNER_ASM := $(BUILDDIR)/bexos-owner.S
+BEXOS_OWNER_OBJ := $(BUILDDIR)/bexos-owner.o
+BEXOS_OWNER_ELF := $(BUILDDIR)/bexos-owner.elf
+BL32_BIN := $(BUILDDIR)/bexos-owner.bin
+
+$(BEXOS_OWNER_ASM): $(LK_BIN) $(BEXOS_OWNER_SOURCE)
+	mkdir -p $(dir $@)
+	sed 's|[.]incbin TRUSTY_IMAGE|.incbin "$(abspath $(LK_BIN))"|' $(BEXOS_OWNER_SOURCE) > $@
+
+$(BEXOS_OWNER_OBJ): $(BEXOS_OWNER_ASM) $(BEXOS_OWNER_LAYOUT)
+	$(CLANG_BINDIR)/clang --target=aarch64-none-elf -march=armv8.4-a -include $(BEXOS_OWNER_LAYOUT) -c $< -o $@
+
+$(BEXOS_OWNER_ELF): $(BEXOS_OWNER_OBJ) $(BEXOS_OWNER_LINKER) $(BEXOS_OWNER_CORE)
+	$(CLANG_BINDIR)/ld.lld --gc-sections -T $(BEXOS_OWNER_LINKER) $(BEXOS_OWNER_OBJ) $(BEXOS_OWNER_CORE) -o $@
+
+$(BL32_BIN): $(BEXOS_OWNER_ELF)
+	$(CLANG_BINDIR)/llvm-objcopy -O binary $< $@
 
 # Match upstream's QEMU storage contract without importing qemu-inc.mk (which
 # recursively selects a different project and test-runner BL33). The secure
@@ -323,6 +359,13 @@ ATF_ROOT := $(call FIND_EXTERNAL,arm-trusted-firmware)
 include project/qemu-atf-inc.mk
 GLOBAL_SHARED_COMPILEFLAGS += -Wno-nontrivial-memcall -fsigned-char -Iexternal/boringssl/src/include
 EOF
+
+"$sed_cmd" -i \
+  -e "s|@BEXOS_OWNER_SOURCE@|$owner_source|" \
+  -e "s|@BEXOS_OWNER_LINKER@|$owner_linker|" \
+  -e "s|@BEXOS_OWNER_LAYOUT@|$owner_layout|" \
+  -e "s|@BEXOS_OWNER_CORE@|$owner_core|" \
+  "$work/trusty/device/arm/generic-arm64/project/bexos-trusty-qemu-debug.mk"
 
 # The RPMB helper is built natively by Bazel on every host, outside upstream's
 # x86-only host sysroot. It initializes the output template after firmware make.
@@ -365,6 +408,7 @@ awk -v bl33="$bl33_verifier" -v root_key="$avb_root_key" -v mbedtls="$mbedtls_ro
     # page metadata for unbacked addresses and eventually take an external
     # abort. Pass the actual bounded arena through the Trusty X0 protocol.
     print "ATF_MAKE_ARGS += BEXOS_TRUSTY_SEC_MEM_SIZE=0x00e00000"
+    print "ATF_MAKE_ARGS += BEXOS_SEL2_OWNER=1"
     print "ATF_MAKE_ARGS += TRUSTED_BOARD_BOOT=1"
     print "ATF_MAKE_ARGS += GENERATE_COT=1"
     print "ATF_MAKE_ARGS += CREATE_KEYS=1"
@@ -382,6 +426,12 @@ awk -v bl33="$bl33_verifier" -v root_key="$avb_root_key" -v mbedtls="$mbedtls_ro
   }
 ' "$qemu_atf_inc" > "$qemu_atf_inc.tmp"
 mv "$qemu_atf_inc.tmp" "$qemu_atf_inc"
+# TF-A validates BL32 at makefile parse time. Express the generated owner
+# container as an input to its outer LK target so it exists before the nested
+# TF-A invocation starts.
+"$sed_cmd" -i \
+  's/^$(ATF_BIN): \.PHONY$/$(ATF_BIN): $(BL32_BIN) .PHONY/' \
+  "$qemu_atf_inc"
 # The ordinary Trusty rule asks TF-A only for its executable images. Trusted
 # Board Boot also needs the generated certificate chain; building the FIP target
 # materializes that chain even though QEMU continues to load the individual
@@ -623,12 +673,10 @@ chmod +x "$work/prebuilts/rust/host/linux-x86/1.80.1/bin/rustc"
 chmod +x "$work/prebuilts/rust/host/linux-x86/1.80.1/bin/rustfmt"
 chmod +x "$work/prebuilts/rust/host/linux-x86/1.80.1/bin/rustdoc"
 
-if [ "$architecture" = x86_64 ]; then
-  if [[ -n "${BEXOS_TRUSTY_X86_GENERATION_CONFIG:-}" ]]; then
-    python3 "$x86_config" "$work" "$project_mk" "$BEXOS_TRUSTY_X86_GENERATION_CONFIG"
-  else
-    python3 "$x86_config" "$work" "$project_mk"
-  fi
+if [ -n "$image_config" ]; then
+  python3 "$image_config_tool" "$work" "$project_mk" "$architecture" "$image_config"
+else
+  python3 "$image_config_tool" "$work" "$project_mk" "$architecture"
 fi
 
 # The pinned Trusty make graph does not express the dependency from every SDK
@@ -663,6 +711,12 @@ for image in $images; do
   test -n "$source_file" || { echo "Trusty build did not produce $image" >&2; exit 1; }
   cp "$source_file" "$out_root/$image"
 done
+
+if [ "$architecture" = aarch64 ]; then
+  owner_bin="$build_dir/bexos-owner.bin"
+  test -f "$owner_bin" || { echo "Trusty build did not produce the ARM S-EL2 owner container" >&2; exit 1; }
+  cp "$owner_bin" "$out_root/lk.bin"
+fi
 
 if [ "$architecture" = aarch64 ]; then cp "$bl33_verifier" "$out_root/bl33.bin"; fi
 

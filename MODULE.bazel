@@ -13,6 +13,29 @@ bazel_dep(name = "protobuf", version = "36.0")
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
 
+# Source-built ARM secure transition platform, matching the installed baseline.
+http_archive(
+    name = "qemu_ninja_src",
+    type = "tar.gz",
+    urls = ["https://codeload.github.com/ninja-build/ninja/tar.gz/refs/tags/v1.13.1"],
+    sha256 = "f0055ad0369bf2e372955ba55128d000cfcc21777057806015b45e4accbebf23",
+    strip_prefix = "ninja-1.13.1",
+    build_file = "//third_party/qemu:ninja.BUILD.bazel",
+)
+http_file(
+    name = "qemu_setuptools_wheel",
+    urls = ["https://files.pythonhosted.org/packages/a3/dc/17031897dae0efacfea57dfd3a82fdd2a2aeb58e0ff71b77b87e44edc772/setuptools-80.9.0-py3-none-any.whl"],
+    sha256 = "062d34222ad13e0cc312a4c02d73f059e86a4acbfbdea8f8f76b28c99f306922",
+    downloaded_file_path = "setuptools-80.9.0-py3-none-any.whl",
+)
+http_archive(
+    name = "bexos_qemu_src",
+    urls = ["https://download.qemu.org/qemu-11.1.0.tar.xz"],
+    sha256 = "6ee1d1a61f68212476b27108c26da5f449dc09b626d42f8279ba0dc2e08fa858",
+    strip_prefix = "qemu-11.1.0",
+    build_file = "//third_party/qemu:upstream.BUILD.bazel",
+)
+
 # QEMU's published OVMF build enables Secure Boot and SMM. Keep the code and
 # matching variable-store template pinned independently of host installations.
 http_file(

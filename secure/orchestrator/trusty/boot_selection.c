@@ -24,7 +24,7 @@ static bool identity(const uint8_t* b, bool initial) {
         !zero(b+16, 32);
 }
 static bool header(const uint8_t* b) {
-    return !memcmp(b, "BEXBS002", 8) && word(b, 12) == 2;
+    return !memcmp(b, "BEXBS002", 8) && (word(b, 12) == 1 || word(b, 12) == 2);
 }
 bool bexos_boot_request_valid(const uint8_t* r, size_t length) {
     if (length != BEXOS_BOOT_REQUEST_BYTES || !header(r) ||
@@ -34,17 +34,21 @@ bool bexos_boot_request_valid(const uint8_t* r, size_t length) {
     if (op < BEXOS_BOOT_STAGE || op > BEXOS_BOOT_ABORT ||
         wide(r, 16) == 0 || wide(r, 16) == UINT64_MAX ||
         word(r, 24) < 1 || word(r, 24) > 2) return false;
+    if (word(r, 12) == 1 && word(r, 24) != 1) return false;
     return identity(r+32, false);
 }
 bool bexos_boot_state_valid(const uint8_t* s) {
     if (!header(s) || word(s, 8) || wide(s, 16) == 0 ||
         !identity(s+32, true) || !identity(s+88, true) ||
         !zero(s+204, 52)) return false;
+    if (word(s, 12) == 1 &&
+        (word(s+88, 0) != 1 || wide(s+88, 8) != 1 || !zero(s+104, 40))) return false;
     uint32_t phase = word(s, 24), component = word(s, 28), attempts = word(s, 200);
     if (phase == BEXOS_BOOT_IDLE) {
         if (component || !zero(s+144, 60)) return false;
     } else {
-        if (phase > BEXOS_BOOT_TRIAL || component < 1 || component > 2 ||
+        if ((word(s, 12) == 1 && component != 1) ||
+            phase > BEXOS_BOOT_TRIAL || component < 1 || component > 2 ||
             !identity(s+144, false) || attempts > BEXOS_BOOT_MAX_ATTEMPTS ||
             (phase == BEXOS_BOOT_PENDING && attempts) ||
             (phase == BEXOS_BOOT_TRIAL && !attempts)) return false;
@@ -57,6 +61,7 @@ bool bexos_boot_state_valid(const uint8_t* s) {
             wide(s+32, 8) == 1 && wide(s+88, 8) == 1;
     const uint8_t* r = s+256;
     if (!bexos_boot_request_valid(r, 256) || word(r, 8) == BEXOS_BOOT_QUERY ||
+        word(r, 12) != word(s, 12) ||
         wide(r, 16) != wide(s, 16)-1) return false;
     /* Validate the result as well as the request before acknowledging it. */
     const uint8_t* active = s+32+(word(r, 24)-1)*56;
@@ -79,18 +84,23 @@ bool bexos_boot_state_valid(const uint8_t* s) {
 bool bexos_boot_initial(uint8_t* s, const uint8_t* trusty, const uint8_t* monitor) {
     /* A v1 generation above one requires its real persisted image length.
      * Do not invent it or silently reset the protected floor during migration. */
-    if (!bexos_journal_record_valid(trusty, 2, 1) ||
-        !bexos_journal_record_valid(monitor, 2, 2) ||
-        bexos_journal_generation(trusty) != 1 ||
-        bexos_journal_generation(monitor) != 1) return false;
+    unsigned arch = word(trusty, 12);
+    if (!bexos_journal_record_valid(trusty, arch, 1) ||
+        bexos_journal_generation(trusty) != 1) return false;
+    /* ARM has no replaceable hypervisor component. Its reserved identity is
+     * always INITIAL and there is no compatibility journal to manufacture. */
+    if (arch == 2 && (!monitor || !bexos_journal_record_valid(monitor, arch, 2) ||
+        bexos_journal_generation(monitor) != 1)) return false;
+    if (arch == 1 && monitor) return false;
     memset(s, 0, BEXOS_BOOT_STATE_BYTES);
     memcpy(s, "BEXBS002", 8);
-    s[12] = 2; s[16] = 1;
+    s[12] = arch; s[16] = 1;
     s[32] = 1; s[40] = 1; s[88] = 1; s[96] = 1;
     return true;
 }
 uint32_t bexos_boot_next(const uint8_t* s, const uint8_t* r, uint8_t* next) {
-    if (!bexos_boot_state_valid(s) || !bexos_boot_request_valid(r, 256))
+    if (!bexos_boot_state_valid(s) || !bexos_boot_request_valid(r, 256) ||
+        word(s, 12) != word(r, 12))
         return BEXOS_JOURNAL_INVALID;
     uint32_t op = word(r, 8), component = word(r, 24), phase = word(s, 24);
     if (op == BEXOS_BOOT_QUERY || !memcmp(r, s+256, 256)) {

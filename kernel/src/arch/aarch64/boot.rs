@@ -127,6 +127,9 @@ _start:
     isb
     mov x4, #1
     lsl x4, x4, #31
+    mov x5, #3
+    lsl x5, x5, #40
+    orr x4, x4, x5
     msr hcr_el2, x4
     mov x4, #3
     msr cnthctl_el2, x4
@@ -139,6 +142,9 @@ _start:
 .Lboot_el2:
     mov x4, #1
     lsl x4, x4, #31
+    mov x5, #3
+    lsl x5, x5, #40
+    orr x4, x4, x5
     msr hcr_el2, x4
     mov x4, #3
     msr cnthctl_el2, x4

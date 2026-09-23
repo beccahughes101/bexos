@@ -2,8 +2,8 @@ use super::*;
 
 pub fn set_timer_interval(ticks: u64) {
     unsafe {
-        asm!("msr cntp_tval_el0, {ticks:x}", ticks = in(reg) ticks, options(nomem, nostack));
-        asm!("msr cntp_ctl_el0, {ctl:x}", ctl = in(reg) 1_u64, options(nomem, nostack));
+        asm!("msr cntv_tval_el0, {ticks:x}", ticks = in(reg) ticks, options(nomem, nostack));
+        asm!("msr cntv_ctl_el0, {ctl:x}", ctl = in(reg) 1_u64, options(nomem, nostack));
     }
 }
 
@@ -11,14 +11,14 @@ pub fn set_timer_deadline_ns(deadline_ns: u64) {
     let frequency = timer_frequency();
     let deadline_ticks = bexos_kernel_core::time::nanos_to_ticks(deadline_ns, frequency);
     unsafe {
-        asm!("msr cntp_cval_el0, {deadline_ticks:x}", deadline_ticks = in(reg) deadline_ticks, options(nomem, nostack));
-        asm!("msr cntp_ctl_el0, {ctl:x}", ctl = in(reg) 1_u64, options(nomem, nostack));
+        asm!("msr cntv_cval_el0, {deadline_ticks:x}", deadline_ticks = in(reg) deadline_ticks, options(nomem, nostack));
+        asm!("msr cntv_ctl_el0, {ctl:x}", ctl = in(reg) 1_u64, options(nomem, nostack));
     }
 }
 
 pub fn disable_timer() {
     unsafe {
-        asm!("msr cntp_ctl_el0, {ctl:x}", ctl = in(reg) 0_u64, options(nomem, nostack));
+        asm!("msr cntv_ctl_el0, {ctl:x}", ctl = in(reg) 0_u64, options(nomem, nostack));
     }
 }
 

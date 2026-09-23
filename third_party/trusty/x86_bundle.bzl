@@ -1,6 +1,8 @@
 """Explicit architecture-specific saved firmware, independent of BexOS boot."""
-def x86_firmware_bundle(name, firmware, boot, acceptance = False):
-    flags = ["--architecture", "x86_64"] + (["--variant", "authmgr_acceptance"] if acceptance else [])
+def x86_firmware_bundle(name, firmware, boot, acceptance = False, variant = "standard"):
+    if acceptance and variant == "standard":
+        variant = "authmgr_acceptance"
+    flags = ["--architecture", "x86_64"] + ([] if variant == "standard" else ["--variant", variant])
     native.genrule(
         name = name + "_built_image",
         tags = ["manual"],

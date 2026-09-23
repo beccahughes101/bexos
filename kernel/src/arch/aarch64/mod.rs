@@ -92,13 +92,13 @@ impl super::ArchAPI for Aarch64 {
     fn timer_deadline() -> u64 {
         let value;
         unsafe {
-            asm!("mrs {}, cntp_cval_el0", out(reg) value, options(nomem, nostack));
+            asm!("mrs {}, cntv_cval_el0", out(reg) value, options(nomem, nostack));
         }
         value
     }
     fn restore_timer_deadline(value: u64) {
         unsafe {
-            asm!("msr cntp_cval_el0, {}", in(reg) value, options(nomem, nostack));
+            asm!("msr cntv_cval_el0, {}", in(reg) value, options(nomem, nostack));
         }
     }
     fn prepare_failure(context: &mut Context, entry: u64) {

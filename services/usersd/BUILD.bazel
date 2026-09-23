@@ -57,6 +57,7 @@ std_service_binary(
 rust_test(
     name = "usersd_tests",
     srcs = glob(["tests/**/*.rs"]),
+    crate_root = "tests/users_tests.rs",
     crate_name = "usersd_tests",
     edition = "2024",
     deps = [

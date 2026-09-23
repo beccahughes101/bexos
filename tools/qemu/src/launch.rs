@@ -118,15 +118,6 @@ impl LaunchConfig {
     }
 }
 
-pub(crate) fn configure_console(command: &mut Command, debug_socket: Option<&Path>) {
-    command.arg("-serial");
-    match debug_socket {
-        Some(socket) => command.arg(format!("unix:{},server=on,wait=off", socket.display())),
-        None => command.arg("mon:stdio"),
-    };
-    command.args(["-monitor", "none"]);
-}
-
 fn has_native_ui(help: &str) -> bool {
     help.lines()
         .any(|line| matches!(line.trim(), "cocoa" | "gtk" | "sdl"))
@@ -158,7 +149,7 @@ mod tests {
             .collect()
     }
     #[test]
-    fn compiled_profiles_preserve_console_and_append_graphics_after_boot_devices() {
+    fn compiled_profiles_append_graphics_after_boot_devices() {
         for (profile, windowed) in [
             (
                 include_bytes!(env!("NONGUI_LAUNCH_CONFIG")).as_slice(),
@@ -173,13 +164,11 @@ mod tests {
             assert_eq!(config.windowed, windowed);
             let mut cmd = Command::new("qemu");
             config.configure_display(&mut cmd);
-            configure_console(&mut cmd, Some(Path::new("/tmp/test.sock")));
             cmd.args(["-device", "nvme,drive=nvme0", "-device", "virtio-net-pci"]);
             let before = args(&cmd);
             config.append_devices(&mut cmd);
             let arguments = args(&cmd);
             assert_eq!(&arguments[..before.len()], before);
-            assert!(arguments.contains(&"unix:/tmp/test.sock,server=on,wait=off".into()));
             assert_eq!(arguments.contains(&"-nographic".into()), !windowed);
             if windowed {
                 assert_eq!(
@@ -198,9 +187,6 @@ mod tests {
                 assert_eq!(arguments, before);
             }
         }
-        let mut cmd = Command::new("qemu");
-        configure_console(&mut cmd, None);
-        assert_eq!(args(&cmd), ["-serial", "mon:stdio", "-monitor", "none"]);
     }
     #[test]
     fn headless_only_qemu_cannot_silently_launch_a_workstation() {

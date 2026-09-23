@@ -422,6 +422,23 @@ impl Socket {
 #[derive(Clone, Copy)]
 pub struct Rpc(pub Channel);
 impl Rpc {
+    /// Drain a previous untagged reply before allocating a new request's owned
+    /// resources. Failure leaves the queue fenced and sends no new request.
+    pub fn drain_pending_with_timeout(
+        &self,
+        timeout_seconds: u64,
+        awaiting_response: &mut bool,
+    ) -> Result<(), Status> {
+        if *awaiting_response {
+            let previous = self.0.recv_with_timeout(timeout_seconds)?;
+            for handle in previous.handles {
+                let _ = crate::Memory::close(handle);
+            }
+            *awaiting_response = false;
+        }
+        Ok(())
+    }
+
     /// Serialize untagged replies across timeouts. The caller checkpoints
     /// `awaiting_response` with the channel when transferring service state.
     pub fn call_ordered_with_timeout(
@@ -432,13 +449,7 @@ impl Rpc {
         timeout_seconds: u64,
         awaiting_response: &mut bool,
     ) -> Result<Message, Status> {
-        if *awaiting_response {
-            let previous = self.0.recv_with_timeout(timeout_seconds)?;
-            for handle in previous.handles {
-                let _ = crate::Memory::close(handle);
-            }
-            *awaiting_response = false;
-        }
+        self.drain_pending_with_timeout(timeout_seconds, awaiting_response)?;
         self.call_raw_with_timeout(ordinal, request, handles, false, timeout_seconds)?;
         *awaiting_response = true;
         let response = self.0.recv_with_timeout(timeout_seconds)?;

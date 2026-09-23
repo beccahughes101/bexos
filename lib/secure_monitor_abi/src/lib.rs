@@ -11,6 +11,10 @@ pub mod transport;
 pub const VERSION: u16 = 1;
 pub const ARCH_X86_64: u16 = 2;
 pub const HEADER: u64 = (0x4245_584du64 << 32) | ((VERSION as u64) << 16) | ARCH_X86_64 as u64;
+/// AArch64 SMCCC envelope used to carry the same register protocol through
+/// TF-A's Trusty dispatcher. The permanent S-EL2 owner restores HEADER before
+/// decoding, so the public protocol remains architecture-neutral.
+pub const AARCH64_FIRMWARE_FID: u64 = 0xfb00_be00;
 pub const REGISTER: u64 = 1;
 pub const UNREGISTER: u64 = 2;
 pub const STAGE_TRUSTY_CORE: u64 = 3;

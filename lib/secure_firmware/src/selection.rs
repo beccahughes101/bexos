@@ -1,6 +1,6 @@
-//! Canonical x86 boot-selection identities. These records are authoritative
+//! Canonical architecture-bound boot-selection identities. These records are authoritative
 //! only when read through the root-only authenticated Trusty journal.
-use crate::{Component, MAX_IMAGE_BYTES};
+use crate::{Architecture, Component, MAX_IMAGE_BYTES};
 
 pub const IDENTITY_BYTES: usize = 56;
 pub const REQUEST_BYTES: usize = 256;
@@ -104,6 +104,7 @@ impl Operation {
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct State {
+    architecture: Architecture,
     pub revision: u64,
     pub committed: [Identity; 2],
     pub phase: Phase,
@@ -125,10 +126,13 @@ pub fn component(n: u32) -> Result<Component, Invalid> {
     }
 }
 pub fn query_request() -> [u8; REQUEST_BYTES] {
+    query_request_for(Architecture::X86_64)
+}
+pub fn query_request_for(architecture: Architecture) -> [u8; REQUEST_BYTES] {
     let mut r = [0; REQUEST_BYTES];
     r[..8].copy_from_slice(MAGIC);
     r[8] = 1;
-    r[12] = 2;
+    r[12] = architecture.number() as u8;
     r
 }
 pub fn request(
@@ -137,10 +141,19 @@ pub fn request(
     c: Component,
     image: Identity,
 ) -> Result<[u8; REQUEST_BYTES], Invalid> {
-    if revision == 0 || revision == u64::MAX || !image.valid(false) {
+    request_for(Architecture::X86_64, revision, op, c, image)
+}
+pub fn request_for(
+    architecture: Architecture,
+    revision: u64,
+    op: Operation,
+    c: Component,
+    image: Identity,
+) -> Result<[u8; REQUEST_BYTES], Invalid> {
+    if !architecture.supports(c) || revision == 0 || revision == u64::MAX || !image.valid(false) {
         return Err(Invalid);
     }
-    let mut r = query_request();
+    let mut r = query_request_for(architecture);
     r[8..12].copy_from_slice(&op.number().to_le_bytes());
     r[16..24].copy_from_slice(&revision.to_le_bytes());
     r[24..28].copy_from_slice(&component_number(c).to_le_bytes());
@@ -155,7 +168,8 @@ pub fn validate_mutation_request(r: &[u8; REQUEST_BYTES]) -> Result<(), Invalid>
         5 => Operation::Abort,
         _ => return Err(Invalid),
     };
-    if request(
+    if request_for(
+        Architecture::from_number(word(r, 12)).ok_or(Invalid)?,
         wide(r, 16),
         op,
         component(word(r, 24))?,
@@ -167,6 +181,18 @@ pub fn validate_mutation_request(r: &[u8; REQUEST_BYTES]) -> Result<(), Invalid>
     Ok(())
 }
 impl State {
+    pub fn architecture(&self) -> Architecture {
+        self.architecture
+    }
+
+    /// Decode under the execution owner's expected architecture policy.
+    pub fn decode_for(b: &[u8], architecture: Architecture) -> Result<Self, Invalid> {
+        let state = Self::decode(b)?;
+        if state.architecture != architecture {
+            return Err(Invalid);
+        }
+        Ok(state)
+    }
     /// Authenticated last transition for reboot-visible product status.
     pub fn last_change(&self) -> Option<(Operation, Component, Identity)> {
         if self.revision == 1 {
@@ -189,12 +215,12 @@ impl State {
         if b.len() != STATE_BYTES
             || &b[..8] != MAGIC
             || word(b, 8) != 0
-            || word(b, 12) != 2
             || wide(b, 16) == 0
             || b[204..256] != [0; 52]
         {
             return Err(Invalid);
         }
+        let architecture = Architecture::from_number(word(b, 12)).ok_or(Invalid)?;
         let phase = match word(b, 24) {
             0 => Phase::Idle,
             1 => Phase::Pending,
@@ -205,6 +231,9 @@ impl State {
             Identity::decode(&b[32..88], true)?,
             Identity::decode(&b[88..144], true)?,
         ];
+        if architecture == Architecture::Aarch64 && committed[1] != Identity::INITIAL {
+            return Err(Invalid);
+        }
         let attempts = word(b, 200);
         let pending = if phase == Phase::Idle {
             if word(b, 28) != 0 || b[144..204] != [0; 60] {
@@ -213,6 +242,9 @@ impl State {
             None
         } else {
             let c = component(word(b, 28))?;
+            if !architecture.supports(c) {
+                return Err(Invalid);
+            }
             let image = Identity::decode(&b[144..200], false)?;
             let active = committed[(component_number(c) - 1) as usize];
             if image.slot == active.slot
@@ -242,7 +274,8 @@ impl State {
                 5 => Operation::Abort,
                 _ => return Err(Invalid),
             };
-            if request(
+            if request_for(
+                architecture,
                 revision - 1,
                 op,
                 component(word(r, 24))?,
@@ -272,6 +305,7 @@ impl State {
             }
         }
         Ok(Self {
+            architecture,
             revision,
             committed,
             phase,
@@ -303,7 +337,7 @@ impl State {
             Operation::Abort if self.pending == Some((c, image)) => {}
             _ => return Err(Invalid),
         }
-        request(self.revision, op, c, image)
+        request_for(self.architecture, self.revision, op, c, image)
     }
     /// Exact request identity is required to resolve a lost mutation reply.
     pub fn acknowledges(&self, r: &[u8; REQUEST_BYTES]) -> bool {

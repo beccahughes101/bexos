@@ -20,6 +20,27 @@ pub enum Architecture {
     Aarch64,
     X86_64,
 }
+
+impl Architecture {
+    pub const fn number(self) -> u32 {
+        match self {
+            Self::Aarch64 => 1,
+            Self::X86_64 => 2,
+        }
+    }
+
+    pub const fn from_number(value: u32) -> Option<Self> {
+        match value {
+            1 => Some(Self::Aarch64),
+            2 => Some(Self::X86_64),
+            _ => None,
+        }
+    }
+
+    pub const fn supports(self, component: Component) -> bool {
+        !matches!((self, component), (Self::Aarch64, Component::Hypervisor))
+    }
+}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Component {
     Trusty,
@@ -113,12 +134,14 @@ pub fn verify<'a>(
     }
     let image = &bundle[HEADER_BYTES + metadata_len..];
     verify_partition(descriptor, image).map_err(|_| Error::Authentication)?;
-    let machine = match arch {
-        Architecture::Aarch64 => 183u16,
-        Architecture::X86_64 => 62,
+    let (machine, image_type) = match arch {
+        // Trusty's ARM image is position independent and the permanent S-EL2
+        // owner maps its PT_LOAD physical offsets into the inactive bank.
+        Architecture::Aarch64 => (183u16, 3u16),
+        Architecture::X86_64 => (62, 2),
     };
     if &image[..7] != b"\x7fELF\x02\x01\x01"
-        || image[16..18] != 2u16.to_le_bytes()
+        || image[16..18] != image_type.to_le_bytes()
         || image[18..20] != machine.to_le_bytes()
     {
         return Err(Error::Image);

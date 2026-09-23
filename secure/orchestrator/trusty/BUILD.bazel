@@ -56,3 +56,11 @@ genrule(
     tools = [":boot_selection_fixture"],
     cmd = "$(location :boot_selection_fixture) > $@",
 )
+
+genrule(
+    name = "boot_selection_records_aarch64",
+    testonly = True,
+    outs = ["boot_selection_aarch64.records"],
+    tools = [":boot_selection_fixture"],
+    cmd = "$(location :boot_selection_fixture) --aarch64 > $@",
+)

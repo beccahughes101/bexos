@@ -104,7 +104,13 @@ fn run() -> Result<(), String> {
                 .client
                 .unlock_user(2001, "incorrect horse battery staple"),
             "incorrect Gatekeeper password",
-        )?;
+        )
+        .map_err(|error| {
+            format!(
+                "{error}\n{}",
+                String::from_utf8_lossy(session.client.received_trace())
+            )
+        })?;
         session
             .client
             .unlock_user(2001, "correct horse battery staple")
@@ -241,19 +247,25 @@ fn run() -> Result<(), String> {
     std::fs::write(&rpmb, &state)
         .map_err(|error| format!("corrupt RPMB authentication state: {error}"))?;
     let corruption_markers: &[&[u8]] = if x86 {
+        // The x86 permanent monitor keeps its rollback gate intact, but the
+        // guest Trusty storage TA observes the corrupted RPMB key first and
+        // fail-closes by halting the critical storage app before the monitor
+        // performs another rollback-state readback. Accept that explicit
+        // secure-storage rejection while still forbidding normal-world boot.
         &[
             b": Bad MAC",
             b"block_device_tipc_init_rpmb_key failed",
-            b"monitor-runtime: Trusty rollback state unavailable; refusing execution",
+            b"Unclean exit from critical app",
         ]
     } else {
         &[
             b": Bad MAC",
             b"block_device_tipc_init_rpmb_key failed",
-            b"): Unclean exit from critical app",
+            b"bl33: FATAL: Trusty rollback state unavailable; refusing execution",
         ]
     };
     let forbidden: &[&[u8]] = &[
+        b"kernel: boot kernel_main",
         b"appd: RPMB anti-rollback backend verified",
         b"kernel: RPMB anti-rollback backend verified",
         b"pivot complete;",

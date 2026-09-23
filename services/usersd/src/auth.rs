@@ -1,4 +1,4 @@
-use alloc::vec;
+use crate::auth_transport::TeeClient;
 use alloc::vec::Vec;
 use bexos_trusty_client::protocol::{GATEKEEPER_UUID, HW_AUTH_TOKEN_TIMEOUT_SECS, KEYMINT_UUID};
 use bexos_trusty_client::services::{
@@ -11,18 +11,11 @@ use bexos_trusty_client::services::{
     encode_keymint_finish, encode_keymint_generate_auth_bound_key,
 };
 use bexos_trusty_client::users::{HardwareAuthToken, ukek_hmac_message};
-use bexos_userspace::{Channel, Memory, Rpc};
-use tee_manager_fidl as tee;
-use tee_manager_fidl::{FidlDecode as TeeFidlDecode, FidlEncode as TeeFidlEncode};
+use bexos_userspace::Channel;
 
 use user_manager_fidl::UserStatus;
 
 const UKEK_HMAC_ALIAS: &str = "bexos.usersd.ukek.hmac";
-// Teed may continue a Trusty standard call while secure-world storage or a
-// previous interrupt is being serviced. Keep the usersd envelope alive for
-// the same durable-operation window used by its callers so an eventual reply
-// cannot be mistaken for the next authentication request.
-const TEE_RPC_TIMEOUT_SECONDS: u64 = 360;
 
 pub trait UserAuthProvider {
     fn enroll_password(&mut self, uid: u64, password: &str) -> Result<Enrollment, UserStatus>;
@@ -63,7 +56,6 @@ pub struct Enrollment {
     pub hmac_key_blob: Vec<u8>,
 }
 
-#[derive(Clone, Copy)]
 pub enum RuntimeUserAuthProvider {
     Unsupported,
     Tee(TeeUserAuthProvider),
@@ -156,9 +148,8 @@ impl UserAuthProvider for RuntimeUserAuthProvider {
     }
 }
 
-#[derive(Clone, Copy)]
 pub struct TeeUserAuthProvider {
-    client: Channel,
+    client: TeeClient,
     gatekeeper_session: Option<u64>,
     keymint_session: Option<u64>,
 }
@@ -171,7 +162,7 @@ impl TeeUserAuthProvider {
             return Err(UserStatus::Storage);
         }
         Ok(Self {
-            client,
+            client: TeeClient::new(client, false),
             gatekeeper_session: None,
             keymint_session: None,
         })
@@ -181,16 +172,21 @@ impl TeeUserAuthProvider {
         client: Channel,
         gatekeeper_session: Option<u64>,
         keymint_session: Option<u64>,
+        awaiting_response: bool,
     ) -> Self {
         Self {
-            client,
+            client: TeeClient::new(client, awaiting_response),
             gatekeeper_session,
             keymint_session,
         }
     }
 
     pub fn client(&self) -> Channel {
-        self.client
+        self.client.channel()
+    }
+
+    pub fn awaiting_response(&self) -> bool {
+        self.client.awaiting_response()
     }
 
     pub fn gatekeeper_session(&self) -> Option<u64> {
@@ -205,7 +201,7 @@ impl TeeUserAuthProvider {
         if let Some(session) = self.gatekeeper_session {
             return Ok(session);
         }
-        let session = tee_open_session(self.client, GATEKEEPER_UUID)?;
+        let session = self.client.open_session(GATEKEEPER_UUID)?;
         self.gatekeeper_session = Some(session);
         Ok(session)
     }
@@ -214,7 +210,7 @@ impl TeeUserAuthProvider {
         if let Some(session) = self.keymint_session {
             return Ok(session);
         }
-        let session = tee_open_session(self.client, KEYMINT_UUID)?;
+        let session = self.client.open_session(KEYMINT_UUID)?;
         self.keymint_session = Some(session);
         Ok(session)
     }
@@ -225,8 +221,7 @@ impl UserAuthProvider for TeeUserAuthProvider {
         let gatekeeper = self.open_gatekeeper()?;
         let enroll_payload =
             encode_gatekeeper_enroll(uid, password).map_err(|_| UserStatus::InvalidArgs)?;
-        let enrollment = decode_gatekeeper_enroll(&tee_invoke(
-            self.client,
+        let enrollment = decode_gatekeeper_enroll(&self.client.invoke(
             gatekeeper,
             GATEKEEPER_CMD_ENROLL,
             &enroll_payload,
@@ -258,17 +253,17 @@ impl UserAuthProvider for TeeUserAuthProvider {
                 return Err(UserStatus::Storage);
             }
         };
-        let generated_result =
-            tee_invoke(self.client, keymint, KEYMINT_CMD_GENERATE_KEY, &key_payload).and_then(
-                |bytes| {
-                    decode_keymint_generated_key(&bytes).map_err(|error| {
-                        bexos_userspace::log(&alloc::format!(
-                            "usersd: auth-bound KeyMint generation failed: {error:?}\n"
-                        ));
-                        UserStatus::Storage
-                    })
-                },
-            );
+        let generated_result = self
+            .client
+            .invoke(keymint, KEYMINT_CMD_GENERATE_KEY, &key_payload)
+            .and_then(|bytes| {
+                decode_keymint_generated_key(&bytes).map_err(|error| {
+                    bexos_userspace::log(&alloc::format!(
+                        "usersd: auth-bound KeyMint generation failed: {error:?}\n"
+                    ));
+                    UserStatus::Storage
+                })
+            });
         let generated = match generated_result {
             Ok(generated) => generated,
             Err(status) => {
@@ -304,8 +299,7 @@ impl UserAuthProvider for TeeUserAuthProvider {
         let gatekeeper = self.open_gatekeeper()?;
         let payload = encode_gatekeeper_verify(uid, secure_user_id, password_handle, password)
             .map_err(|_| UserStatus::InvalidArgs)?;
-        let verified = decode_gatekeeper_verify(&tee_invoke(
-            self.client,
+        let verified = decode_gatekeeper_verify(&self.client.invoke(
             gatekeeper,
             GATEKEEPER_CMD_VERIFY,
             &payload,
@@ -331,8 +325,7 @@ impl UserAuthProvider for TeeUserAuthProvider {
         let payload =
             encode_gatekeeper_reenroll(uid, password_handle, current_password, new_password)
                 .map_err(|_| UserStatus::InvalidArgs)?;
-        let enrollment = decode_gatekeeper_enroll(&tee_invoke(
-            self.client,
+        let enrollment = decode_gatekeeper_enroll(&self.client.invoke(
             gatekeeper,
             GATEKEEPER_CMD_ENROLL,
             &payload,
@@ -359,23 +352,14 @@ impl UserAuthProvider for TeeUserAuthProvider {
             Some(&token.encoded),
         )
         .map_err(|_| UserStatus::Storage)?;
-        let begun = decode_keymint_begin(&tee_invoke(
-            self.client,
-            keymint,
-            KEYMINT_CMD_BEGIN,
-            &begin,
-        )?)
-        .map_err(|_| UserStatus::AccessDenied)?;
+        let begun =
+            decode_keymint_begin(&self.client.invoke(keymint, KEYMINT_CMD_BEGIN, &begin)?)
+                .map_err(|_| UserStatus::AccessDenied)?;
         let finish =
             encode_keymint_finish(begun.handle, &ukek_hmac_message(uid), Some(&token.encoded))
                 .map_err(|_| UserStatus::Storage)?;
-        decode_keymint_hmac_sha256(&tee_invoke(
-            self.client,
-            keymint,
-            KEYMINT_CMD_FINISH,
-            &finish,
-        )?)
-        .map_err(|_| UserStatus::AccessDenied)
+        decode_keymint_hmac_sha256(&self.client.invoke(keymint, KEYMINT_CMD_FINISH, &finish)?)
+            .map_err(|_| UserStatus::AccessDenied)
     }
 
     fn delete_user(
@@ -387,17 +371,15 @@ impl UserAuthProvider for TeeUserAuthProvider {
         let keymint = self.open_keymint()?;
         let key_payload =
             encode_keymint_delete_key(hmac_key_blob).map_err(|_| UserStatus::InvalidArgs)?;
-        let response = tee_invoke(self.client, keymint, KEYMINT_CMD_DELETE_KEY, &key_payload)?;
+        let response = self
+            .client
+            .invoke(keymint, KEYMINT_CMD_DELETE_KEY, &key_payload)?;
         decode_keymint_delete_key(&response).map_err(|_| UserStatus::Storage)?;
         let gatekeeper = self.open_gatekeeper()?;
         let payload =
             encode_gatekeeper_delete(uid, secure_user_id).map_err(|_| UserStatus::InvalidArgs)?;
-        tee_invoke(
-            self.client,
-            gatekeeper,
-            GATEKEEPER_CMD_DELETE_USER,
-            &payload,
-        )?;
+        self.client
+            .invoke(gatekeeper, GATEKEEPER_CMD_DELETE_USER, &payload)?;
         Ok(())
     }
 
@@ -414,7 +396,9 @@ impl TeeUserAuthProvider {
         let Ok(payload) = encode_keymint_delete_key(key_blob) else {
             return;
         };
-        let _ = tee_invoke(self.client, keymint, KEYMINT_CMD_DELETE_KEY, &payload);
+        let _ = self
+            .client
+            .invoke(keymint, KEYMINT_CMD_DELETE_KEY, &payload);
     }
 
     fn delete_gatekeeper_enrollment(&mut self, uid: u64, secure_user_id: u64) {
@@ -424,113 +408,8 @@ impl TeeUserAuthProvider {
         let Ok(payload) = encode_gatekeeper_delete(uid, secure_user_id) else {
             return;
         };
-        let _ = tee_invoke(
-            self.client,
-            gatekeeper,
-            GATEKEEPER_CMD_DELETE_USER,
-            &payload,
-        );
+        let _ = self
+            .client
+            .invoke(gatekeeper, GATEKEEPER_CMD_DELETE_USER, &payload);
     }
-}
-
-fn tee_open_session(client: Channel, uuid: [u8; 16]) -> Result<u64, UserStatus> {
-    let response = tee_call(client, 5, &tee::TeeManagerOpenSessionRequest { uuid })?;
-    let decoded = tee::TeeManagerOpenSessionResponse::decode(&response.bytes, &response.handles)
-        .map_err(|_| UserStatus::Storage)?;
-    if decoded.status != tee::TeeStatus::Ok {
-        return Err(UserStatus::Storage);
-    }
-    Ok(decoded.session_id)
-}
-
-fn tee_invoke(
-    client: Channel,
-    session_id: u64,
-    command_id: u32,
-    payload: &[u8],
-) -> Result<Vec<u8>, UserStatus> {
-    let payload_vmo = Memory::from_bytes(payload).map_err(|_| UserStatus::Storage)?;
-    let call = tee_call(
-        client,
-        7,
-        &tee::TeeManagerInvokeCommandRequest {
-            session_id,
-            command_id,
-            payload: tee::HandleRef { raw: payload_vmo },
-            payload_len: payload.len() as u64,
-        },
-    );
-    let response = call?;
-    let decoded =
-        match tee::TeeManagerInvokeCommandResponse::decode(&response.bytes, &response.handles) {
-            Ok(decoded) => decoded,
-            Err(_) => {
-                for handle in response.handles {
-                    let _ = Memory::close(handle.raw);
-                }
-                return Err(UserStatus::Storage);
-            }
-        };
-    if decoded.status != tee::TeeStatus::Ok {
-        let _ = Memory::close(decoded.response.raw);
-        return Err(UserStatus::AccessDenied);
-    }
-    if decoded.response_len == 0 || decoded.response_len > 64 * 1024 {
-        let _ = Memory::close(decoded.response.raw);
-        return Err(UserStatus::Storage);
-    }
-    let rounded = decoded
-        .response_len
-        .checked_add(4095)
-        .map(|len| len & !4095)
-        .ok_or(UserStatus::Storage)?;
-    let va = Memory::map(decoded.response.raw, rounded, 2).map_err(|_| UserStatus::Storage)?;
-    let bytes =
-        unsafe { core::slice::from_raw_parts(va as *const u8, decoded.response_len as usize) }
-            .to_vec();
-    Memory::unmap(va, rounded).map_err(|_| UserStatus::Storage)?;
-    Memory::close(decoded.response.raw).map_err(|_| UserStatus::Storage)?;
-    Ok(bytes)
-}
-
-struct TeeResponse {
-    bytes: Vec<u8>,
-    handles: Vec<tee::HandleRef>,
-}
-
-fn tee_call<Q: TeeFidlEncode>(
-    channel: Channel,
-    ordinal: u64,
-    request: &Q,
-) -> Result<TeeResponse, UserStatus> {
-    let mut bytes = vec![0; 65500];
-    let mut handles = [tee::HandleRef { raw: 0 }; 8];
-    let encoded = request
-        .encode(&mut bytes, &mut handles)
-        .map_err(|_| UserStatus::Storage)?;
-    let message = Rpc(channel)
-        .call_raw_with_timeout(
-            ordinal,
-            &bytes[..encoded.bytes],
-            &handles[..encoded.handles]
-                .iter()
-                .map(|handle| handle.raw)
-                .collect::<Vec<_>>(),
-            true,
-            TEE_RPC_TIMEOUT_SECONDS,
-        )
-        .map_err(|error| {
-            bexos_userspace::log(&alloc::format!(
-                "usersd: TEE transport failed ordinal={ordinal} error={error:?}\n"
-            ));
-            UserStatus::Storage
-        })?;
-    Ok(TeeResponse {
-        bytes: message.bytes,
-        handles: message
-            .handles
-            .iter()
-            .map(|raw| tee::HandleRef { raw: *raw })
-            .collect(),
-    })
 }

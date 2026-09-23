@@ -103,6 +103,9 @@ impl<P: Ports> Disk<P> {
     }
 }
 impl<P: Ports> BlockDevice for Disk<P> {
+    fn architecture(&self) -> bexos_secure_firmware::Architecture {
+        bexos_secure_firmware::Architecture::X86_64
+    }
     fn sectors(&self) -> u64 {
         self.sectors
     }

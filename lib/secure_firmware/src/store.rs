@@ -6,7 +6,10 @@ use crate::{Architecture, Component, MAX_BUNDLE_BYTES, Verified, verify};
 
 pub const SECTOR_BYTES: usize = 512;
 pub const SLOT_BYTES: u64 = 65 * 1024 * 1024;
-pub const DISK_BYTES: u64 = 4096 + 4 * SLOT_BYTES;
+// QEMU's file-backed RAM rounds its mapping to the host page size. Keep the
+// shared medium 16 KiB aligned so the same durable A/B layout works on macOS
+// hosts with 16 KiB pages and on 4 KiB Linux hosts.
+pub const DISK_BYTES: u64 = (4096 + 4 * SLOT_BYTES + 16 * 1024 - 1) & !(16 * 1024 - 1);
 const MAGIC: &[u8; 8] = b"BEXFD001";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -19,6 +22,8 @@ pub enum Error {
 /// The backend must complete each operation before returning, bound waits,
 /// report failed flushes, and preserve queue ownership through monitor transfer.
 pub trait BlockDevice {
+    /// Execution-owner policy, never a value read from the untrusted disk.
+    fn architecture(&self) -> Architecture;
     fn sectors(&self) -> u64;
     fn read(&mut self, sector: u64, output: &mut [u8; SECTOR_BYTES]) -> Result<(), Error>;
     fn write(&mut self, sector: u64, input: &[u8; SECTOR_BYTES]) -> Result<(), Error>;
@@ -83,7 +88,7 @@ fn write_inactive(
     let verified = verify(
         bundle,
         root,
-        Architecture::X86_64,
+        device.architecture(),
         component,
         active.generation,
         floor,
@@ -149,7 +154,7 @@ pub fn load<'a>(
     let verified = verify(
         &scratch[..length],
         root,
-        Architecture::X86_64,
+        device.architecture(),
         component,
         0,
         floor,

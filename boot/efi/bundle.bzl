@@ -1,13 +1,17 @@
 """Saved firmware boundaries: ordinary product builds never compile firmware."""
 def integrated_firmware_bundle():
-    names = ["loader.efi", "monitor.elf", "trusty.elf", "OVMF_CODE.fd", "OVMF_VARS.fd", "boot_root.avbpubkey", "rpmb_dev", "RPMB_DATA", "rollback_loader.efi", "revoked.fd", "development.pem", "trusty.replacement.fw", "hypervisor.replacement.fw", "trusty.candidate.elf", "monitor.policy.elf", "monitor.fault.elf", "monitor.hang.elf", "monitor.successor.elf", "hypervisor.fault.fw", "hypervisor.hang.fw", "hypervisor.successor.fw", "hypervisor.successor_fault.fw"]
+    names = ["loader.efi", "monitor.elf", "trusty.elf", "OVMF_CODE.fd", "OVMF_VARS.fd", "boot_root.avbpubkey", "rpmb_dev", "RPMB_DATA", "rollback_loader.efi", "revoked.fd", "development.pem", "trusty.replacement.fw", "trusty.successor.fw", "trusty.incompatible.fw", "trusty.fault.fw", "trusty.hang.fw", "hypervisor.replacement.fw", "trusty.candidate.elf", "trusty.successor.elf", "trusty.incompatible.elf", "trusty.fault.elf", "trusty.hang.elf", "monitor.policy.elf", "monitor.fault.elf", "monitor.hang.elf", "monitor.successor.elf", "hypervisor.fault.fw", "hypervisor.hang.fw", "hypervisor.successor.fw", "hypervisor.successor_fault.fw"]
     inputs = [
         ":authenticated_nucleus_product", "//secure/monitor:external_nucleus_product",
         "//third_party/trusty:product_x86/lk.elf", "//third_party/ovmf:OVMF_CODE.fd", ":enrolled.fd",
         "//secure/monitor:boot_root", "//third_party/trusty:product_x86/rpmb_dev", "//third_party/trusty:product_x86/RPMB_DATA",
         ":authenticated_rollback_provisioner", ":revoked.fd", ":development.pem",
-        "//secure/monitor:trusty_recovery.fw", "//secure/monitor:monitor_policy_candidate.fw",
-        "//third_party/trusty:built_x86_64_replacement/lk.elf", "//secure/monitor:monitor_policy_candidate",
+        "//secure/monitor:trusty_recovery.fw", "//secure/monitor:trusty.successor.fw",
+        "//secure/monitor:trusty.incompatible.fw", "//secure/monitor:trusty.fault.fw",
+        "//secure/monitor:trusty.hang.fw", "//secure/monitor:monitor_policy_candidate.fw",
+        "//third_party/trusty:built_x86_64_replacement/lk.elf", "//third_party/trusty:built_x86_64_generation3/lk.elf",
+        "//third_party/trusty:built_x86_64_incompatible_state/lk.elf", "//third_party/trusty:built_x86_64_fault/lk.elf",
+        "//third_party/trusty:built_x86_64_hang/lk.elf", "//secure/monitor:monitor_policy_candidate",
         "//secure/monitor:monitor_policy_fault", "//secure/monitor:monitor_policy_hang", "//secure/monitor:monitor_policy_successor",
         "//secure/monitor:monitor_policy_fault.fw", "//secure/monitor:monitor_policy_hang.fw", "//secure/monitor:monitor_policy_successor.fw",
         "//secure/monitor:monitor_successor_fault.fw",

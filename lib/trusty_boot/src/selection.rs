@@ -1,9 +1,9 @@
-//! Root-only x86 firmware selection. A failed mutation exchange is always
+//! Root-only architecture-bound firmware selection. A failed mutation exchange is always
 //! indeterminate until a subsequent authenticated read resolves its outcome.
 use crate::ql::Transport;
 pub use bexos_secure_firmware::selection::{Identity, Operation, Phase, Slot, State};
 use bexos_secure_firmware::selection::{
-    REQUEST_BYTES, STATE_BYTES, query_request, validate_mutation_request,
+    REQUEST_BYTES, STATE_BYTES, query_request_for, validate_mutation_request,
 };
 pub const OPERATION: u32 = 0x8000_0002;
 
@@ -14,8 +14,14 @@ pub enum Error {
     Uncertain,
 }
 pub fn query(transport: &mut impl Transport) -> Result<State, Error> {
+    query_for(transport, bexos_secure_firmware::Architecture::X86_64)
+}
+pub fn query_for(
+    transport: &mut impl Transport,
+    architecture: bexos_secure_firmware::Architecture,
+) -> Result<State, Error> {
     let mut b = [0; STATE_BYTES];
-    b[..REQUEST_BYTES].copy_from_slice(&query_request());
+    b[..REQUEST_BYTES].copy_from_slice(&query_request_for(architecture));
     if transport
         .exchange(OPERATION, REQUEST_BYTES, &mut b)
         .map_err(|_| Error::Unavailable)?
@@ -23,7 +29,7 @@ pub fn query(transport: &mut impl Transport) -> Result<State, Error> {
     {
         return Err(Error::Unavailable);
     }
-    State::decode(&b).map_err(|_| Error::Invalid)
+    State::decode_for(&b, architecture).map_err(|_| Error::Invalid)
 }
 /// The request must be produced by the last authenticated State. Retain these
 /// exact bytes across retry; constructing a new request could repeat a trial.

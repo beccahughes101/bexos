@@ -282,11 +282,84 @@ update_e2e_test(
         boot_data = BOOT_DATA,
         scenario_args = ["firmware_" + mode] + ["$(rootpath //boot/efi:cached/" + part + ")" for part in [
             "hypervisor.fault.fw", "hypervisor.hang.fw", "hypervisor.replacement.fw", "hypervisor.successor.fw", "trusty.replacement.fw", "hypervisor.successor_fault.fw",
+            "trusty.successor.fw", "trusty.incompatible.fw", "trusty.fault.fw", "trusty.hang.fw",
         ]],
         data = ["//boot/efi:cached/" + part for part in [
             "hypervisor.fault.fw", "hypervisor.hang.fw", "hypervisor.replacement.fw", "hypervisor.successor.fw", "trusty.replacement.fw", "hypervisor.successor_fault.fw",
+            "trusty.successor.fw", "trusty.incompatible.fw", "trusty.fault.fw", "trusty.hang.fw",
         ]],
         architectures = ["x86_64"],
+    ) for mode in ["live", "reboot"]
+]
+
+# Run the same replacement transaction against the independently provisioned
+# AuthMgr acceptance product.  The ARM product consumes its own signed TF-A,
+# owner, Trusty, and RPMB bundle; the x86 transition selects the matching EFI
+# bundle and candidate set.
+update_e2e_test(
+    name = "firmware_live_acceptance_e2e_test",
+    boot_data = dict(BOOT_DATA,
+        rpmbd = "//third_party/trusty:acceptance_cached/rpmb_dev",
+        rpmb_template = "//third_party/trusty:acceptance_cached/RPMB_DATA",
+    ),
+    secure_firmware = {
+        "bl1": "//third_party/trusty:acceptance_cached/bl1.bin",
+        "bl2": "//third_party/trusty:acceptance_cached/bl2.bin",
+        "bl31": "//third_party/trusty:acceptance_cached/bl31.bin",
+        "bl32": "//third_party/trusty:acceptance_cached/lk.bin",
+        "bl33": "//third_party/trusty:acceptance_cached/bl33.bin",
+        "certificates": "//third_party/trusty:acceptance_certificates",
+    },
+    trusty_variant = "acceptance",
+    scenario_args = ["firmware_live"] + ["$(rootpath //third_party/trusty:" + part + ".fw)" for part in [
+        "aarch64_generation2_acceptance",
+        "aarch64_generation3_acceptance",
+        "aarch64_incompatible_state_acceptance",
+        "aarch64_fault_acceptance",
+        "aarch64_hang_acceptance",
+    ]],
+    data = ["//third_party/trusty:" + part + ".fw" for part in [
+        "aarch64_generation2_acceptance",
+        "aarch64_generation3_acceptance",
+        "aarch64_incompatible_state_acceptance",
+        "aarch64_fault_acceptance",
+        "aarch64_hang_acceptance",
+    ]],
+    x86_scenario_args = ["firmware_live"] + ["$(rootpath //boot/efi:cached/" + part + ")" for part in [
+        "trusty.replacement.fw",
+        "trusty.successor.fw",
+        "trusty.incompatible.fw",
+        "trusty.fault.fw",
+        "trusty.hang.fw",
+    ]],
+    x86_data = ["//boot/efi:cached/" + part for part in [
+        "trusty.replacement.fw",
+        "trusty.successor.fw",
+        "trusty.incompatible.fw",
+        "trusty.fault.fw",
+        "trusty.hang.fw",
+    ]],
+)
+
+[
+    update_e2e_test(
+        name = "firmware_" + mode + "_arm_e2e_test",
+        boot_data = BOOT_DATA,
+        scenario_args = ["firmware_" + mode] + ["$(rootpath //third_party/trusty:" + part + ".fw)" for part in [
+            "aarch64_generation2",
+            "aarch64_generation3",
+            "aarch64_incompatible_state",
+            "aarch64_fault",
+            "aarch64_hang",
+        ]],
+        data = ["//third_party/trusty:" + part + ".fw" for part in [
+            "aarch64_generation2",
+            "aarch64_generation3",
+            "aarch64_incompatible_state",
+            "aarch64_fault",
+            "aarch64_hang",
+        ]],
+        architectures = ["aarch64"],
     ) for mode in ["live", "reboot"]
 ]
 

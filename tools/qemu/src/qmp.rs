@@ -70,6 +70,43 @@ pub fn change_serial(control: &Path, device: &str, endpoint: Option<&Path>) -> R
     )
 }
 
+pub fn transfer_serial(
+    control: &Path,
+    boot_device: &str,
+    runtime_device: &str,
+    endpoint: &Path,
+) -> Result<(), String> {
+    let socket = UnixStream::connect(control).map_err(|e| format!("connect QMP transfer: {e}"))?;
+    socket
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .map_err(|e| e.to_string())?;
+    socket
+        .set_write_timeout(Some(Duration::from_secs(5)))
+        .map_err(|e| e.to_string())?;
+    let mut stream = BufReader::new(socket);
+    if receive(&mut stream)?.get("QMP").is_none() {
+        return Err("missing transfer QMP greeting".into());
+    }
+    execute(&mut stream, "qmp_capabilities", json!({}))?;
+    execute(&mut stream, "stop", json!({}))?;
+    execute(
+        &mut stream,
+        "chardev-change",
+        json!({"id":boot_device,"backend":{"type":"null","data":{}}}),
+    )?;
+    let backend = json!({"type":"socket","data":{"addr":{"type":"unix","data":{"path":endpoint}},"server":false,"reconnect-ms":100}});
+    execute(
+        &mut stream,
+        "chardev-change",
+        json!({"id":runtime_device,"backend":backend}),
+    )?;
+    // chardev-change completes after publishing the backend, while the Unix
+    // connect and virtio port-open event run asynchronously on QEMU's main
+    // loop. Keep vCPUs paused while that event becomes visible to the guest.
+    std::thread::sleep(Duration::from_millis(250));
+    execute(&mut stream, "cont", json!({}))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

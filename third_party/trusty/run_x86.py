@@ -99,7 +99,7 @@ def main():
     mode.add_argument('--firmware-recovery', action='store_true')
     mode.add_argument('--trusty-recovery', action='store_true')
     parser.add_argument('--timeout', type=int, default=600)
-    parser.add_argument('--memory-mib', type=int, choices=[1024, 2048], default=1024)
+    parser.add_argument('--memory-mib', type=int, choices=[1024, 2048, 3072], default=1024)
     parser.add_argument('--disk', type=Path)
     parser.add_argument('--marker', action='append', default=[])
     parser.add_argument('--nucleus', action='store_true')

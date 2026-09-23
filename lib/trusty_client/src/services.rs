@@ -351,6 +351,9 @@ pub fn encode_authmgr_raw_route(token: &[u8]) -> TrustyResult<Vec<u8>> {
 pub const ORCHESTRATOR_CMD_MARK_COMPONENT_FAILED: u32 = 0x200;
 pub const ORCHESTRATOR_CMD_GET_ACTIVE_COMPONENT: u32 = 0x201;
 pub const ORCHESTRATOR_CMD_GET_KERNEL_SLOT: u32 = 0x202;
+pub const ORCHESTRATOR_CMD_GET_TRUSTY_GENERATION: u32 = 0x203;
+pub const ORCHESTRATOR_CMD_GET_MIGRATION_ABI: u32 = 0x204;
+pub const ORCHESTRATOR_CMD_GET_FIXTURE_MODE: u32 = 0x205;
 
 pub fn encode_orchestrator_request(command: u32, component: u32) -> TrustyResult<[u8; 16]> {
     if !matches!(
@@ -358,6 +361,9 @@ pub fn encode_orchestrator_request(command: u32, component: u32) -> TrustyResult
         ORCHESTRATOR_CMD_MARK_COMPONENT_FAILED
             | ORCHESTRATOR_CMD_GET_ACTIVE_COMPONENT
             | ORCHESTRATOR_CMD_GET_KERNEL_SLOT
+            | ORCHESTRATOR_CMD_GET_TRUSTY_GENERATION
+            | ORCHESTRATOR_CMD_GET_MIGRATION_ABI
+            | ORCHESTRATOR_CMD_GET_FIXTURE_MODE
     ) {
         return Err(TrustyWireError::InvalidArgs);
     }
@@ -366,6 +372,18 @@ pub fn encode_orchestrator_request(command: u32, component: u32) -> TrustyResult
     out[4..8].copy_from_slice(&command.to_le_bytes());
     out[8..12].copy_from_slice(&component.to_le_bytes());
     Ok(out)
+}
+
+pub fn decode_orchestrator_value(bytes: &[u8]) -> TrustyResult<u64> {
+    if bytes.len() != 16
+        || u32::from_le_bytes(bytes[..4].try_into().unwrap()) != 1
+        || u32::from_le_bytes(bytes[4..8].try_into().unwrap()) != 0
+    {
+        return Err(TrustyWireError::InvalidResponse);
+    }
+    let low = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as u64;
+    let high = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as u64;
+    Ok(low | (high << 32))
 }
 
 pub fn decode_orchestrator_response(bytes: &[u8]) -> TrustyResult<u32> {

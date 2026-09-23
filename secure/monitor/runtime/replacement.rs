@@ -230,7 +230,13 @@ pub unsafe fn request(
                 if !candidate.sealed {
                     return Err(Status::InvalidArgs);
                 }
-                if candidate.component == Component::Trusty && mode != protocol::ON_REBOOT {
+                let component = match candidate.component {
+                    Component::Trusty => protocol::TRUSTY,
+                    Component::Hypervisor => protocol::HYPERVISOR,
+                };
+                let capability =
+                    protocol::activation_capability(component, mode).ok_or(Status::InvalidArgs)?;
+                if activation::query(protocol::QUERY_CAPABILITIES)? & capability == 0 {
                     return Err(Status::Unsupported);
                 }
                 if candidate.activation.is_some() {

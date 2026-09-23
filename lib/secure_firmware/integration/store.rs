@@ -58,6 +58,7 @@ fn reused_upload_allocation_still_requires_complete_authenticated_readback() {
 }
 #[derive(Clone, Default)]
 struct Device {
+    architecture: Option<bexos_secure_firmware::Architecture>,
     durable: BTreeMap<u64, [u8; SECTOR_BYTES]>,
     pending: BTreeMap<u64, [u8; SECTOR_BYTES]>,
     operation: usize,
@@ -76,6 +77,10 @@ impl Device {
     }
 }
 impl BlockDevice for Device {
+    fn architecture(&self) -> bexos_secure_firmware::Architecture {
+        self.architecture
+            .unwrap_or(bexos_secure_firmware::Architecture::X86_64)
+    }
     fn sectors(&self) -> u64 {
         store::DISK_BYTES / SECTOR_BYTES as u64
     }
@@ -252,4 +257,62 @@ fn readback_corruption_and_bad_signatures_cannot_publish_an_installation() {
         disk.operation, 0,
         "unauthenticated candidate touched firmware disk"
     );
+}
+
+#[test]
+fn arm_slots_authenticate_arm_images_and_reject_cross_architecture_before_writes() {
+    use bexos_secure_firmware::Architecture;
+    let arm_bundle = include_bytes!(env!("ARM_TEST_FIRMWARE"));
+    let mut disk = Device {
+        architecture: Some(Architecture::Aarch64),
+        ..Device::default()
+    };
+    let mut scratch = vec![0; arm_bundle.len()];
+    let image = store::install(
+        &mut disk,
+        Component::Trusty,
+        Identity::INITIAL,
+        arm_bundle,
+        ROOT,
+        1,
+        &mut scratch,
+    )
+    .unwrap();
+    assert_eq!(image.generation, 2);
+    assert_eq!(
+        store::load(&mut disk, Component::Trusty, image, ROOT, 1, &mut scratch)
+            .unwrap()
+            .generation,
+        2
+    );
+    let before = disk.durable.clone();
+    assert_eq!(
+        store::install(
+            &mut disk,
+            Component::Hypervisor,
+            Identity::INITIAL,
+            BUNDLE,
+            ROOT,
+            1,
+            &mut scratch
+        ),
+        Err(Error::Image)
+    );
+    assert_eq!(disk.durable, before);
+    let mut x86 = Device::default();
+    assert_eq!(
+        store::install(
+            &mut x86,
+            Component::Trusty,
+            Identity::INITIAL,
+            arm_bundle,
+            ROOT,
+            1,
+            &mut scratch
+        ),
+        Err(Error::Image)
+    );
+    assert_eq!(x86.operation, 0);
+    disk.architecture = Some(Architecture::X86_64);
+    assert!(store::load(&mut disk, Component::Trusty, image, ROOT, 1, &mut scratch).is_err());
 }

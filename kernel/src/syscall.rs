@@ -1108,18 +1108,9 @@ fn route(
                     bexos_kernel_core::kernel_services::tee::SmcResult {
                         status: bexos_kernel_core::kernel_services::KernelServiceStatus::Ok,
                         regs: {
-                            #[cfg(target_arch = "x86_64")]
-                            {
-                                match crate::secure_memory::authorize(rt, invocation.regs) {
-                                    Ok(registers) => {
-                                        crate::arch::CurrentArch::invoke_smc(registers)
-                                    }
-                                    Err(status) => status.registers(0),
-                                }
-                            }
-                            #[cfg(not(target_arch = "x86_64"))]
-                            {
-                                crate::arch::CurrentArch::invoke_smc(invocation.regs)
+                            match crate::secure_memory::authorize(rt, invocation.regs) {
+                                Ok(registers) => crate::arch::CurrentArch::invoke_smc(registers),
+                                Err(status) => status.registers(0),
                             }
                         },
                     }

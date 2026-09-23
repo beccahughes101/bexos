@@ -24,7 +24,7 @@ rust_library(
         "//lib/update:update",
         "//lib/userspace",
         "@crates//:tokio",
-    ] + guest_select(["//drivers/d1/serial/arm/pl011:uart"], []),
+    ],
 )
 
 std_service_binary(
@@ -51,7 +51,7 @@ std_service_binary(
         "//lib/trusty_client",
         "//lib/update:update",
         "@crates//:tokio",
-    ] + guest_select(["//drivers/d1/serial/arm/pl011:uart"], []),
+    ],
 )
 
 rust_test(
@@ -100,6 +100,6 @@ std_service_binary(
         "//lib/trusty_client",
         "//lib/update:update",
         "@crates//:tokio",
-    ] + guest_select(["//drivers/d1/serial/arm/pl011:uart"], []),
+    ],
 )
 app_archive(name = "replacement_archive", manifest = ":package_manifest", entries = {"bin/debugd": ":replacement_elf"}, compression = "zstd")

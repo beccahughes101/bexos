@@ -1,7 +1,5 @@
 use alloc::vec::Vec;
 
-#[cfg(not(bexos_arch_x86_64))]
-use bexos_d1_uart::{Pl011Uart, UartMmio};
 use bexos_debug_wire::{Frame, WireError, parse_frame};
 
 pub trait ByteTransport {
@@ -18,43 +16,6 @@ pub trait ByteTransport {
         0
     }
     fn write_bytes(&mut self, bytes: &[u8]) {
-        for byte in bytes {
-            self.write_byte(*byte);
-        }
-    }
-}
-
-#[cfg(not(bexos_arch_x86_64))]
-pub struct UartByteTransport<M> {
-    uart: Pl011Uart<M>,
-}
-
-#[cfg(not(bexos_arch_x86_64))]
-impl<M: UartMmio> UartByteTransport<M> {
-    pub const fn new(uart: Pl011Uart<M>) -> Self {
-        Self { uart }
-    }
-}
-
-#[cfg(not(bexos_arch_x86_64))]
-impl<M: UartMmio> ByteTransport for UartByteTransport<M> {
-    fn try_read_byte(&mut self) -> Option<u8> {
-        self.uart.try_read_byte().unwrap_or(None)
-    }
-
-    fn read_byte(&mut self) -> u8 {
-        self.uart.read_byte_poll().unwrap()
-    }
-
-    fn write_byte(&mut self, byte: u8) {
-        self.uart.write_byte_poll(byte).unwrap();
-    }
-    fn write_bytes(&mut self, bytes: &[u8]) {
-        // Serialize a complete frame with kernel/userspace logging on PL011.
-        // The MMIO fallback preserves compatibility with older ARM kernels.
-        if bexos_userspace::syscall::console_frame(bytes).is_ok() {
-            return;
-        }
         for byte in bytes {
             self.write_byte(*byte);
         }

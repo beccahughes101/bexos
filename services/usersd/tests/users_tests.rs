@@ -5,6 +5,8 @@ use bexos_usersd::token_cache::{AuthStateChange, invalidate_for_change, retain_u
 use bexos_usersd::{auth::RuntimeUserAuthProvider, migration::Runtime, service::UsersdService};
 use bexos_userspace::{Channel, live_migration::State};
 
+mod auth_transport_tests;
+
 #[test]
 fn secure_auth_adopts_the_already_bound_startup_endpoint() {
     let auth = bexos_usersd::auth::TeeUserAuthProvider::connect(Channel(321)).unwrap();

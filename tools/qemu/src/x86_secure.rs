@@ -1,15 +1,9 @@
 //! Integrated EFI/SVM launch and boot-to-normal-world RPMB ownership handoff.
 use super::{ManagedQemuChild, QemuDevice};
 use std::fs;
-use std::io::{Read, Write};
-use std::net::Shutdown;
-use std::os::fd::OwnedFd;
-use std::os::unix::net::UnixStream;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{ChildStdout, Command, Stdio};
-use std::thread::{self, JoinHandle};
-#[path = "firmware_disk.rs"]
-mod firmware_disk;
+use std::process::{Command, Stdio};
 
 #[derive(Clone, Debug)]
 pub struct X86SecureFirmware {
@@ -50,7 +44,7 @@ pub fn spawn(
         .ok_or("missing x86 firmware")?;
     let work = &device.workdir;
     let firmware_disk = work.join("firmware.raw");
-    firmware_disk::prepare(&firmware_disk)?;
+    super::firmware_disk::prepare(&firmware_disk)?;
     let esp = work.join("esp");
     let efi = esp.join("EFI/BOOT");
     fs::create_dir_all(&efi).map_err(|e| format!("create EFI system partition: {e}"))?;
@@ -184,9 +178,21 @@ pub fn spawn(
         _idle_serial: None,
         readers: Vec::new(),
         secure_relay: None,
+        arm_rpmb_proxy: None,
     };
     let original = child.qemu.stdout.take().ok_or("missing QEMU stdout")?;
-    let (output, relay) = Relay::start(original, control, socket)?;
+    let (output, relay) = super::rpmb_relay::Relay::start(
+        original,
+        control,
+        socket,
+        super::rpmb_relay::Transfer {
+            boot_device: "rpmb",
+            runtime_device: "normalrpmb",
+            attach_marker: b"monitor-runtime: entering assigned Trusty domain",
+            release_marker: b"monitor-runtime: boot RPMB owner release verified",
+            initially_attached: false,
+        },
+    )?;
     child.qemu.stdout = Some(output);
     child.secure_relay = Some(relay);
     if debug == idle {
@@ -216,88 +222,6 @@ fn stage_loader(source: &Path, destination: &Path) -> std::io::Result<()> {
     result
 }
 
-/// Tee the existing child output through a socket, retaining the ordinary E2E
-/// reader and cleanup paths. The relay controls transport only on root-owned
-/// boot markers, before normal-world execution can emit arbitrary output.
-pub(super) struct Relay {
-    shutdown: UnixStream,
-    thread: Option<JoinHandle<()>>,
-}
-impl Relay {
-    fn start(
-        mut input: impl Read + Send + 'static,
-        control: PathBuf,
-        rpmb: PathBuf,
-    ) -> Result<(ChildStdout, Self), String> {
-        let (output, mut writer) = UnixStream::pair().map_err(|e| e.to_string())?;
-        let shutdown = writer.try_clone().map_err(|e| e.to_string())?;
-        let task = thread::spawn(move || {
-            let mut attached = false;
-            let mut transferred = false;
-            let mut recent = Vec::new();
-            let mut buffer = [0; 4096];
-            while let Ok(count) = input.read(&mut buffer) {
-                if count == 0 {
-                    break;
-                }
-                recent.extend_from_slice(&buffer[..count]);
-                let result = (|| {
-                    if !attached
-                        && super::contains(
-                            &recent,
-                            b"monitor-runtime: entering assigned Trusty domain",
-                        )
-                    {
-                        super::qmp::change_serial(&control, "rpmb", Some(&rpmb))?;
-                        attached = true;
-                    }
-                    if attached
-                        && !transferred
-                        && super::contains(
-                            &recent,
-                            b"monitor-runtime: boot RPMB owner release verified",
-                        )
-                    {
-                        super::qmp::change_serial(&control, "rpmb", None)?;
-                        super::qmp::change_serial(&control, "normalrpmb", Some(&rpmb))?;
-                        transferred = true;
-                    }
-                    Ok::<_, String>(())
-                })();
-                if let Err(error) = result {
-                    let _ = writeln!(writer, "panic: secure QEMU transport setup failed: {error}");
-                    break;
-                }
-                if writer.write_all(&buffer[..count]).is_err() {
-                    break;
-                }
-                if recent.len() > 512 {
-                    recent.drain(..recent.len() - 512);
-                }
-            }
-            // The owner retains a cloned endpoint to interrupt a blocked
-            // writer during cancellation. Explicitly half-close here so that
-            // normal EOF reaches readers before the owner itself is dropped.
-            let _ = writer.shutdown(Shutdown::Write);
-        });
-        Ok((
-            ChildStdout::from(OwnedFd::from(output)),
-            Self {
-                shutdown,
-                thread: Some(task),
-            },
-        ))
-    }
-}
-impl Drop for Relay {
-    fn drop(&mut self) {
-        let _ = self.shutdown.shutdown(Shutdown::Both);
-        if let Some(task) = self.thread.take() {
-            let _ = task.join();
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,34 +243,5 @@ mod tests {
         assert_eq!(fs::read(&destination).unwrap(), b"signed loader");
         assert!(!destination.with_extension("EFI.staged").exists());
         fs::remove_dir_all(directory).unwrap();
-    }
-    #[test]
-    fn relay_eof_does_not_wait_for_owner_drop() {
-        let expected = b"guest completed\n";
-        let (output, relay) = Relay::start(
-            std::io::Cursor::new(expected),
-            PathBuf::new(),
-            PathBuf::new(),
-        )
-        .unwrap();
-        let mut socket = UnixStream::from(OwnedFd::from(output));
-        socket
-            .set_read_timeout(Some(std::time::Duration::from_secs(1)))
-            .unwrap();
-        let mut bytes = Vec::new();
-        socket.read_to_end(&mut bytes).unwrap();
-        assert_eq!(bytes, expected);
-        drop(relay);
-    }
-    #[test]
-    fn cancellation_releases_a_backpressured_relay() {
-        let (_output, relay) = Relay::start(
-            std::io::Cursor::new(vec![b'x'; 1024 * 1024]),
-            PathBuf::new(),
-            PathBuf::new(),
-        )
-        .unwrap();
-        // Keep the consumer alive without reading while canceling its writer.
-        drop(relay);
     }
 }

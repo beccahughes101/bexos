@@ -1,0 +1,76 @@
+load("@rules_rust//rust:defs.bzl", "rust_static_library")
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "aarch64_layout",
+    srcs = ["layout.py", "qemu_aarch64.prototxt"],
+    outs = ["qemu_aarch64.h", "qemu_aarch64.ld", "qemu_aarch64.rs"],
+    cmd = "python3 -B $(location layout.py) $(location qemu_aarch64.prototxt) $(location qemu_aarch64.h) $(location qemu_aarch64.ld) $(location qemu_aarch64.rs)",
+)
+
+genrule(
+    name = "memory_probe",
+    srcs = ["memory_probe.S", "memory_probe.ld", ":qemu_aarch64.h"],
+    outs = ["memory_probe.bin"],
+    tools = ["@llvm//tools:clang", "@llvm//tools:ld.lld", "@llvm//tools:llvm-objcopy"],
+    cmd = "$(location @llvm//tools:clang) --target=aarch64-none-elf -march=armv8.4-a -include $(location :qemu_aarch64.h) -c $(location memory_probe.S) -o $(@D)/memory_probe.o && $(location @llvm//tools:ld.lld) -T $(location memory_probe.ld) $(@D)/memory_probe.o -o $(@D)/memory_probe.elf && $(location @llvm//tools:llvm-objcopy) -O binary $(@D)/memory_probe.elf $@",
+)
+
+genrule(
+    name = "owner_probe",
+    srcs = ["owner_probe.S", "owner_probe.ld", ":qemu_aarch64.h"],
+    outs = ["owner_probe.bin", "owner_probe.elf"],
+    tools = ["@llvm//tools:clang", "@llvm//tools:ld.lld", "@llvm//tools:llvm-objcopy"],
+    cmd = "$(location @llvm//tools:clang) --target=aarch64-none-elf -march=armv8.4-a -include $(location :qemu_aarch64.h) -c $(location owner_probe.S) -o $(@D)/owner_probe.o && $(location @llvm//tools:ld.lld) -T $(location owner_probe.ld) $(@D)/owner_probe.o -o $(location owner_probe.elf) && $(location @llvm//tools:llvm-objcopy) -O binary $(location owner_probe.elf) $(location owner_probe.bin)",
+)
+
+genrule(
+    name = "arm_owner_container",
+    srcs = ["arm_owner.S", "arm_owner.ld", ":qemu_aarch64.h", ":arm_owner_core", "//third_party/trusty:cached_aarch64_payload"],
+    outs = ["arm_owner.bin", "arm_owner.elf"],
+    tools = ["@llvm//tools:clang", "@llvm//tools:ld.lld", "@llvm//tools:llvm-objcopy"],
+    cmd = "sed 's|[.]incbin TRUSTY_IMAGE|.incbin \"$(location //third_party/trusty:cached_aarch64_payload)\"|' $(location arm_owner.S) > $(@D)/arm_owner.generated.S && " +
+          "$(location @llvm//tools:clang) --target=aarch64-none-elf -march=armv8.4-a -include $(location :qemu_aarch64.h) -c $(@D)/arm_owner.generated.S -o $(@D)/arm_owner.o && " +
+          "$(location @llvm//tools:ld.lld) --gc-sections -T $(location arm_owner.ld) $(@D)/arm_owner.o $(location :arm_owner_core) -o $(location arm_owner.elf) && " +
+          "$(location @llvm//tools:llvm-objcopy) -O binary $(location arm_owner.elf) $(location arm_owner.bin)",
+)
+
+rust_static_library(
+    name = "arm_owner_core",
+    srcs = ["arm_owner_core.rs", "arm_persistent.rs"],
+    compile_data = [":qemu_aarch64.rs", "//secure/monitor:boot_root"],
+    crate_name = "bexos_arm_owner_core",
+    edition = "2024",
+    platform = "//build/platforms:secure_aarch64",
+    rustc_env = {
+        "BEXOS_ARM_OWNER_LAYOUT": "$(execpath :qemu_aarch64.rs)",
+        "BEXOS_ARM_OWNER_ROOT": "$(execpath //secure/monitor:boot_root)",
+    },
+    rustc_flags = ["-C", "panic=abort", "-C", "relocation-model=pic"],
+    deps = ["//lib/secure_firmware", "//lib/secure_monitor_abi", "@crates__blake3-1.8.2//:blake3_no_std"],
+)
+
+sh_test(
+    name = "memory_probe_test",
+    srcs = ["memory_probe_test.sh"],
+    args = ["$(rootpath memory_probe_test.py)", "$(rootpath //third_party/qemu:secure_aarch64)", "$(rootpath :memory_probe)"],
+    data = ["memory_probe_test.py", "//third_party/qemu:secure_aarch64", ":memory_probe"],
+    tags = ["manual", "requires-qemu"],
+    timeout = "short",
+)
+
+sh_test(
+    name = "owner_probe_test",
+    srcs = ["owner_probe_test.sh"],
+    args = ["$(rootpath owner_probe_test.py)", "$(rootpath //third_party/qemu:secure_aarch64)", "$(rootpath :owner_probe.bin)"],
+    data = ["owner_probe_test.py", "//third_party/qemu:secure_aarch64", ":owner_probe.bin"],
+    tags = ["manual", "requires-qemu"],
+    timeout = "short",
+)
+
+sh_test(
+    name = "layout_test",
+    srcs = ["layout_test.sh"],
+    data = ["layout_test.py", "layout.py", "qemu_aarch64.prototxt"],
+)

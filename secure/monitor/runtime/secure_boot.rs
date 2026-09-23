@@ -6,13 +6,35 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 #[unsafe(link_section = ".resident.recovery")]
 static FENCED: AtomicBool = AtomicBool::new(false);
+#[unsafe(link_section = ".resident.recovery")]
+static mut FENCED_BANK: u64 = 0;
 #[unsafe(link_section = ".resident.trial_uart")]
 static mut TRIAL_UART: Uart = Uart::new();
 
+#[cfg(all(feature = "resident_nucleus", feature = "secure_product"))]
+pub fn begin_live_trial(bank: u64) {
+    unsafe {
+        TRIAL_UART = Uart::new();
+        FENCED_BANK = bank;
+    }
+    FENCED.store(true, Ordering::Release);
+}
+
+#[cfg(all(feature = "resident_nucleus", feature = "secure_product"))]
+pub fn finish_live_trial() {
+    FENCED.store(false, Ordering::Release);
+    unsafe {
+        FENCED_BANK = 0;
+    }
+}
+
 /// Parse an entire request before forwarding read-only RPMB traffic. A trial
 /// can demonstrate real storage health without programming or changing RPMB.
-pub fn fenced_rpmb_port(port: u16, input: bool, value: u8) -> Option<u8> {
-    if FENCED.load(Ordering::Acquire) && (0x2f8..=0x2ff).contains(&port) {
+pub fn fenced_rpmb_port(bank: u64, port: u16, input: bool, value: u8) -> Option<u8> {
+    if FENCED.load(Ordering::Acquire)
+        && bank == unsafe { FENCED_BANK }
+        && (0x2f8..=0x2ff).contains(&port)
+    {
         Some(
             unsafe {
                 (&mut *core::ptr::addr_of_mut!(TRIAL_UART)).port(

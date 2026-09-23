@@ -25,11 +25,13 @@ pub fn prepare_bootstrap(required: bool, max_cpus: u32) -> bool {
         );
         return false;
     }
+    crate::log_line("kernel: Trusty API negotiated");
     let capacity = crate::arch::CurrentArch::invoke_smc([GET_SMP_MAX_CPUS, 0, 0, 0, 0, 0, 0, 0])[0];
     assert!(
         capacity >= u64::from(max_cpus) && capacity <= 64,
         "Trusty firmware CPU capacity {capacity} cannot boot {max_cpus} CPUs; refresh firmware with bazel run //third_party/trusty:refresh_image"
     );
+    crate::log_line("kernel: Trusty CPU capacity verified");
     true
 }
 

@@ -98,7 +98,11 @@ pub fn enable_user_access_protection(features: KernelFeatureState) {
 
 pub fn invoke_smc(regs: [u64; 8]) -> [u64; 8] {
     let _interrupts = interrupts::secure::CallGuard::enter();
-    let mut x0 = regs[0];
+    let mut x0 = if regs[0] == bexos_secure_monitor_abi::HEADER {
+        bexos_secure_monitor_abi::AARCH64_FIRMWARE_FID
+    } else {
+        regs[0]
+    };
     let mut x1 = regs[1];
     let mut x2 = regs[2];
     let mut x3 = regs[3];

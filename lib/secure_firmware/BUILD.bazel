@@ -17,8 +17,8 @@ rust_test(
     srcs = ["integration/selection.rs"],
     edition = "2024",
     deps = [":secure_firmware"],
-    compile_data = ["//secure/orchestrator/trusty:boot_selection_records"],
-    rustc_env = {"SELECTION_RECORDS": "$(execpath //secure/orchestrator/trusty:boot_selection_records)"},
+    compile_data = ["//secure/orchestrator/trusty:boot_selection_records", "//secure/orchestrator/trusty:boot_selection_records_aarch64"],
+    rustc_env = {"SELECTION_RECORDS": "$(execpath //secure/orchestrator/trusty:boot_selection_records)", "ARM_SELECTION_RECORDS": "$(execpath //secure/orchestrator/trusty:boot_selection_records_aarch64)"},
 )
 genrule(
     name = "storage_test_payload",
@@ -40,6 +40,22 @@ rust_test(
     srcs = ["integration/store.rs"],
     edition = "2024",
     deps = [":secure_firmware"],
-    compile_data = [":storage_test.fw", ":storage_test.avbpubkey"],
-    rustc_env = {"TEST_FIRMWARE": "$(execpath :storage_test.fw)", "TEST_ROOT": "$(execpath :storage_test.avbpubkey)"},
+    compile_data = [":storage_test.fw", ":storage_test.avbpubkey", ":storage_test_aarch64.fw"],
+    rustc_env = {"TEST_FIRMWARE": "$(execpath :storage_test.fw)", "TEST_ROOT": "$(execpath :storage_test.avbpubkey)", "ARM_TEST_FIRMWARE": "$(execpath :storage_test_aarch64.fw)"},
+)
+
+genrule(
+    name = "storage_test_payload_aarch64",
+    testonly = True,
+    srcs = ["integration/fixture.py"],
+    outs = ["storage_test_aarch64.elf"],
+    cmd = "python3 -B $(location integration/fixture.py) $@ aarch64",
+)
+genrule(
+    name = "storage_test_firmware_aarch64",
+    testonly = True,
+    srcs = [":storage_test_payload_aarch64", "//device/virtual/qemu/base:keys/avb_dev_rsa_private.pem"],
+    tools = ["//tools/image:vbmeta"],
+    outs = ["storage_test_aarch64.fw", "storage_test_aarch64.avbpubkey"],
+    cmd = "$(location //tools/image:vbmeta) --firmware $(location //device/virtual/qemu/base:keys/avb_dev_rsa_private.pem) $(location storage_test_aarch64.fw) $(location storage_test_aarch64.avbpubkey) 2 aarch64 trusty $(location :storage_test_payload_aarch64)",
 )

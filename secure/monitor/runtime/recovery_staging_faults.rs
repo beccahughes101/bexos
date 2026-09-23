@@ -16,6 +16,9 @@ impl<'a, D> Disk<'a, D> {
     }
 }
 impl<D: BlockDevice> BlockDevice for Disk<'_, D> {
+    fn architecture(&self) -> bexos_secure_firmware::Architecture {
+        self.inner.architecture()
+    }
     fn sectors(&self) -> u64 {
         self.inner.sectors()
     }

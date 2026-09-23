@@ -8,7 +8,10 @@ pub mod secure;
 
 const GICD_BASE: usize = 0x0800_0000;
 const GICC_BASE: usize = 0x0801_0000;
-const TIMER_IRQ: u32 = 30;
+// Trusty owns the non-secure physical timer PPI (30) while running at S-EL1.
+// The normal-world kernel uses the virtual timer PPI so both schedulers retain
+// independent deadlines across secure-world entry and live replacement.
+const TIMER_IRQ: u32 = 27;
 const SCHEDULER_SGI: u32 = 1;
 
 const GICD_CTLR: usize = 0x000;

@@ -1,4 +1,5 @@
 load("//boot/multiboot:boot_image.bzl", "multiboot_image")
+load(":arm_bundle.bzl", "arm_firmware_image")
 load(":x86_bundle.bzl", "x86_firmware_bundle")
 load(":firmware.bzl", "trusty_firmware")
 load(":host_tools.bzl", "trusty_host_tools")
@@ -174,6 +175,17 @@ genrule(
     cmd = "$(location :image_bundle_tool) extract $(@D) $(SRCS)",
 )
 
+# The saved ARM `lk.bin` is the complete signed S-EL2 container. Owner-only
+# link checks need the raw position-independent Trusty payload from `lk.elf`
+# so they cannot recursively embed an earlier owner inside a new one.
+genrule(
+    name = "cached_aarch64_payload",
+    srcs = [":lk.elf"],
+    outs = ["cached_payload/lk.bin"],
+    tools = ["@llvm//tools:llvm-objcopy"],
+    cmd = "$(location @llvm//tools:llvm-objcopy) -O binary $(location :lk.elf) $@",
+)
+
 genrule(
     name = "built_authmgr_acceptance_image",
     tags = ["manual"],
@@ -207,14 +219,122 @@ filegroup(name = "acceptance_certificates", srcs = [":acceptance_cached/" + name
     "nt_fw_content.crt", "nt_fw_key.crt", "soc_fw_content.crt", "soc_fw_key.crt", "tb_fw.crt", "tos_fw_content.crt", "tos_fw_key.crt", "trusted_key.crt",
 ]])
 
+trusty_firmware(name = "trusty_aarch64_generation2_firmware", output_dir = "built_aarch64_generation2", architecture = "aarch64", generation_config = "configs/aarch64_generation2.prototxt")
+trusty_firmware(name = "trusty_aarch64_generation3_firmware", output_dir = "built_aarch64_generation3", architecture = "aarch64", generation_config = "configs/aarch64_generation3.prototxt")
+trusty_firmware(name = "trusty_aarch64_incompatible_state_firmware", output_dir = "built_aarch64_incompatible_state", architecture = "aarch64", generation_config = "configs/aarch64_incompatible_state.prototxt")
+trusty_firmware(name = "trusty_aarch64_fault_firmware", output_dir = "built_aarch64_fault", architecture = "aarch64", generation_config = "configs/aarch64_fault.prototxt")
+trusty_firmware(name = "trusty_aarch64_hang_firmware", output_dir = "built_aarch64_hang", architecture = "aarch64", generation_config = "configs/aarch64_hang.prototxt")
+trusty_firmware(name = "trusty_aarch64_generation2_acceptance_firmware", output_dir = "built_aarch64_generation2_acceptance", acceptance = True, architecture = "aarch64", generation_config = "configs/aarch64_generation2.prototxt")
+trusty_firmware(name = "trusty_aarch64_generation3_acceptance_firmware", output_dir = "built_aarch64_generation3_acceptance", acceptance = True, architecture = "aarch64", generation_config = "configs/aarch64_generation3.prototxt")
+trusty_firmware(name = "trusty_aarch64_incompatible_state_acceptance_firmware", output_dir = "built_aarch64_incompatible_state_acceptance", acceptance = True, architecture = "aarch64", generation_config = "configs/aarch64_incompatible_state.prototxt")
+trusty_firmware(name = "trusty_aarch64_fault_acceptance_firmware", output_dir = "built_aarch64_fault_acceptance", acceptance = True, architecture = "aarch64", generation_config = "configs/aarch64_fault.prototxt")
+trusty_firmware(name = "trusty_aarch64_hang_acceptance_firmware", output_dir = "built_aarch64_hang_acceptance", acceptance = True, architecture = "aarch64", generation_config = "configs/aarch64_hang.prototxt")
+
+arm_firmware_image(name = "aarch64_generation2", firmware = ":trusty_aarch64_generation2_firmware", candidate = ":built_aarch64_generation2/lk.elf", config = "configs/aarch64_generation2.prototxt", generation = 2, variant = "trusty_generation2")
+arm_firmware_image(name = "aarch64_generation3", firmware = ":trusty_aarch64_generation3_firmware", candidate = ":built_aarch64_generation3/lk.elf", config = "configs/aarch64_generation3.prototxt", generation = 3, variant = "trusty_generation3")
+arm_firmware_image(name = "aarch64_incompatible_state", firmware = ":trusty_aarch64_incompatible_state_firmware", candidate = ":built_aarch64_incompatible_state/lk.elf", config = "configs/aarch64_incompatible_state.prototxt", generation = 2, variant = "trusty_incompatible_state")
+arm_firmware_image(name = "aarch64_fault", firmware = ":trusty_aarch64_fault_firmware", candidate = ":built_aarch64_fault/lk.elf", config = "configs/aarch64_fault.prototxt", generation = 2, variant = "trusty_fault")
+arm_firmware_image(name = "aarch64_hang", firmware = ":trusty_aarch64_hang_firmware", candidate = ":built_aarch64_hang/lk.elf", config = "configs/aarch64_hang.prototxt", generation = 2, variant = "trusty_hang")
+arm_firmware_image(name = "aarch64_generation2_acceptance", firmware = ":trusty_aarch64_generation2_acceptance_firmware", candidate = ":built_aarch64_generation2_acceptance/lk.elf", config = "configs/aarch64_generation2.prototxt", generation = 2, variant = "authmgr_acceptance_generation2")
+arm_firmware_image(name = "aarch64_generation3_acceptance", firmware = ":trusty_aarch64_generation3_acceptance_firmware", candidate = ":built_aarch64_generation3_acceptance/lk.elf", config = "configs/aarch64_generation3.prototxt", generation = 3, variant = "authmgr_acceptance_generation3")
+arm_firmware_image(name = "aarch64_incompatible_state_acceptance", firmware = ":trusty_aarch64_incompatible_state_acceptance_firmware", candidate = ":built_aarch64_incompatible_state_acceptance/lk.elf", config = "configs/aarch64_incompatible_state.prototxt", generation = 2, variant = "authmgr_acceptance_incompatible_state")
+arm_firmware_image(name = "aarch64_fault_acceptance", firmware = ":trusty_aarch64_fault_acceptance_firmware", candidate = ":built_aarch64_fault_acceptance/lk.elf", config = "configs/aarch64_fault.prototxt", generation = 2, variant = "authmgr_acceptance_fault")
+arm_firmware_image(name = "aarch64_hang_acceptance", firmware = ":trusty_aarch64_hang_acceptance_firmware", candidate = ":built_aarch64_hang_acceptance/lk.elf", config = "configs/aarch64_hang.prototxt", generation = 2, variant = "authmgr_acceptance_hang")
+
+ARM_REPLACEMENT_FIXTURES = [
+    "aarch64_generation2",
+    "aarch64_generation3",
+    "aarch64_incompatible_state",
+    "aarch64_fault",
+    "aarch64_hang",
+    "aarch64_generation2_acceptance",
+    "aarch64_generation3_acceptance",
+    "aarch64_incompatible_state_acceptance",
+    "aarch64_fault_acceptance",
+    "aarch64_hang_acceptance",
+]
+
+sh_test(
+    name = "aarch64_replacement_authentication_test",
+    srcs = ["arm_replacement_artifacts_test.sh"],
+    args = [
+        "$(location //tools/image:vbmeta)",
+        "$(location :aarch64_generation2.avbpubkey)",
+    ] + ["$(location :" + name + ".fw)" for name in ARM_REPLACEMENT_FIXTURES],
+    data = ["//tools/image:vbmeta"] + [":" + name + "_replacement" for name in ARM_REPLACEMENT_FIXTURES],
+    timeout = "eternal",
+)
+
 trusty_firmware(name = "trusty_x86_64_firmware", output_dir = "built_x86_64", architecture = "x86_64")
 trusty_firmware(name = "x86_64_acceptance_firmware", output_dir = "built_x86_64_acceptance", acceptance = True, architecture = "x86_64")
-trusty_firmware(name = "x86_64_replacement_firmware", output_dir = "built_x86_64_replacement", architecture = "x86_64", generation_config = "x86/replacement.prototxt")
+trusty_firmware(name = "x86_64_replacement_firmware", output_dir = "built_x86_64_replacement", architecture = "x86_64", generation_config = "configs/x86_64_generation2.prototxt")
+trusty_firmware(name = "x86_64_generation3_firmware", output_dir = "built_x86_64_generation3", architecture = "x86_64", generation_config = "configs/x86_64_generation3.prototxt")
+trusty_firmware(name = "x86_64_incompatible_state_firmware", output_dir = "built_x86_64_incompatible_state", architecture = "x86_64", generation_config = "configs/x86_64_incompatible_state.prototxt")
+trusty_firmware(name = "x86_64_fault_firmware", output_dir = "built_x86_64_fault", architecture = "x86_64", generation_config = "configs/x86_64_fault.prototxt")
+trusty_firmware(name = "x86_64_hang_firmware", output_dir = "built_x86_64_hang", architecture = "x86_64", generation_config = "configs/x86_64_hang.prototxt")
+trusty_firmware(name = "x86_64_generation2_acceptance_firmware", output_dir = "built_x86_64_generation2_acceptance", acceptance = True, architecture = "x86_64", generation_config = "configs/x86_64_generation2.prototxt")
+trusty_firmware(name = "x86_64_generation3_acceptance_firmware", output_dir = "built_x86_64_generation3_acceptance", acceptance = True, architecture = "x86_64", generation_config = "configs/x86_64_generation3.prototxt")
+trusty_firmware(name = "x86_64_incompatible_state_acceptance_firmware", output_dir = "built_x86_64_incompatible_state_acceptance", acceptance = True, architecture = "x86_64", generation_config = "configs/x86_64_incompatible_state.prototxt")
+trusty_firmware(name = "x86_64_fault_acceptance_firmware", output_dir = "built_x86_64_fault_acceptance", acceptance = True, architecture = "x86_64", generation_config = "configs/x86_64_fault.prototxt")
+trusty_firmware(name = "x86_64_hang_acceptance_firmware", output_dir = "built_x86_64_hang_acceptance", acceptance = True, architecture = "x86_64", generation_config = "configs/x86_64_hang.prototxt")
 
 multiboot_image(name = "x86_64_boot", kernel = ":built_x86_64/lk.elf", trusty = True, output = "x86_64/boot.elf")
 multiboot_image(name = "x86_64_acceptance_boot", kernel = ":built_x86_64_acceptance/lk.elf", trusty = True, output = "x86_64_acceptance/boot.elf")
+multiboot_image(name = "x86_64_generation2_boot", kernel = ":built_x86_64_replacement/lk.elf", trusty = True, output = "x86_64_generation2/boot.elf")
+multiboot_image(name = "x86_64_generation3_boot", kernel = ":built_x86_64_generation3/lk.elf", trusty = True, output = "x86_64_generation3/boot.elf")
+multiboot_image(name = "x86_64_incompatible_state_boot", kernel = ":built_x86_64_incompatible_state/lk.elf", trusty = True, output = "x86_64_incompatible_state/boot.elf")
+multiboot_image(name = "x86_64_fault_boot", kernel = ":built_x86_64_fault/lk.elf", trusty = True, output = "x86_64_fault/boot.elf")
+multiboot_image(name = "x86_64_hang_boot", kernel = ":built_x86_64_hang/lk.elf", trusty = True, output = "x86_64_hang/boot.elf")
+multiboot_image(name = "x86_64_generation2_acceptance_boot", kernel = ":built_x86_64_generation2_acceptance/lk.elf", trusty = True, output = "x86_64_generation2_acceptance/boot.elf")
+multiboot_image(name = "x86_64_generation3_acceptance_boot", kernel = ":built_x86_64_generation3_acceptance/lk.elf", trusty = True, output = "x86_64_generation3_acceptance/boot.elf")
+multiboot_image(name = "x86_64_incompatible_state_acceptance_boot", kernel = ":built_x86_64_incompatible_state_acceptance/lk.elf", trusty = True, output = "x86_64_incompatible_state_acceptance/boot.elf")
+multiboot_image(name = "x86_64_fault_acceptance_boot", kernel = ":built_x86_64_fault_acceptance/lk.elf", trusty = True, output = "x86_64_fault_acceptance/boot.elf")
+multiboot_image(name = "x86_64_hang_acceptance_boot", kernel = ":built_x86_64_hang_acceptance/lk.elf", trusty = True, output = "x86_64_hang_acceptance/boot.elf")
 x86_firmware_bundle(name = "x86_64", firmware = ":trusty_x86_64_firmware", boot = ":x86_64_boot")
 x86_firmware_bundle(name = "x86_64_acceptance", firmware = ":x86_64_acceptance_firmware", boot = ":x86_64_acceptance_boot", acceptance = True)
+x86_firmware_bundle(name = "x86_64_generation2", firmware = ":x86_64_replacement_firmware", boot = ":x86_64_generation2_boot", variant = "trusty_generation2")
+x86_firmware_bundle(name = "x86_64_generation3", firmware = ":x86_64_generation3_firmware", boot = ":x86_64_generation3_boot", variant = "trusty_generation3")
+x86_firmware_bundle(name = "x86_64_incompatible_state", firmware = ":x86_64_incompatible_state_firmware", boot = ":x86_64_incompatible_state_boot", variant = "trusty_incompatible_state")
+x86_firmware_bundle(name = "x86_64_fault", firmware = ":x86_64_fault_firmware", boot = ":x86_64_fault_boot", variant = "trusty_fault")
+x86_firmware_bundle(name = "x86_64_hang", firmware = ":x86_64_hang_firmware", boot = ":x86_64_hang_boot", variant = "trusty_hang")
+x86_firmware_bundle(name = "x86_64_generation2_acceptance", firmware = ":x86_64_generation2_acceptance_firmware", boot = ":x86_64_generation2_acceptance_boot", acceptance = True, variant = "authmgr_acceptance_generation2")
+x86_firmware_bundle(name = "x86_64_generation3_acceptance", firmware = ":x86_64_generation3_acceptance_firmware", boot = ":x86_64_generation3_acceptance_boot", acceptance = True, variant = "authmgr_acceptance_generation3")
+x86_firmware_bundle(name = "x86_64_incompatible_state_acceptance", firmware = ":x86_64_incompatible_state_acceptance_firmware", boot = ":x86_64_incompatible_state_acceptance_boot", acceptance = True, variant = "authmgr_acceptance_incompatible_state")
+x86_firmware_bundle(name = "x86_64_fault_acceptance", firmware = ":x86_64_fault_acceptance_firmware", boot = ":x86_64_fault_acceptance_boot", acceptance = True, variant = "authmgr_acceptance_fault")
+x86_firmware_bundle(name = "x86_64_hang_acceptance", firmware = ":x86_64_hang_acceptance_firmware", boot = ":x86_64_hang_acceptance_boot", acceptance = True, variant = "authmgr_acceptance_hang")
+
+X86_REPLACEMENT_FIXTURES = [
+    ("x86_64_generation2", "trusty_generation2"),
+    ("x86_64_generation3", "trusty_generation3"),
+    ("x86_64_incompatible_state", "trusty_incompatible_state"),
+    ("x86_64_fault", "trusty_fault"),
+    ("x86_64_hang", "trusty_hang"),
+    ("x86_64_generation2_acceptance", "authmgr_acceptance_generation2"),
+    ("x86_64_generation3_acceptance", "authmgr_acceptance_generation3"),
+    ("x86_64_incompatible_state_acceptance", "authmgr_acceptance_incompatible_state"),
+    ("x86_64_fault_acceptance", "authmgr_acceptance_fault"),
+    ("x86_64_hang_acceptance", "authmgr_acceptance_hang"),
+]
+
+sh_test(
+    name = "x86_64_replacement_bundle_test",
+    srcs = ["x86_replacement_bundles_test.sh"],
+    args = [
+        "$(location :image_bundle_tool)",
+        "trusty_generation2", "$(location :x86_64_generation2_built_image)",
+        "trusty_generation3", "$(location :x86_64_generation3_built_image)",
+        "trusty_incompatible_state", "$(location :x86_64_incompatible_state_built_image)",
+        "trusty_fault", "$(location :x86_64_fault_built_image)",
+        "trusty_hang", "$(location :x86_64_hang_built_image)",
+        "authmgr_acceptance_generation2", "$(location :x86_64_generation2_acceptance_built_image)",
+        "authmgr_acceptance_generation3", "$(location :x86_64_generation3_acceptance_built_image)",
+        "authmgr_acceptance_incompatible_state", "$(location :x86_64_incompatible_state_acceptance_built_image)",
+        "authmgr_acceptance_fault", "$(location :x86_64_fault_acceptance_built_image)",
+        "authmgr_acceptance_hang", "$(location :x86_64_hang_acceptance_built_image)",
+    ],
+    data = [":image_bundle_tool"] + [":" + name + "_built_image" for name, _ in X86_REPLACEMENT_FIXTURES],
+    timeout = "eternal",
+)
 
 filegroup(name = "x86_runtime_sources", srcs = glob(["x86/rpmb/**", "x86/monitor/**"]))
 filegroup(name = "x86_acceptance_sources", srcs = glob(["x86/acceptance/**"]))

@@ -66,3 +66,42 @@ fn final_record_must_match_the_mutation_it_acknowledges() {
         }
     }
 }
+
+#[test]
+fn arm_authority_keeps_monitor_reserved_and_binds_every_acknowledgement_to_architecture() {
+    use bexos_secure_firmware::Architecture;
+    let records = include_bytes!(env!("ARM_SELECTION_RECORDS"));
+    let states: Vec<_> = records
+        .chunks_exact(512)
+        .map(|r| State::decode_for(r, Architecture::Aarch64).unwrap())
+        .collect();
+    let image = states[3].committed(Component::Trusty);
+    for (i, op) in [Operation::Stage, Operation::Attempt, Operation::Commit]
+        .into_iter()
+        .enumerate()
+    {
+        let request = states[i].request(op, Component::Trusty, image).unwrap();
+        assert!(states[i + 1].acknowledges(&request));
+        assert!(states[i].request(op, Component::Hypervisor, image).is_err());
+        let mut wrong_arch = request;
+        wrong_arch[12] = 2;
+        assert!(!states[i + 1].acknowledges(&wrong_arch));
+    }
+    for record in records.chunks_exact(512) {
+        assert!(State::decode_for(record, Architecture::X86_64).is_err());
+        assert_eq!(
+            State::decode(record)
+                .unwrap()
+                .committed(Component::Hypervisor),
+            Identity::INITIAL
+        );
+        let mut changed = record.to_vec();
+        changed[96] = 2;
+        assert!(State::decode(&changed).is_err());
+        if record[16] > 1 {
+            let mut changed = record.to_vec();
+            changed[268] = 2;
+            assert!(State::decode(&changed).is_err());
+        }
+    }
+}

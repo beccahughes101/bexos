@@ -1,5 +1,11 @@
-/* X86 boot trials use one TP transaction for both component selections. */
-#if defined(__x86_64__)
+/* Boot trials use one authenticated TP transaction for selection and floors. */
+#if defined(__aarch64__)
+#define BOOT_ARCH 1
+#elif defined(__x86_64__)
+#define BOOT_ARCH 2
+#else
+#error Unsupported replacement architecture
+#endif
 #include "include/bexos_boot_selection.h"
 #include "include/bexos_journal.h"
 #include <lib/storage/storage.h>
@@ -13,7 +19,7 @@ static int legacy(storage_session_t session, const char* name, unsigned componen
     file_handle_t file;
     int rc = storage_open_file(session, &file, name, 0, 0);
     if (rc == ERR_NOT_FOUND) {
-        bexos_journal_initial(record, 2, component);
+        bexos_journal_initial(record, BOOT_ARCH, component);
         return 0;
     }
     if (rc < 0) return rc;
@@ -32,16 +38,23 @@ static uint32_t transact(const uint8_t* request, uint8_t* response) {
     int rc = storage_open_file(session, &file, "replacement.boot.v2", 0, 0);
     if (rc == ERR_NOT_FOUND) {
         uint8_t trusty[96], monitor[96];
-        if (legacy(session, "replacement.trusty.v1", 1, trusty) < 0 ||
-            legacy(session, "replacement.monitor.v1", 2, monitor) < 0 ||
-            !bexos_boot_initial(response, trusty, monitor)) goto done;
+        if (legacy(session, "replacement.trusty.v1", 1, trusty) < 0) goto done;
+        const uint8_t* monitor_record = NULL;
+#if BOOT_ARCH == 2
+        if (legacy(session, "replacement.monitor.v1", 2, monitor) < 0) goto done;
+        monitor_record = monitor;
+#else
+        (void)monitor;
+#endif
+        if (!bexos_boot_initial(response, trusty, monitor_record)) goto done;
     } else if (rc < 0) goto done;
     else {
         opened = true;
         storage_off_t size;
         if (storage_get_file_size(file, &size) < 0 || size != 512 ||
             storage_read(file, 0, response, 512) != 512 ||
-            !bexos_boot_state_valid(response)) goto done;
+            !bexos_boot_state_valid(response) ||
+            bexos_journal_word(response, 12) != BOOT_ARCH) goto done;
     }
     uint8_t next[512];
     status = bexos_boot_next(response, request, next);
@@ -58,7 +71,7 @@ static uint32_t transact(const uint8_t* request, uint8_t* response) {
         unsigned component = bexos_journal_word(request, 24);
         const uint8_t* identity = next+32+(component-1)*56;
         uint8_t compatibility[96];
-        bexos_journal_initial(compatibility, 2, component);
+        bexos_journal_initial(compatibility, BOOT_ARCH, component);
         memcpy(compatibility+20, identity, 4);
         memcpy(compatibility+24, identity+8, 8);
         memcpy(compatibility+32, response+40+(component-1)*56, 8);
@@ -83,7 +96,8 @@ static int on_message(const struct tipc_port* port, handle_t channel, void* cont
     uint8_t request[256], response[512] = {0};
     int received = tipc_recv1(channel, sizeof(request), request, sizeof(request));
     if (received < 0) return received;
-    if (!bexos_boot_request_valid(request, received)) return ERR_NOT_VALID;
+    if (!bexos_boot_request_valid(request, received) ||
+        bexos_journal_word(request, 12) != BOOT_ARCH) return ERR_NOT_VALID;
     uint32_t status = transact(request, response);
     if (status != BEXOS_JOURNAL_OK) {
         memset(response, 0, 512);
@@ -106,4 +120,3 @@ int bexos_boot_selection_add_service(struct tipc_hset* hset) {
     static const struct tipc_srv_ops ops = { .on_message = on_message };
     return tipc_add_service(hset, &port, 1, 1, &ops);
 }
-#endif

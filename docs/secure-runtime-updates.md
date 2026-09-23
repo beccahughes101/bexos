@@ -1,5 +1,9 @@
 # Secure Runtime And Updates
 
+The 2026-09-09 Trusty completion work is recorded in
+[Trusty completion checkpoint](trusty-completion.md). Live Trusty replacement
+remains unimplemented; earlier results below retain their original scope and date.
+
 ## Current secure stack
 
 The complete x86 monitor-replacement and firmware-recovery plan is not yet accepted.

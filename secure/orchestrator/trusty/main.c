@@ -4,6 +4,10 @@
 #include <string.h>
 #include <uapi/err.h>
 
+#ifndef BEXOS_TRUSTY_FIXTURE_MODE
+#define BEXOS_TRUSTY_FIXTURE_MODE 0u
+#endif
+
 static struct bexos_orchestrator_state state;
 int bexos_journal_add_service(struct tipc_hset* hset);
 
@@ -22,6 +26,12 @@ static int on_message(const struct tipc_port* port, handle_t chan, void* ctx) {
 }
 
 int main(void) {
+#if BEXOS_TRUSTY_FIXTURE_MODE == 2
+    __builtin_trap();
+#elif BEXOS_TRUSTY_FIXTURE_MODE == 3
+    static volatile unsigned hang;
+    for (;;) hang++;
+#endif
     static const struct tipc_port_acl acl = { .flags = IPC_PORT_ALLOW_NS_CONNECT };
     static const struct tipc_port port = {
         .name = BEXOS_ORCHESTRATOR_PORT,

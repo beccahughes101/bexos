@@ -205,7 +205,6 @@ pub unsafe extern "C" fn bexos_tee_driver_submit(
             completion.value = u64::from(ctx.info.secure_os_version);
         }
         OP_CORE_STATUS => {
-            #[cfg(target_arch = "x86_64")]
             match firmware::status() {
                 Ok(report) => apply_firmware_report(ctx, report),
                 Err(status) => completion.status = status,
@@ -245,8 +244,12 @@ fn trusty_connect(
     let Some(transport) = ctx.transport.as_mut() else {
         return STATUS_UNAVAILABLE;
     };
-    let Ok(session) = transport.connect(id, request.endpoint.uuid, &port) else {
-        return STATUS_NOT_FOUND;
+    let session = match transport.connect(id, request.endpoint.uuid, &port) {
+        Ok(session) => session,
+        Err(status) => {
+            log_status("QL-TIPC connect", status);
+            return status;
+        }
     };
     ctx.sessions.push(session);
     completion.session_id = id;
@@ -376,6 +379,125 @@ fn trusty_reset(ctx: &mut Context) -> i32 {
     }
 }
 
+fn rebind_live_sessions(ctx: &mut Context, fence_storage_writes: bool) -> Result<(), i32> {
+    let mut retired = ctx.transport.take();
+    #[cfg(target_arch = "aarch64")]
+    if let Some(transport) = retired.as_mut() {
+        transport.retire_after_owner_cutover();
+    }
+    let mut transport = QueuedTipc::create().inspect_err(|status| {
+        log_status("candidate QL-TIPC create", *status);
+    })?;
+    transport.storage_handler = ctx.storage_handler;
+    transport.fence_storage_writes(fence_storage_writes);
+    let mut sessions = ctx.sessions.clone();
+    sessions.sort_by_key(|session| u8::from(session.uuid != STORAGE_UUID));
+    let mut rebound = Vec::with_capacity(sessions.len());
+    for session in sessions {
+        rebound.push(
+            transport
+                .connect(session.id, session.uuid, &session.port)
+                .inspect_err(|status| log_status("retained session rebind", *status))?,
+        );
+    }
+    ctx.sessions = rebound;
+    ctx.transport = Some(transport);
+    drop(retired);
+    Ok(())
+}
+
+#[cfg(target_arch = "aarch64")]
+fn probe_candidate_services(
+    ctx: &mut Context,
+    generation: u64,
+    cutover_started_ms: u64,
+    activation: Option<&firmware::Activation>,
+) -> Result<(), i32> {
+    let within_deadline =
+        || bexos_userspace::live_migration::now_ms().saturating_sub(cutover_started_ms) < 150;
+    if !within_deadline() {
+        return Err(STATUS_TIMED_OUT);
+    }
+    let measured = match activation {
+        Some(activation) => {
+            activation.active_generation(bexos_secure_monitor_abi::firmware::TRUSTY)
+        }
+        None => firmware::active_generation(bexos_secure_monitor_abi::firmware::TRUSTY),
+    };
+    if u64::from(measured.inspect_err(|status| log_status("candidate generation query", *status))?)
+        != generation
+    {
+        syscall::log("tee-driver-trusty: candidate generation measurement mismatch\n");
+        return Err(STATUS_VERIFY_FAILED);
+    }
+    let transport = ctx.transport.as_mut().ok_or(STATUS_UNAVAILABLE)?;
+    let mut opened = Vec::new();
+    for (index, uuid) in [
+        STORAGE_UUID,
+        KEYMINT_UUID,
+        GATEKEEPER_UUID,
+        AVB_UUID,
+        AUTHMGR_BE_UUID,
+        ORCHESTRATOR_UUID,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if ctx.sessions.iter().any(|session| session.uuid == uuid) {
+            continue;
+        }
+        let port = endpoint_port(
+            uuid,
+            &TeeEndpoint {
+                uuid,
+                ..Default::default()
+            },
+        )
+        .ok_or(STATUS_INVALID_ARGS)?;
+        opened.push(
+            transport
+                .connect(u64::MAX - index as u64, uuid, &port)
+                .inspect_err(|status| log_status("candidate required-service connect", *status))?,
+        );
+        if !within_deadline() {
+            return Err(STATUS_TIMED_OUT);
+        }
+    }
+    let orchestrator = if let Some(session) = ctx
+        .sessions
+        .iter()
+        .chain(opened.iter())
+        .find(|session| session.uuid == ORCHESTRATOR_UUID)
+    {
+        session.handle
+    } else {
+        return Err(STATUS_NOT_FOUND);
+    };
+    let mut request = [0u8; 16];
+    request[..4].copy_from_slice(&1u32.to_le_bytes());
+    request[4..8].copy_from_slice(&0x203u32.to_le_bytes());
+    let mut response = [0u8; 16];
+    let count = transport
+        .invoke(orchestrator, &request, &mut response)
+        .inspect_err(|status| log_status("candidate measurement probe", *status))?;
+    let reported = if count == response.len()
+        && u32::from_le_bytes(response[..4].try_into().unwrap()) == 1
+        && u32::from_le_bytes(response[4..8].try_into().unwrap()) == 0
+    {
+        u64::from_le_bytes(response[8..16].try_into().unwrap())
+    } else {
+        return Err(STATUS_VERIFY_FAILED);
+    };
+    for session in opened.into_iter().rev() {
+        transport
+            .close(session.handle)
+            .inspect_err(|status| log_status("candidate service-probe close", *status))?;
+    }
+    (reported == generation && within_deadline())
+        .then_some(())
+        .ok_or(STATUS_VERIFY_FAILED)
+}
+
 fn is_builtin_uuid(uuid: [u8; 16]) -> bool {
     uuid == KEYMINT_UUID
         || uuid == GATEKEEPER_UUID
@@ -438,15 +560,42 @@ fn trusty_probe(ctx: &mut Context) -> Result<TeeDriverInfo, i32> {
     if regs[0] != TRUSTY_API_VERSION_CURRENT {
         return Err(STATUS_UNAVAILABLE);
     }
-    #[cfg(not(target_arch = "x86_64"))]
-    let version = regs[0] as u32;
-    // QL creation below proves a real Trusty reply on x86. Its wire version
-    // is not a secure-OS release number, so retain unknown until reported.
-    #[cfg(target_arch = "x86_64")]
+    // The negotiated transport ABI is not a Trusty firmware generation. Ask
+    // the permanent execution owner on both maintained architectures.
     let version = firmware::active_trusty_generation().unwrap_or(0);
+    #[cfg(target_arch = "aarch64")]
+    let boot_report = firmware::status().inspect_err(|status| {
+        log_status("firmware status", *status);
+    })?;
     if ctx.transport.is_none() {
         ctx.transport =
             Some(QueuedTipc::create().inspect_err(|status| log_status("QL-TIPC create", *status))?);
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        if boot_report.outcome == bexos_secure_monitor_abi::firmware::APPLYING
+            && boot_report.component == bexos_secure_monitor_abi::firmware::TRUSTY
+        {
+            ctx.transport
+                .as_mut()
+                .ok_or(STATUS_UNAVAILABLE)?
+                .fence_storage_writes(true);
+            let readiness_started = bexos_userspace::live_migration::now_ms();
+            probe_candidate_services(ctx, boot_report.generation, readiness_started, None)?;
+            let committed = firmware::resolve(true)?;
+            if committed.outcome != bexos_secure_monitor_abi::firmware::COMMITTED
+                || committed.generation != boot_report.generation
+            {
+                return Err(STATUS_UNAVAILABLE);
+            }
+            ctx.transport
+                .as_mut()
+                .ok_or(STATUS_UNAVAILABLE)?
+                .fence_storage_writes(false);
+            syscall::log(
+                "tee-driver-trusty: reboot trial services accepted and authenticated selection committed\n",
+            );
+        }
     }
     Ok(TeeDriverInfo {
         present: 1,
@@ -468,10 +617,6 @@ fn stage_or_activate_core(ctx: &mut Context, request: &TeeDriverRequest) -> i32 
     if !ctx.probed {
         return STATUS_ACCESS_DENIED;
     }
-    if request.core.generation <= u64::from(ctx.info.anti_rollback_version) {
-        set_update_failed(ctx, request.core.generation, 8);
-        return STATUS_VERIFY_FAILED;
-    }
     if request.op != OP_CORE_ACTIVATE
         || request.core.image.len == 0
         || request.core.image.ptr.is_null()
@@ -492,17 +637,27 @@ fn stage_or_activate_core(ctx: &mut Context, request: &TeeDriverRequest) -> i32 
         set_update_failed(ctx, request.core.generation, 9);
         return STATUS_INVALID_ARGS;
     }
-    if target == b"qemu-aarch64-tee" {
+    if (target == b"qemu-aarch64-tee") != cfg!(target_arch = "aarch64") {
         set_update_failed(ctx, request.core.generation, 9);
-        return STATUS_ACCESS_DENIED;
+        return STATUS_INVALID_ARGS;
     }
-    if !cfg!(target_arch = "x86_64") {
-        set_update_failed(ctx, request.core.generation, 9);
-        return STATUS_UNAVAILABLE;
-    }
-    if target == b"qemu-x86_64-tee" && request.core.activation != 2 {
-        set_update_failed(ctx, request.core.generation, 9);
-        return STATUS_UNAVAILABLE;
+    // Component floors are independent. A newer Trusty must not prevent a
+    // valid monitor update whose generation exceeds the monitor's own floor.
+    let component = if target == b"qemu-x86_64-monitor" {
+        bexos_secure_monitor_abi::firmware::HYPERVISOR
+    } else {
+        bexos_secure_monitor_abi::firmware::TRUSTY
+    };
+    let active = match firmware::active_generation(component) {
+        Ok(active) if active != 0 => active,
+        _ => {
+            set_update_failed(ctx, request.core.generation, 9);
+            return STATUS_UNAVAILABLE;
+        }
+    };
+    if request.core.generation <= active {
+        set_update_failed(ctx, request.core.generation, 8);
+        return STATUS_VERIFY_FAILED;
     }
     if request.core.image.len as u64 > bexos_secure_monitor_abi::firmware::MAX_BUNDLE_BYTES
         || request.core.generation > u64::from(u32::MAX)
@@ -523,7 +678,7 @@ fn stage_or_activate_core(ctx: &mut Context, request: &TeeDriverRequest) -> i32 
         Err(status) => {
             set_update_failed(ctx, request.core.generation, 9);
             if let Ok(report) = firmware::status() {
-                if report.generation == request.core.generation {
+                if report.generation == request.core.generation && report.component == component {
                     apply_firmware_report(ctx, report);
                 }
             }
@@ -607,7 +762,7 @@ fn activate_registered_core(
     } else {
         bexos_secure_monitor_abi::firmware::TRUSTY
     };
-    firmware::stage_and_activate(
+    let transaction = firmware::stage_and_activate(
         image,
         request.core.generation,
         component,
@@ -618,7 +773,55 @@ fn activate_registered_core(
             }
             Ok(())
         },
-    )
+    )?;
+    let report = transaction.report();
+    if component == bexos_secure_monitor_abi::firmware::TRUSTY && activation == ACTIVATE_LIVE_NOW {
+        #[cfg(target_arch = "aarch64")]
+        if report.outcome == bexos_secure_monitor_abi::firmware::APPLYING {
+            if let Err(status) = rebind_live_sessions(ctx, true) {
+                log_status("candidate transport rebind", status);
+                let _ = transaction.resolve(false);
+                let _ = rebind_live_sessions(ctx, false);
+                return Err(if status == STATUS_INVALID_ARGS {
+                    STATUS_PEER_CLOSED
+                } else {
+                    status
+                });
+            }
+            if let Err(status) = probe_candidate_services(
+                ctx,
+                request.core.generation,
+                report.cutover_started_ms,
+                Some(&transaction),
+            ) {
+                log_status("candidate readiness", status);
+                let _ = transaction.resolve(false);
+                let _ = rebind_live_sessions(ctx, false);
+                return Err(STATUS_VERIFY_FAILED);
+            }
+            let committed = transaction.resolve(true).inspect_err(|status| {
+                log_status("candidate durable commit", *status);
+            })?;
+            if committed.outcome != bexos_secure_monitor_abi::firmware::COMMITTED {
+                return Err(STATUS_UNAVAILABLE);
+            }
+            ctx.transport
+                .as_mut()
+                .ok_or(STATUS_UNAVAILABLE)?
+                .fence_storage_writes(false);
+            syscall::log(
+                "tee-driver-trusty: candidate services accepted and public sessions rebound to committed transport generation\n",
+            );
+            return Ok(committed);
+        }
+        if report.outcome == bexos_secure_monitor_abi::firmware::COMMITTED {
+            rebind_live_sessions(ctx, false)?;
+            syscall::log(
+                "tee-driver-trusty: public sessions rebound to committed transport generation\n",
+            );
+        }
+    }
+    Ok(report)
 }
 
 fn set_update_failed(ctx: &mut Context, generation: u64, phase: u32) {

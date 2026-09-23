@@ -1,0 +1,20 @@
+package(default_visibility = ["//visibility:public"])
+exports_files(["upstream.BUILD.bazel", "ninja.BUILD.bazel"])
+
+genrule(
+    name = "secure_aarch64",
+    tags = ["manual"],
+    srcs = ["@qemu_setuptools_wheel//file", "@bexos_qemu_src//:sources", "@bexos_qemu_src//:configure", "build.sh", "secure_memory.c.inc", "//secure/platform:qemu_aarch64.h"],
+    tools = ["@llvm//tools:clang", "@llvm//tools:clang++", ":ninja"],
+    outs = ["qemu-system-aarch64"],
+    cmd = "bash $(location build.sh) $(location @bexos_qemu_src//:configure) $@ $(location //secure/platform:qemu_aarch64.h) $(location secure_memory.c.inc) $(location @llvm//tools:clang) $(location @qemu_setuptools_wheel//file) $(location :ninja) $(location @llvm//tools:clang++)",
+)
+
+genrule(
+    name = "ninja",
+    srcs = ["@qemu_ninja_src//:sources", "@qemu_ninja_src//:configure.py", "build_ninja.sh"],
+    tools = ["@llvm//tools:clang++"],
+    outs = ["ninja-bin"],
+    executable = True,
+    cmd = "bash $(location build_ninja.sh) $(location @qemu_ninja_src//:configure.py) $@ $(location @llvm//tools:clang++)",
+)

@@ -266,6 +266,24 @@ genrule(
 )
 trusty_domain(name = "trusty_recovery_domain", variant = "x86_64", trusty_recovery_candidate = ":trusty_recovery.fw")
 
+[
+    genrule(
+        name = "trusty_" + name + "_bundle",
+        srcs = [image, "//device/virtual/qemu/base:keys/avb_dev_rsa_private.pem"],
+        outs = ["trusty." + name + ".fw", "trusty." + name + ".avbpubkey"],
+        tools = ["//tools/image:vbmeta"],
+        cmd = "$(location //tools/image:vbmeta) --firmware $(location //device/virtual/qemu/base:keys/avb_dev_rsa_private.pem) " +
+              "$(location trusty." + name + ".fw) $(location trusty." + name + ".avbpubkey) " + str(generation) +
+              " x86_64 trusty $(location " + image + ")",
+    )
+    for name, generation, image in [
+        ("successor", 3, "//third_party/trusty:built_x86_64_generation3/lk.elf"),
+        ("incompatible", 2, "//third_party/trusty:built_x86_64_incompatible_state/lk.elf"),
+        ("fault", 2, "//third_party/trusty:built_x86_64_fault/lk.elf"),
+        ("hang", 2, "//third_party/trusty:built_x86_64_hang/lk.elf"),
+    ]
+]
+
 trusty_domain(name = "repeated_monitor_final", variant = "x86_64", monitor_candidate_image = True)
 trusty_domain(name = "repeated_monitor_middle", variant = "x86_64", monitor_candidate_image = True, monitor_candidate = ":repeated_monitor_final")
 trusty_domain(name = "repeated_monitor_transfer_domain", variant = "x86_64", monitor_candidate = ":repeated_monitor_middle", repeated_transfer = True)

@@ -148,8 +148,12 @@ impl State for Runtime {
             }
             5 => {
                 let mut w = Encoder::new();
-                match self.auth {
+                // Version 2 retains the untagged RPC queue state. An older
+                // provider record cannot prove that no late reply is pending.
+                w.word(2);
+                match &self.auth {
                     RuntimeUserAuthProvider::Unsupported => {
+                        w.word(0);
                         w.word(0);
                         w.word(0);
                         w.word(0);
@@ -160,6 +164,7 @@ impl State for Runtime {
                         w.word(provider.client().0);
                         w.word(provider.gatekeeper_session().unwrap_or(0));
                         w.word(provider.keymint_session().unwrap_or(0));
+                        w.word(u64::from(provider.awaiting_response()));
                     }
                 }
                 Ok(Some(w.finish()))
@@ -250,20 +255,37 @@ impl State for Runtime {
             }
             5 => {
                 let mut r = Decoder::new(bytes);
+                if r.word()? != 2 {
+                    return Err(Error::UnsupportedVersion);
+                }
                 let kind = r.word()?;
                 let client = r.word()?;
                 let gatekeeper = r.word()?;
                 let keymint = r.word()?;
-                self.auth = if kind == 1 && client != 0 {
+                let awaiting_response = match r.word()? {
+                    0 => false,
+                    1 => true,
+                    _ => return Err(Error::InvalidData),
+                };
+                r.finish()?;
+                let auth = if kind == 1 && client != 0 {
                     RuntimeUserAuthProvider::Tee(TeeUserAuthProvider::from_parts(
                         Channel(client),
                         (gatekeeper != 0).then_some(gatekeeper),
                         (keymint != 0).then_some(keymint),
+                        awaiting_response,
                     ))
-                } else {
+                } else if kind == 0
+                    && client == 0
+                    && gatekeeper == 0
+                    && keymint == 0
+                    && !awaiting_response
+                {
                     RuntimeUserAuthProvider::Unsupported
+                } else {
+                    return Err(Error::InvalidData);
                 };
-                r.finish()?;
+                self.auth = auth;
             }
             _ => {}
         }
@@ -294,7 +316,7 @@ impl State for Runtime {
         }
         handles.extend(self.watchers.iter().copied());
         handles.extend(self.clients.iter().map(|client| client.channel.0));
-        if let RuntimeUserAuthProvider::Tee(provider) = self.auth {
+        if let RuntimeUserAuthProvider::Tee(provider) = &self.auth {
             handles.push(provider.client().0);
         }
         handles.into_iter().map(Resource::Handle).collect()

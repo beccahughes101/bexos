@@ -1,5 +1,9 @@
 # x86_64 support
 
+The 2026-09-09 Trusty completion work is recorded in
+[Trusty completion checkpoint](trusty-completion.md). Live Trusty replacement
+remains unimplemented; earlier results below retain their original scope and date.
+
 ARM remains the default guest. `--config=aarch64` and `--config=x86_64`
 select the guest independently of the Bazel execution host. BexOS has a Q35
 x86 development product and an integrated EFI/SVM product using real Trusty.

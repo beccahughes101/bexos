@@ -31,22 +31,30 @@ pub(crate) fn configure_boot(
     command: &mut Command,
     firmware: Option<&Path>,
     kernel: &Path,
-    rpmb_socket: &Path,
+    rpmb_sockets: Option<(&Path, &Path)>,
 ) {
     if let Some(directory) = firmware {
+        let (boot_socket, runtime_socket) =
+            rpmb_sockets.expect("secure ARM QEMU requires RPMB relay sockets");
         command
             .current_dir(directory)
             .arg("-bios")
             .arg(directory.join("bl1.bin"))
             .arg("-semihosting-config")
             .arg("enable=on,target=native")
-            // QEMU connects chardevs in declaration order. The RPMB helper
-            // serves this boot connection first, then the queued virtio one
-            // after BL33 closes its QL handles and releases the boot owner.
+            // Distinct relay sockets keep both guest frontends connected while
+            // the host owner serializes their authenticated backend access.
             .arg("-chardev")
-            .arg(format!("socket,id=bootrpmb,path={}", rpmb_socket.display()))
+            .arg(format!("socket,id=bootrpmb,path={}", boot_socket.display()))
             .args(["-device", "pci-serial,addr=7,chardev=bootrpmb"])
-            .args(super::rpmb_qemu_arguments(rpmb_socket));
+            .arg("-chardev")
+            .arg(format!("socket,id=rpmb0,path={}", runtime_socket.display()))
+            .args([
+                "-device",
+                "virtio-serial-pci,id=rpmbbus,disable-legacy=on,disable-modern=off,romfile=",
+                "-device",
+                "virtserialport,bus=rpmbbus.0,chardev=rpmb0,name=rpmb0,nr=1",
+            ]);
         // TF-A authenticates BL33, which verifies the separately loaded kernel.
         command.arg("-device").arg(format!(
             "loader,file={},addr=0x{KERNEL_START:x},force-raw=on",

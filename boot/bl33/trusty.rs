@@ -206,6 +206,7 @@ fn call(mut x0: u64, mut x1: u64, mut x2: u64, mut x3: u64) -> i64 {
         // registers. x20 survives the secure call and holds the IRQ mask.
         asm!("mrs x20, daif", "msr daifset, #2", "smc #0", "msr daif, x20",
             inout("x0") x0, inout("x1") x1, inout("x2") x2, inout("x3") x3,
+            inout("x7") 0u64 => _,
             out("x20") _, clobber_abi("C"), options(nostack));
     }
     let _ = (x1, x2, x3);

@@ -29,6 +29,12 @@ struct PackageStore {
     storage_root: Channel,
     root: Channel,
     users: Vec<UserMount>,
+    mounted_packages: Vec<MountedPackage>,
+}
+
+struct MountedPackage {
+    package_id: String,
+    root: Channel,
 }
 
 struct UserMount {
@@ -175,7 +181,7 @@ async fn serve(mut state: Runtime) -> ! {
                         "vfsd:get_package_directory"
                     );
                     let q = VfsManagerGetPackageDirectoryRequest::decode(req, &hs).unwrap();
-                    let result = get_package_directory(&state.store, q.package_id);
+                    let result = get_package_directory(&mut state.store, q.package_id);
                     let (status, dir) = response_channel(result);
                     reply(
                         control,
@@ -210,7 +216,7 @@ async fn serve(mut state: Runtime) -> ! {
                 53 => {
                     let q = VfsManagerWritePackageArchiveRequest::decode(req, &hs).unwrap();
                     let status = write_package_archive(
-                        &state.store,
+                        &mut state.store,
                         q.package_id,
                         q.archive.raw,
                         q.archive_len,
@@ -224,7 +230,7 @@ async fn serve(mut state: Runtime) -> ! {
                 }
                 54 => {
                     let q = VfsManagerDeletePackageArchiveRequest::decode(req, &hs).unwrap();
-                    let status = delete_package_archive(&state.store, q.package_id);
+                    let status = delete_package_archive(&mut state.store, q.package_id);
                     reply(
                         control,
                         &VfsManagerDeletePackageArchiveResponse {
@@ -451,6 +457,7 @@ fn initialize_package_store(
         storage_root: root,
         root,
         users: Vec::new(),
+        mounted_packages: Vec::new(),
     });
     FsStatus::Ok
 }
@@ -517,18 +524,38 @@ fn get_tmp_directory(
 }
 
 fn get_package_directory(
-    store: &Option<PackageStore>,
+    store: &mut Option<PackageStore>,
     package_id: &str,
 ) -> Result<Channel, FsStatus> {
-    let store = store.as_ref().ok_or(FsStatus::BadState)?;
+    let store = store.as_mut().ok_or(FsStatus::BadState)?;
     let archive_path = package_archive_path(package_id)?;
+    if let Some(cached) = store
+        .mounted_packages
+        .iter()
+        .find(|mounted| mounted.package_id == package_id)
+    {
+        return Memory::duplicate(cached.root.0, 1 | 2 | 4 | 32)
+            .map(Channel)
+            .map_err(|_| FsStatus::Io);
+    }
     log(&alloc::format!(
         "vfsd: package directory open package={package_id} path={archive_path}\n"
     ));
     let archive_file = fs::open(store.root, &archive_path, 1)?;
     let mounted = fs::mount_archive(store.archivefs, archive_file, None);
     let _ = Memory::close(archive_file.0);
-    mounted
+    let mounted = mounted?;
+    let returned = Memory::duplicate(mounted.0, 1 | 2 | 4 | 32)
+        .map(Channel)
+        .map_err(|_| {
+            let _ = Memory::close(mounted.0);
+            FsStatus::Io
+        })?;
+    store.mounted_packages.push(MountedPackage {
+        package_id: package_id.into(),
+        root: mounted,
+    });
+    Ok(returned)
 }
 
 fn package_archive_backing(
@@ -618,12 +645,13 @@ fn update_archive_backing(
 }
 
 fn write_package_archive(
-    store: &Option<PackageStore>,
+    store: &mut Option<PackageStore>,
     package_id: &str,
     archive: u64,
     archive_len: u64,
 ) -> Result<(), FsStatus> {
-    let store = store.as_ref().ok_or(FsStatus::BadState)?;
+    let store = store.as_mut().ok_or(FsStatus::BadState)?;
+    invalidate_package_mount(store, package_id);
     let archive_path = package_archive_path(package_id)?;
     let rounded = bexos_boot::page_round(archive_len).ok_or(FsStatus::InvalidArgs)?;
     let va = Memory::map(archive, rounded, 2).map_err(|_| FsStatus::AccessDenied)?;
@@ -665,8 +693,12 @@ fn write_package_archive(
     }
 }
 
-fn delete_package_archive(store: &Option<PackageStore>, package_id: &str) -> Result<(), FsStatus> {
-    let store = store.as_ref().ok_or(FsStatus::BadState)?;
+fn delete_package_archive(
+    store: &mut Option<PackageStore>,
+    package_id: &str,
+) -> Result<(), FsStatus> {
+    let store = store.as_mut().ok_or(FsStatus::BadState)?;
+    invalidate_package_mount(store, package_id);
     let archive_path = package_archive_path(package_id)?;
     let (parent_path, leaf) = split_parent_leaf(&archive_path)?;
     let parent = fs::open(store.root, parent_path, 1 | 2 | 32)?;
@@ -674,6 +706,18 @@ fn delete_package_archive(store: &Option<PackageStore>, package_id: &str) -> Res
     let closed = Memory::close(parent.0).map_err(|_| FsStatus::Io);
     result?;
     closed
+}
+
+fn invalidate_package_mount(store: &mut PackageStore, package_id: &str) {
+    let mut index = 0;
+    while index < store.mounted_packages.len() {
+        if store.mounted_packages[index].package_id == package_id {
+            let mounted = store.mounted_packages.remove(index);
+            let _ = Memory::close(mounted.root.0);
+        } else {
+            index += 1;
+        }
+    }
 }
 
 fn list_package_archives(store: &Option<PackageStore>) -> Result<Vec<String>, FsStatus> {

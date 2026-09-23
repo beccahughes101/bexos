@@ -28,6 +28,7 @@ enum { BEXOS_BOOT_IDLE = 0, BEXOS_BOOT_PENDING = 1, BEXOS_BOOT_TRIAL = 2 };
  */
 bool bexos_boot_request_valid(const uint8_t* request, size_t length);
 bool bexos_boot_state_valid(const uint8_t* state);
+/* ARM passes NULL for monitor_v1; its reserved monitor identity stays INITIAL. */
 bool bexos_boot_initial(uint8_t* state, const uint8_t* trusty_v1,
                        const uint8_t* monitor_v1);
 uint32_t bexos_boot_next(const uint8_t* current, const uint8_t* request,

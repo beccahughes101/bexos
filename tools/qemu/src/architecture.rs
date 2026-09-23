@@ -32,7 +32,9 @@ impl Architecture {
     }
     pub fn cpu(self) -> &'static str {
         match self {
-            Self::Aarch64 => "cortex-a53",
+            // The maintained secure profile runs its permanent execution
+            // owner at S-EL2 and therefore requires secure virtualization.
+            Self::Aarch64 => "max",
             Self::X86_64 => "max",
         }
     }

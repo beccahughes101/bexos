@@ -53,7 +53,13 @@ SECTIONS {
   .resident.exceptions 0x1807a000 (NOLOAD) : { KEEP(*(.resident.exceptions)) }
   ASSERT(SIZEOF(.resident.exceptions) <= 0x6000, "resident exception stacks overflow")
   .resident.transfer 0x18080000 : { KEEP(*(.resident.transfer)) }
-  ASSERT(SIZEOF(.resident.transfer) <= 0x80000, "resident transfer record overflow")
+  ASSERT(SIZEOF(.resident.transfer) <= 0x20000, "resident transfer record overflow")
+  .resident.normal_owner 0x180a0000 : { KEEP(*(.resident.normal_owner)) }
+  ASSERT(SIZEOF(.resident.normal_owner) <= 0x2000, "resident normal owner overflow")
+  .resident.secure_platform 0x180a2000 : { KEEP(*(.resident.secure_platform)) }
+  ASSERT(SIZEOF(.resident.secure_platform) <= 0x1000, "resident secure platform overflow")
+  .resident.secure_registers 0x180a3000 : { KEEP(*(.resident.secure_registers)) }
+  ASSERT(SIZEOF(.resident.secure_registers) <= 0x1000, "resident secure registers overflow")
   .resident.stack 0x18100000 (NOLOAD) : { KEEP(*(.resident.stack)) }
   ASSERT(SIZEOF(.resident.stack) <= 0x100000, "resident transition stack overflow")
 }

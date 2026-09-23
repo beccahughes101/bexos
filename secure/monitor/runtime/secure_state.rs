@@ -22,6 +22,14 @@ pub struct Prepared {
     transport: transport::Prepared,
 }
 impl Prepared {
+    /// Reconnect the shared transport after a complete record has validated.
+    /// CPU registers and device owners remain in resident migration storage.
+    pub unsafe fn install_transport_only(self) {
+        unsafe {
+            self.transport.install();
+        }
+    }
+
     /// Both domains must remain stopped from preparation through installation.
     pub unsafe fn install(
         self,
@@ -33,6 +41,20 @@ impl Prepared {
             self.transport.install();
         }
         *vmcb = self.cpu;
+        *registers = self.registers;
+        *platform = self.platform;
+    }
+
+    /// Install decoded software and transport state while retaining the
+    /// permanent owner's live hardware VMCB across policy-image replacement.
+    pub unsafe fn install_preserving_cpu(
+        self,
+        registers: &mut Registers,
+        platform: &mut Platform<1>,
+    ) {
+        unsafe {
+            self.transport.install();
+        }
         *registers = self.registers;
         *platform = self.platform;
     }
@@ -112,14 +134,23 @@ pub unsafe fn prepare_protected(epoch: u64, input: &[u8]) -> Result<Prepared, In
     {
         return Err(InvalidState);
     }
-    let root =
-        unsafe { (&*core::ptr::addr_of!(crate::TABLES)).root() }.map_err(|_| InvalidState)?;
-    if root != core::ptr::addr_of!(crate::TABLES) as u64 {
+    let base = u64::from_le_bytes(input[HEADER + 32..HEADER + 40].try_into().unwrap());
+    #[cfg(all(feature = "resident_nucleus", feature = "secure_product"))]
+    if !matches!(base, crate::BANK | crate::trusty_owner::SECOND_BANK) {
         return Err(InvalidState);
     }
+    #[cfg(not(all(feature = "resident_nucleus", feature = "secure_product")))]
+    if base != crate::BANK {
+        return Err(InvalidState);
+    }
+    #[cfg(all(feature = "resident_nucleus", feature = "secure_product"))]
+    let root = crate::trusty_owner::table_root(base).ok_or(InvalidState)?;
+    #[cfg(not(all(feature = "resident_nucleus", feature = "secure_product")))]
+    let root =
+        unsafe { (&*core::ptr::addr_of!(crate::TABLES)).root() }.map_err(|_| InvalidState)?;
     let mut next_platform = Platform::new(
         crate::memory::DomainMemory {
-            base: crate::BANK,
+            base,
             length: crate::BANK_SIZE,
         },
         true,

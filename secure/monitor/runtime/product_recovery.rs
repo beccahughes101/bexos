@@ -79,6 +79,7 @@ pub unsafe fn select(vmcb: &mut Vmcb, regs: &mut Registers, platform: &mut Platf
     drop(owner);
     let committed_monitor = decision.committed(Component::Hypervisor);
     if committed_monitor != Identity::INITIAL {
+        crate::log("monitor-runtime: loading committed monitor policy from protected selection\n");
         let loaded = required(store::load(
             &mut disk,
             Component::Hypervisor,
@@ -87,8 +88,13 @@ pub unsafe fn select(vmcb: &mut Vmcb, regs: &mut Registers, platform: &mut Platf
             floors[1],
             scratch,
         ));
+        crate::log(
+            "monitor-runtime: committed monitor policy authenticated from persistent slot\n",
+        );
         let tag = required(unsafe { monitor.prepare(loaded.image) });
+        crate::log("monitor-runtime: committed monitor policy prepared in inactive bank\n");
         unsafe { monitor.activate(tag) };
+        crate::log("monitor-runtime: committed monitor policy entered\n");
         for _ in 0..6 {
             if !unsafe { monitor.secure_turn(vmcb, regs, platform) } {
                 recovery_required();
@@ -97,6 +103,7 @@ pub unsafe fn select(vmcb: &mut Vmcb, regs: &mut Registers, platform: &mut Platf
         // The authenticated committed image, not the embedded baseline, is
         // the retained rollback destination for every subsequent trial.
         unsafe { monitor.reclaim() };
+        crate::log("monitor-runtime: embedded monitor policy retired after committed entry\n");
     }
     let mut retained_monitor = selected[1] != committed_monitor;
     if retained_monitor {

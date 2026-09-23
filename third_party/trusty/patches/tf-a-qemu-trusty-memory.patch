@@ -1,14 +1,115 @@
 diff --git a/external/arm-trusted-firmware/plat/qemu/qemu/platform.mk b/external/arm-trusted-firmware/plat/qemu/qemu/platform.mk
 --- a/external/arm-trusted-firmware/plat/qemu/qemu/platform.mk
 +++ b/external/arm-trusted-firmware/plat/qemu/qemu/platform.mk
-@@ -230,6 +230,10 @@ endif
- 
- # Process flags
- $(eval $(call add_define,BL32_RAM_LOCATION_ID))
+@@ -232,0 +233,7 @@
 +ifneq ($(BEXOS_TRUSTY_SEC_MEM_SIZE),)
 +$(eval $(call add_define_val,TSP_SEC_MEM_SIZE,$(BEXOS_TRUSTY_SEC_MEM_SIZE)))
 +endif
++ifneq ($(BEXOS_SEL2_OWNER),)
++$(eval $(call add_define,BEXOS_SEL2_OWNER))
++endif
 +
- 
- # Don't have the Linux kernel as a BL33 image by default
- ARM_LINUX_KERNEL_AS_BL33	:=	0
+diff --git a/external/arm-trusted-firmware/services/spd/trusty/trusty.c b/external/arm-trusted-firmware/services/spd/trusty/trusty.c
+--- a/external/arm-trusted-firmware/services/spd/trusty/trusty.c
++++ b/external/arm-trusted-firmware/services/spd/trusty/trusty.c
+@@ -96 +96,3 @@
+-					 uint64_t r1, uint64_t r2, uint64_t r3)
++					 uint64_t r1, uint64_t r2, uint64_t r3,
++					 uint64_t r4, uint64_t r5, uint64_t r6,
++					 uint64_t r7)
+@@ -118,2 +120,2 @@
+-	args.r7 = 0;
+-	if (is_hypervisor_mode()) {
++	args.r7 = r7;
++	if (is_hypervisor_mode() && r0 != U(0xfb00be00)) {
+@@ -125,4 +127,3 @@
+-	/* r4, r5, r6 reserved for future use. */
+-	args.r6 = 0;
+-	args.r5 = 0;
+-	args.r4 = 0;
++	args.r6 = r6;
++	args.r5 = r5;
++	args.r4 = r4;
+@@ -145,0 +147,12 @@
++#ifdef BEXOS_SEL2_OWNER
++	/*
++	 * Both the normal world and the permanent secure execution owner run at
++	 * EL2.  The Trusty SPD predates S-EL2 and therefore does not otherwise
++	 * preserve the caller's stack or hypervisor controls while its assembly
++	 * helper swaps the EL3 C stacks and changes security state.
++	 */
++	u_register_t saved_sp_el2 = read_sp_el2();
++	u_register_t saved_hcr_el2 = read_hcr_el2();
++	u_register_t saved_cntkctl_el1 = read_cntkctl_el1();
++#endif
++
+@@ -149,0 +163,7 @@
++
++#ifdef BEXOS_SEL2_OWNER
++	write_sp_el2(saved_sp_el2);
++	write_hcr_el2(saved_hcr_el2);
++	write_cntkctl_el1(saved_cntkctl_el1);
++	isb();
++#endif
+@@ -171 +191,2 @@
+-	ret = trusty_context_switch(NON_SECURE, SMC_FC_FIQ_ENTER, 0, 0, 0);
++	ret = trusty_context_switch(NON_SECURE, SMC_FC_FIQ_ENTER, 0, 0, 0,
++				    0, 0, 0, 0);
+@@ -229 +250,2 @@
+-	ret = trusty_context_switch(NON_SECURE, SMC_FC_FIQ_EXIT, 0, 0, 0);
++	ret = trusty_context_switch(NON_SECURE, SMC_FC_FIQ_EXIT, 0, 0, 0,
++				    0, 0, 0, 0);
+@@ -279 +301,2 @@
+-			ret = trusty_context_switch(SECURE, x1, 0, 0, 0);
++			ret = trusty_context_switch(SECURE, x1, x2, x3, x4,
++					    0, 0, 0, 0);
+@@ -301,0 +325,11 @@
++#ifdef BEXOS_SEL2_OWNER
++			if (smc_fid == U(0xfb00be00)) {
++				ret = trusty_context_switch(NON_SECURE, smc_fid, x1,
++					x2, x3, x4,
++					SMC_GET_GP(handle, CTX_GPREG_X5),
++					SMC_GET_GP(handle, CTX_GPREG_X6),
++					SMC_GET_GP(handle, CTX_GPREG_X7));
++				SMC_RET8(handle, ret.r0, ret.r1, ret.r2, ret.r3,
++					 ret.r4, ret.r5, ret.r6, ret.r7);
++			}
++#endif
+@@ -309 +343 @@
+-				x2, x3);
++				x2, x3, 0, 0, 0, 0);
+@@ -353,0 +388,9 @@
++#ifdef BEXOS_SEL2_OWNER
++	/* The Trusty SPD normally targets S-EL1. The authenticated BexOS BL32 is
++	 * the permanent S-EL2 owner, so admit its requested exception level in
++	 * the saved secure context used by the initial EL3 return. */
++	el3_state_t *el3_state = get_el3state_ctx(&ctx->cpu_ctx);
++	write_ctx_reg(el3_state, CTX_SCR_EL3,
++		      read_ctx_reg(el3_state, CTX_SCR_EL3) | SCR_EEL2_BIT);
++#endif
++
+@@ -427 +470,2 @@
+-	ret = trusty_context_switch(NON_SECURE, SMC_FC_CPU_SUSPEND, off, 0, 0);
++	ret = trusty_context_switch(NON_SECURE, SMC_FC_CPU_SUSPEND, off, 0, 0,
++				    0, 0, 0, 0);
+@@ -438 +482,2 @@
+-	ret = trusty_context_switch(NON_SECURE, SMC_FC_CPU_RESUME, on, 0, 0);
++	ret = trusty_context_switch(NON_SECURE, SMC_FC_CPU_RESUME, on, 0, 0,
++				    0, 0, 0, 0);
+@@ -482,0 +528 @@
++#ifndef BEXOS_SEL2_OWNER
+@@ -483,0 +530 @@
++#endif
+@@ -504,0 +552,3 @@
++#ifdef BEXOS_SEL2_OWNER
++	INFO("trusty: Found BexOS AArch64 S-EL2 owner\n");
++#else
+@@ -515,0 +566 @@
++#endif
+@@ -522,0 +574,4 @@
++#ifdef BEXOS_SEL2_OWNER
++	ep_info->spsr = SPSR_64(MODE_EL2, MODE_SP_ELX,
++				DISABLE_ALL_EXCEPTIONS);
++#else
+@@ -531,0 +587 @@
++#endif

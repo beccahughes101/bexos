@@ -8,7 +8,8 @@ use bexos_secure_monitor::{
 #[path = "policy_guard.rs"]
 mod guard;
 
-const SECOND: usize = 0x60000000;
+const SECOND: usize = bexos_secure_monitor::monitor_image::INACTIVE_BANK;
+const RETIRING: usize = bexos_secure_monitor::monitor_image::RETIRING_ALIAS;
 use core::sync::atomic::{AtomicU64, Ordering};
 static BOUNDARIES: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
 /// Published only after a real VMRUN exit and its entire hardware transaction
@@ -39,16 +40,13 @@ impl Monitor {
         if self.previous.is_some() {
             return Err(ImageError::Destination);
         }
-        unsafe {
-            load(
-                bytes,
-                if self.active == abi::BASE {
-                    SECOND
-                } else {
-                    0x80000000
-                },
-            )
-        }
+        let next = if self.active == abi::BASE {
+            SECOND
+        } else {
+            abi::BASE
+        };
+        unsafe { crate::root::map_staging(next) };
+        unsafe { load(bytes, RETIRING) }
     }
     pub unsafe fn activate(&mut self, tag: u8) {
         assert!(self.previous.is_none());
@@ -72,7 +70,7 @@ impl Monitor {
     /// image's code, writable data and stack share this reclaimable bank.
     pub unsafe fn reclaim(&mut self) {
         assert!(self.previous.take().is_some());
-        let old = unsafe { core::slice::from_raw_parts_mut(0x80000000 as *mut u8, abi::BYTES) };
+        let old = unsafe { core::slice::from_raw_parts_mut(RETIRING as *mut u8, abi::BYTES) };
         old.fill(0xa5);
         assert!(old.iter().all(|byte| *byte == 0xa5));
     }

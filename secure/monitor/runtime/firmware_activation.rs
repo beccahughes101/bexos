@@ -3,7 +3,7 @@
 use crate::{normal::Normal, nucleus::Monitor, platform::Platform};
 use bexos_secure_firmware::{
     Architecture, Component,
-    selection::{Identity, State},
+    selection::State,
     store::{self, BlockDevice},
 };
 use bexos_secure_monitor::{
@@ -18,7 +18,25 @@ use core::cell::RefCell;
 const ROOT: &[u8] = include_bytes!(env!("VERIFIED_ROOT"));
 static mut REPORT: [u64; 4] = [abi::IDLE, 0, 0, 0];
 static mut REVISION: u64 = 0;
+static mut TRANSPORT_GENERATION: u64 = 1;
+const TRUSTY_MIGRATION_ABI: u64 = 1;
+const REQUIRED_TRUSTY_SERVICES: u64 = 0x3f;
+const ROOT_GENERATION: u32 = 0x8000_0003;
+const ROOT_MIGRATION_ABI: u32 = 0x8000_0004;
+const ROOT_SERVICE_PROBE: u32 = 0x8000_0005;
 pub fn query(field: u64) -> Result<u64, Status> {
+    if field == abi::QUERY_CAPABILITIES {
+        return Ok(abi::CAP_TRUSTY_REBOOT
+            | abi::CAP_TRUSTY_LIVE
+            | abi::CAP_MONITOR_REBOOT
+            | abi::CAP_MONITOR_LIVE);
+    }
+    if field == abi::QUERY_MIGRATION_ABI {
+        return Ok(TRUSTY_MIGRATION_ABI);
+    }
+    if field == abi::QUERY_TRANSPORT_GENERATION {
+        return Ok(unsafe { TRANSPORT_GENERATION });
+    }
     if field == abi::QUERY_REVISION {
         return Ok(unsafe { REVISION });
     }
@@ -76,6 +94,46 @@ fn now() -> u64 {
     unsafe { bexos_secure_monitor::clock::now_ns() }
 }
 
+fn trusty_probe(candidate: &mut crate::trusty_owner::Candidate) -> Result<(u64, u64, u64), ()> {
+    use bexos_trusty_boot::ql::Transport;
+    let mut owner = unsafe { crate::transport::Boot::candidate(|| candidate.step()) };
+    let mut word = |operation| {
+        let mut bytes = [0; 8];
+        (owner.exchange(operation, bytes.len(), &mut bytes) == Ok(8))
+            .then(|| u64::from_le_bytes(bytes))
+            .ok_or(())
+    };
+    let result = (
+        word(ROOT_GENERATION),
+        word(ROOT_MIGRATION_ABI),
+        word(ROOT_SERVICE_PROBE),
+    );
+    drop(owner);
+    if !candidate.healthy() {
+        return Err(());
+    }
+    Ok((result.0?, result.1?, result.2?))
+}
+
+fn abort_trusty(
+    decision: recovery::Boot,
+    world: &RefCell<World<'_>>,
+    component: Component,
+    generation: u64,
+    slot: u64,
+) {
+    crate::secure_boot::finish_live_trial();
+    unsafe {
+        crate::transport::finish_candidate();
+    }
+    let mut owner = unsafe { crate::transport::Boot::new(|| world.borrow_mut().step()) };
+    let state = required(decision.abort(&mut owner));
+    if state.pending.is_some() {
+        recovery_required();
+    }
+    record(abi::ROLLED_BACK, component, generation, slot);
+}
+
 struct World<'a> {
     monitor: &'a mut Monitor,
     normal: &'a mut Normal,
@@ -88,6 +146,12 @@ struct World<'a> {
     failed: bool,
 }
 impl World<'_> {
+    unsafe fn activate_trusty(&mut self, candidate: &mut crate::trusty_owner::Candidate) {
+        unsafe { candidate.activate(self.vmcb, self.regs, self.platform) };
+    }
+    unsafe fn rollback_trusty(&mut self, candidate: &mut crate::trusty_owner::Candidate) {
+        unsafe { candidate.rollback(self.vmcb, self.regs, self.platform) };
+    }
     fn step(&mut self) {
         if self.failed && self.committing {
             // A commit may already be durable. Resident execution alone keeps
@@ -157,6 +221,9 @@ impl Storage<'_, '_> {
     }
 }
 impl BlockDevice for Storage<'_, '_> {
+    fn architecture(&self) -> bexos_secure_firmware::Architecture {
+        bexos_secure_firmware::Architecture::X86_64
+    }
     fn sectors(&self) -> u64 {
         self.disk.sectors()
     }
@@ -251,9 +318,6 @@ pub unsafe fn run(
         );
         return;
     }
-    if component != Component::Hypervisor {
-        recovery_required();
-    }
     // The reread replaced the upload bytes. Reauthenticate that exact snapshot
     // before copying any executable segment into the inactive policy bank.
     let verified = required(bexos_secure_firmware::verify(
@@ -264,6 +328,116 @@ pub unsafe fn run(
         state.committed(component).generation,
         floor,
     ));
+    if component == Component::Trusty {
+        let decision = required(recovery::begin_live(&mut owner, component, image));
+        drop(owner);
+        let mut candidate = match unsafe {
+            crate::trusty_owner::Candidate::prepare(
+                verified.image,
+                world.borrow().platform.memory_base(),
+            )
+        } {
+            Ok(candidate) => candidate,
+            Err(_) => {
+                abort_trusty(
+                    decision,
+                    &world,
+                    component,
+                    generation,
+                    image.slot.number() as u64,
+                );
+                return;
+            }
+        };
+        unsafe {
+            crate::transport::begin_candidate(candidate.bank());
+        }
+        crate::secure_boot::begin_live_trial(candidate.bank());
+        let prepared = now().saturating_sub(started) < 30_000_000_000
+            && trusty_probe(&mut candidate)
+                == Ok((generation, TRUSTY_MIGRATION_ABI, REQUIRED_TRUSTY_SERVICES));
+        if !prepared {
+            abort_trusty(
+                decision,
+                &world,
+                component,
+                generation,
+                image.slot.number() as u64,
+            );
+            return;
+        }
+        crate::log(
+            "monitor-runtime: distinct Trusty candidate executed with compatible migration and required services\n",
+        );
+        let cutover = now();
+        {
+            let mut w = world.borrow_mut();
+            unsafe {
+                w.activate_trusty(&mut candidate);
+            }
+        }
+        let healthy = trusty_probe(&mut candidate)
+            == Ok((generation, TRUSTY_MIGRATION_ABI, REQUIRED_TRUSTY_SERVICES))
+            && now().saturating_sub(cutover) <= 150_000_000;
+        let readiness = now().saturating_sub(cutover);
+        if !healthy {
+            let mut w = world.borrow_mut();
+            unsafe {
+                w.rollback_trusty(&mut candidate);
+            }
+            drop(w);
+            abort_trusty(
+                decision,
+                &world,
+                component,
+                generation,
+                image.slot.number() as u64,
+            );
+            return;
+        }
+        // The retained source remains the sole persistent writer until the
+        // protected selection commit resolves. Candidate RPMB stays fenced.
+        {
+            let mut w = world.borrow_mut();
+            unsafe {
+                w.rollback_trusty(&mut candidate);
+            }
+        }
+        let mut owner = unsafe { crate::transport::Boot::new(|| world.borrow_mut().step()) };
+        let resolved = required(decision.commit(&mut owner));
+        drop(owner);
+        if resolved.committed(component) != image {
+            recovery_required();
+        }
+        {
+            let mut w = world.borrow_mut();
+            unsafe {
+                w.activate_trusty(&mut candidate);
+            }
+        }
+        crate::secure_boot::finish_live_trial();
+        unsafe {
+            crate::transport::finish_candidate();
+        }
+        crate::firmware_generations::select(resolved.committed);
+        unsafe {
+            TRANSPORT_GENERATION = TRANSPORT_GENERATION.checked_add(1).unwrap();
+            candidate.reclaim();
+        }
+        record(
+            abi::COMMITTED,
+            component,
+            generation,
+            image.slot.number() as u64,
+        );
+        crate::log("monitor-runtime: live Trusty committed; retired private bank reclaimed\n");
+        crate::log("monitor-runtime: Trusty cutover readiness ns=\n");
+        crate::hex(readiness);
+        return;
+    }
+    if component != Component::Hypervisor {
+        recovery_required();
+    }
     let tag = required(unsafe { world.borrow().monitor.prepare(verified.image) });
     let decision = required(recovery::begin_live_monitor(&mut owner, image));
     drop(owner);

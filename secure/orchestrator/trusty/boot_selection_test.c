@@ -7,7 +7,7 @@
 static void request(uint8_t* r, const uint8_t* state, unsigned op, unsigned component) {
     memset(r, 0, 256);
     memcpy(r, "BEXBS002", 8);
-    r[8] = op; r[12] = 2;
+    r[8] = op; r[12] = state[12];
     if (op == BEXOS_BOOT_QUERY) return;
     memcpy(r+16, state+16, 8); r[24] = component;
     if (op == BEXOS_BOOT_STAGE) {
@@ -31,7 +31,28 @@ static void apply(uint8_t* state, uint8_t* r) {
     assert(!memcmp(next, retry, 512));
     memcpy(state, next, 512);
 }
+static void arm(void) {
+    uint8_t trusty[96], state[512], request_bytes[256], next[512];
+    bexos_journal_initial(trusty, 1, 1);
+    assert(bexos_boot_initial(state, trusty, NULL));
+    assert(bexos_boot_state_valid(state));
+    request(request_bytes, state, BEXOS_BOOT_STAGE, 2);
+    assert(!bexos_boot_request_valid(request_bytes, 256));
+    request(request_bytes, state, BEXOS_BOOT_STAGE, 1);
+    request_bytes[12] = 2;
+    assert(bexos_boot_next(state, request_bytes, next) == BEXOS_JOURNAL_INVALID);
+    request_bytes[12] = 1;
+    apply(state, request_bytes);
+    request(request_bytes, state, BEXOS_BOOT_ATTEMPT, 1); apply(state, request_bytes);
+    request(request_bytes, state, BEXOS_BOOT_COMMIT, 1); apply(state, request_bytes);
+    assert(state[40] == 2 && state[96] == 1);
+    state[268] = 2;
+    assert(!bexos_boot_state_valid(state));
+    trusty[24] = 3; trusty[32] = 1; memset(trusty+40, 1, 32);
+    assert(!bexos_boot_initial(state, trusty, NULL));
+}
 int main(void) {
+    arm();
     uint8_t state[512], r[256], other[256], next[512], old[512];
     for (unsigned component = 1; component <= 2; ++component) {
         initial(state);

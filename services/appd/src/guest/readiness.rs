@@ -26,7 +26,10 @@ pub struct Gate {
     pub pci: Option<Channel>,
     pub pci_registry: Option<Channel>,
     pub rtc: Option<Channel>,
-    pub uart: Option<Channel>,
+    /// Retains the architectural UART driver's lifecycle endpoint.
+    pub diagnostic_uart: Option<Channel>,
+    /// Private framed debug transport, separate from the diagnostic UART.
+    pub debug_serial: Option<Channel>,
     pub nvme: Option<Channel>,
     pub virtio_net: Option<Channel>,
     pub xhci: Vec<Channel>,
@@ -70,7 +73,8 @@ impl Gate {
             pci: None,
             pci_registry: None,
             rtc: None,
-            uart: None,
+            diagnostic_uart: None,
+            debug_serial: None,
             nvme: None,
             virtio_net: None,
             xhci: Vec::new(),
@@ -156,22 +160,12 @@ impl ReadinessGate for Gate {
                 .map_err(|_| ReadinessError::NotReady)?,
             ]
         } else if name == "bexos.driver.debugd" {
-            if bexos_elf::arch::Machine::current_guest() == bexos_elf::arch::Machine::X86_64 {
-                let serial = self.uart.ok_or(ReadinessError::NotReady)?;
-                let (client, server) = Channel::pair().map_err(|_| ReadinessError::NotReady)?;
-                serial
-                    .send(b"bexos.serial.bind", &[server.0])
-                    .map_err(|_| ReadinessError::NotReady)?;
-                alloc::vec![client.0]
-            } else {
-                match self.teed {
-                    Some(teed) => alloc::vec![
-                        Memory::duplicate(teed.0, 1 | 2 | 4 | 32)
-                            .map_err(|_| ReadinessError::NotReady)?,
-                    ],
-                    None => Vec::new(),
-                }
-            }
+            let serial = self.debug_serial.ok_or(ReadinessError::NotReady)?;
+            let (client, server) = Channel::pair().map_err(|_| ReadinessError::NotReady)?;
+            serial
+                .send(b"bexos.serial.bind", &[server.0])
+                .map_err(|_| ReadinessError::NotReady)?;
+            alloc::vec![client.0]
         } else {
             Vec::new()
         };
@@ -294,7 +288,7 @@ impl ReadinessGate for Gate {
                 self.pci_registry = Some(registry_channel);
             }
             "bexos.driver.rtc.pl031" | "bexos.driver.rtc.cmos" => self.rtc = Some(c),
-            "bexos.driver.uart.pl011" => self.uart = Some(c),
+            "bexos.driver.uart.pl011" => self.diagnostic_uart = Some(c),
             "bexos.driver.storage.nvme" => {
                 self.nvme = Some(c);
             }
@@ -346,7 +340,7 @@ impl ReadinessGate for Gate {
                     return Err(ReadinessError::NotReady);
                 }
                 match role.bytes.as_slice() {
-                    b"debug0" if self.uart.is_none() => self.uart = Some(c),
+                    b"debug0" if self.debug_serial.is_none() => self.debug_serial = Some(c),
                     b"rpmb0" if self.rpmb.is_none() => self.rpmb = Some(c),
                     _ => return Err(ReadinessError::NotReady),
                 }

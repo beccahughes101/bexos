@@ -7,8 +7,6 @@ mod tee_probe;
 use app_lifecycle_fidl as lifecycle;
 use app_manager::{FidlDecode as AppManagerDecode, FidlEncode as AppManagerEncode};
 use app_manager_fidl as app_manager;
-#[cfg(target_arch = "aarch64")]
-use bexos_d1_uart::{Pl011Mmio, Pl011Uart};
 use bexos_userspace::{Channel, KernelTransport, Memory, Startup, log};
 use kernel_fidl::{
     FidlDecode as KernelDecode, FidlEncode as KernelEncode, HandleRef,
@@ -34,8 +32,6 @@ use user_manager::{FidlDecode as UserDecode, FidlEncode as UserEncode};
 use user_manager_fidl as user_manager;
 
 use bexos_debug_wire::{UpdateCandidateInfo, UpdateCheckRequest, UpdateCheckResponse, parse_frame};
-#[cfg(target_arch = "aarch64")]
-use bexos_debugd::transport::UartByteTransport;
 use bexos_debugd::transport::{ByteTransport, write_frame_async};
 use bexos_debugd::{
     AppManager, BufferedTestAppInstaller, LiveTraceManager, PlatformUpdateApplier, TeeManager,
@@ -84,12 +80,6 @@ async fn main(channel: u64) -> ! {
             Err(_) => bexos_userspace::exit(),
         }
     } else {
-        #[cfg(target_arch = "aarch64")]
-        let (h, va) = {
-            let h = Memory::physical(0x0900_0000, 4096).unwrap();
-            (h, Memory::map(h, 4096, 6).unwrap())
-        };
-        #[cfg(target_arch = "x86_64")]
         let (h, va) = (
             *startup.resources.first().expect("virtio serial endpoint"),
             0,
@@ -128,11 +118,6 @@ async fn main(channel: u64) -> ! {
 async fn serve(mut state: migration::Runtime) -> ! {
     use bexos_userspace::live_migration::State;
     let mut source = bexos_userspace::live_migration::Source::new(state.migration);
-    #[cfg(target_arch = "aarch64")]
-    let uart = Pl011Uart::new(unsafe { Pl011Mmio::new(state.uart_va as usize) });
-    #[cfg(target_arch = "aarch64")]
-    let mut transport = UartByteTransport::new(uart);
-    #[cfg(target_arch = "x86_64")]
     let mut transport =
         bexos_debugd::transport::SerialByteTransport::new(Channel(state.uart_handle));
     let mut kernel_debug = KernelDebugControlPublicClient::new(KernelTransport(6));

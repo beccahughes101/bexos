@@ -1,5 +1,9 @@
 # Secure integration validation
 
+The 2026-09-09 Trusty completion work is recorded in
+[Trusty completion checkpoint](trusty-completion.md). Live Trusty replacement
+remains unimplemented; earlier results below retain their original scope and date.
+
 ## Stopped at user request — 2026-09-07
 
 Work is stopped. **The approved plan has not been delivered or fully validated.**

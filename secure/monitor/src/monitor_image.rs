@@ -4,7 +4,11 @@ use crate::image::{Image, ImageError};
 pub const IMAGE_BASE: usize = 0x04000000;
 pub const IMAGE_END: usize = 0x18000000;
 pub const IMAGE_BYTES: usize = IMAGE_END - IMAGE_BASE;
-pub const INACTIVE_BANK: usize = 0x60000000;
+// Q35 splits 3 GiB into 2 GiB below the PCI hole and 1 GiB above 4 GiB.
+// 0x6000_0000..0x7000_0000 is the second Trusty execution bank; keep the
+// second monitor image in the high-RAM aperture so both can be replaced.
+pub const INACTIVE_BANK: usize = 0x1_0000_0000;
+pub const RETIRING_ALIAS: usize = 0xa0000000;
 pub const RESIDENT_END: usize = 0x18200000;
 pub const RESUME_ENTRY: usize = 0x04001000;
 pub const DESCRIPTOR: usize = 0x04002000;

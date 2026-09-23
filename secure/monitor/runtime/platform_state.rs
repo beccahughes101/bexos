@@ -103,8 +103,7 @@ impl<const N: usize> Platform<N> {
         }
         fabric.restore_protected(identity, now, &mut run, &mut armed, fabric_bytes)?;
         offset += Fabric::<N>::STATE_BYTES;
-        let mut console =
-            crate::console::Console::new(if self.rpmb { "[trusty] " } else { "[bexos] " });
+        let mut console = crate::console::Console::new(self.rpmb);
         console.restore_protected(&input[offset..offset + Uart::STATE_BYTES])?;
         offset += Uart::STATE_BYTES;
         let rtc = if !self.rpmb {

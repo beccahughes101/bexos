@@ -9,7 +9,6 @@ mod memory;
 use arch::mmu;
 mod panic;
 mod sched;
-#[cfg(target_arch = "x86_64")]
 mod secure_memory;
 mod state;
 mod syscall;
@@ -43,6 +42,7 @@ pub extern "C" fn kernel_main(handoff_ptr: u64) -> ! {
         handoff.secure_monitor_call_header,
         handoff.secure_monitor_features,
     );
+    log_line("kernel: secure monitor configured");
     let raw_max_cpus = handoff.effective_max_cpus();
     let max_cpus = if raw_max_cpus <= u32::MAX as u64 {
         raw_max_cpus as u32
@@ -50,7 +50,9 @@ pub extern "C" fn kernel_main(handoff_ptr: u64) -> ! {
         1
     };
     arch::CurrentArch::set_configured_max_cpus(max_cpus);
+    log_line("kernel: CPU topology configured");
     let detected = arch::CurrentArch::detect_cpu_features();
+    log_line("kernel: CPU features detected");
     let pac_seed = if handoff.entropy_seed_valid == 1 {
         Some(handoff.entropy_seed)
     } else if detected.detected.rndr {
@@ -63,9 +65,13 @@ pub extern "C" fn kernel_main(handoff_ptr: u64) -> ! {
         detected.compiled,
         pac_seed.is_some(),
     );
+    log_line("kernel: CPU security policy selected");
     arch::CurrentArch::enable_user_access_protection(features);
+    log_line("kernel: user access protection enabled");
     arch::CurrentArch::initialize_primary(features, pac_seed.unwrap_or([0; 4]));
+    log_line("kernel: primary CPU security initialized");
     arch::CurrentArch::quiesce_firmware_irqs();
+    log_line("kernel: architectural security initialized");
     let trusty_available = trusty::prepare_bootstrap(secure_boot, max_cpus);
     // Complete primary secure initialization before secondary entry can run
     // secure applications concurrently with initialization of IRQ handling.

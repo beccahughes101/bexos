@@ -29,9 +29,25 @@ def _stored_archive_id(package, generation, suffix = None):
         return base + "-" + suffix
     return base
 
-def update_e2e_test(name, boot_data, scenario_args, data = [], timeout = "eternal", x86_scenario_args = None, x86_data = None, development = False, architectures = ["aarch64", "x86_64"]):
+def update_e2e_test(
+        name,
+        boot_data,
+        scenario_args,
+        data = [],
+        timeout = "eternal",
+        x86_scenario_args = None,
+        x86_data = None,
+        development = False,
+        architectures = ["aarch64", "x86_64"],
+        secure_firmware = None,
+        trusty_variant = "standard"):
     test_rule = qemu_development_e2e_test if development else qemu_e2e_test
-    architecture_args = {} if development else {"architectures": architectures}
+    architecture_args = {} if development else {
+        "architectures": architectures,
+        "trusty_variant": trusty_variant,
+    }
+    if secure_firmware != None:
+        architecture_args["secure_firmware"] = secure_firmware
     test_rule(
         name = name,
         src = "debugd_updated_e2e_test.rs",

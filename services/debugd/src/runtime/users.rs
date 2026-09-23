@@ -27,12 +27,12 @@ impl UserServiceManager {
     where
         Q: UserEncode,
     {
-        // User mutations include nested durable VFS operations with a 300 s
-        // budget. Reads share the ordered usersd channel and can queue behind
-        // one of those mutations, so every request needs the same outer
-        // allowance. This is independent of authentication-token lifetimes
-        // and the secure replacement cutover deadlines.
-        let timeout = 360;
+        // User mutations include nested durable VFS and Trusty storage
+        // operations. Reads share the ordered usersd channel and can queue
+        // behind one of those mutations, so every request needs the same outer
+        // allowance. These request budgets are independent of authentication
+        // lifetimes and secure replacement deadlines.
+        let timeout = 600;
         if self.awaiting_response {
             // Untagged FIDL replies must be drained before a new request can
             // use this channel, including after debugd itself is transplanted.

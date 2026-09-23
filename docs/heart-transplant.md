@@ -1,5 +1,10 @@
 # Heart Transplant
 
+The [approved Trusty replacement design](design/trusty-live-replacement.md)
+defines the permanent ARM/x86 execution owners and secure-service continuity
+requirements. Its [current checkpoint](current/trusty-completion.md) tracks
+implementation and acceptance separately.
+
 The QEMU implementation uses the shared `lib/migration` lifecycle:
 **stage → live bulk sync → catch up → quiesce → validate → commit → reclaim**.
 Preparation and precommit failures abort to the old owner. Recovery after
@@ -54,6 +59,12 @@ or abort the active bounded transfer before quiescence; adoption skips cold
 registration and keeps existing endpoints attached. See
 [current I2C and SPI services](i2c_spi.md) for implementation limits and
 validation status.
+
+The [Trusty completion checkpoint](current/trusty-completion.md) records the
+shared live coordinator, writer gate and protected codecs now in source. They
+require product execution and storage adapters before either architecture can
+claim a live Trusty/LK replacement. The unchanged 30-second preparation and
+150-ms readiness deadlines are abort limits, not measured product results.
 
 The QEMU AArch64 TEE path retains the versioned dual-slot Trusty core lifecycle
 model and the orchestrator TA used to coordinate it. `teed` migrates its

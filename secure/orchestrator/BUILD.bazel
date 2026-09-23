@@ -32,9 +32,16 @@ rust_test(
 # Firmware-safe state machine: no dependency on kernel/core or alloc.
 rust_library(
     name = "tee_slots",
-    srcs = ["src/slot_lib.rs", "src/slot_types.rs", "src/tee_slots.rs", "src/slot_wire.rs"],
+    srcs = ["src/slot_lib.rs", "src/slot_types.rs", "src/tee_slots.rs", "src/slot_wire.rs", "src/live.rs", "src/live_wire.rs", "src/writer.rs"],
     crate_root = "src/slot_lib.rs",
     crate_name = "bexos_tee_slots",
     edition = "2024",
     deps = ["@crates__sha2-0.11.0//:sha2"],
+)
+
+rust_test(
+    name = "live_tests",
+    srcs = ["tests/live_tests.rs"],
+    edition = "2024",
+    deps = [":tee_slots"],
 )

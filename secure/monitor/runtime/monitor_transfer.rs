@@ -21,6 +21,17 @@ const HANDOFF_BYTES: usize = STATE_BYTES
 static ABI: [u64; 8] = monitor_image::descriptor(HANDOFF_BYTES);
 #[unsafe(link_section = ".resident.transfer")]
 static mut RECORD: [u8; STATE_BYTES] = [0; STATE_BYTES];
+#[unsafe(link_section = ".resident.secure_registers")]
+#[used]
+static mut SECURE_REGISTERS: core::mem::MaybeUninit<Registers> = core::mem::MaybeUninit::uninit();
+#[unsafe(link_section = ".resident.secure_platform")]
+#[used]
+static mut SECURE_PLATFORM: core::mem::MaybeUninit<Platform<1>> = core::mem::MaybeUninit::uninit();
+#[cfg(feature = "normal_world")]
+#[unsafe(link_section = ".resident.normal_owner")]
+#[used]
+static mut NORMAL_OWNER: core::mem::MaybeUninit<crate::normal::Normal> =
+    core::mem::MaybeUninit::uninit();
 #[unsafe(link_section = ".resident.transfer_control")]
 #[used]
 static mut CONTROL: [u64; 6] = [0; 6];
@@ -44,7 +55,7 @@ monitor_rollback_bank:
     clgi
     lea rdx, [rip + {control}]
     mov rsi, [rdx + 8]
-    mov rdi, 0x60000000
+    mov rdi, 0x100000000
     cmp rsi, 0x04000000
     je 3f
     mov rdi, 0x04000000
@@ -70,7 +81,7 @@ monitor_switch_bank:
     cmp rcx, 192
     jne 1b
     // Keep a private alias for retiring the previous physical image.
-    mov rcx, 1024
+    mov rcx, 1280
     mov rdi, rsi
 2:
     mov rax, rdi
@@ -78,7 +89,7 @@ monitor_switch_bank:
     mov [rdx + rcx*8], rax
     add rdi, 0x200000
     inc rcx
-    cmp rcx, 1184
+    cmp rcx, 1440
     jne 2b
     mov rax, cr3
     mov cr3, rax
@@ -140,9 +151,9 @@ pub unsafe fn transfer_image(
         assert_eq!(control[0], CONTROL_MAGIC);
         (control[1] as usize, control[2].checked_add(1).unwrap())
     };
-    let (next, destination) = match previous {
-        monitor_image::IMAGE_BASE => (monitor_image::INACTIVE_BANK, monitor_image::INACTIVE_BANK),
-        monitor_image::INACTIVE_BANK => (monitor_image::IMAGE_BASE, 0x80000000),
+    let next = match previous {
+        monitor_image::IMAGE_BASE => monitor_image::INACTIVE_BANK,
+        monitor_image::INACTIVE_BANK => monitor_image::IMAGE_BASE,
         _ => panic!("invalid resident image bank"),
     };
     let image = Image::parse(bytes, monitor_image::RESIDENT_END).unwrap();
@@ -153,8 +164,12 @@ pub unsafe fn transfer_image(
         })
         .unwrap();
     // Preparation writes only the inactive bank; retained hardware is omitted.
+    unsafe { crate::root::map_staging(next) };
     let inactive = unsafe {
-        core::slice::from_raw_parts_mut(destination as *mut u8, monitor_image::IMAGE_BYTES)
+        core::slice::from_raw_parts_mut(
+            monitor_image::RETIRING_ALIAS as *mut u8,
+            monitor_image::IMAGE_BYTES,
+        )
     };
     let preparation_start = unsafe { bexos_secure_monitor::clock::now_ns() };
     for offset in (0..monitor_image::IMAGE_BYTES).step_by(1024 * 1024) {
@@ -179,6 +194,13 @@ pub unsafe fn transfer_image(
             );
         }
     }
+    let resume_offset = monitor_image::RESUME_ENTRY - monitor_image::IMAGE_BASE;
+    assert_eq!(
+        &inactive[resume_offset..resume_offset + 16],
+        image.bytes_at(monitor_image::RESUME_ENTRY, 16).unwrap(),
+        "inactive monitor entry did not persist in RAM",
+    );
+    crate::log("monitor-runtime: inactive candidate RAM readback verified\n");
     crate::log("monitor-runtime: candidate prepared while retained guests continued running\n");
     let mut avb = bexos_trusty_boot::avb::Avb::connect(unsafe {
         crate::transport::Boot::new(|| {
@@ -219,6 +241,24 @@ pub unsafe fn transfer_image(
         )
     }
     .unwrap();
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            regs,
+            core::ptr::addr_of_mut!(SECURE_REGISTERS).cast::<Registers>(),
+            1,
+        );
+        core::ptr::copy_nonoverlapping(
+            platform,
+            core::ptr::addr_of_mut!(SECURE_PLATFORM).cast::<Platform<1>>(),
+            1,
+        );
+        #[cfg(feature = "normal_world")]
+        core::ptr::copy_nonoverlapping(
+            normal,
+            core::ptr::addr_of_mut!(NORMAL_OWNER).cast::<crate::normal::Normal>(),
+            1,
+        );
+    }
     crate::log("monitor-runtime: protected snapshot duration ns=\n");
     crate::hex(
         unsafe { bexos_secure_monitor::clock::now_ns() }
@@ -253,6 +293,7 @@ pub unsafe fn transfer_image(
 #[unsafe(no_mangle)]
 extern "C" fn monitor_resume() -> ! {
     unsafe {
+        crate::log("monitor-runtime: candidate resume entry reached\n");
         let control = core::ptr::read_volatile(core::ptr::addr_of!(CONTROL));
         assert_eq!(control[0], CONTROL_MAGIC);
         let epoch = control[2];
@@ -274,29 +315,24 @@ extern "C" fn monitor_resume() -> ! {
 
         let vmcb = &mut *core::ptr::addr_of_mut!(crate::VCPU);
         #[cfg(not(feature = "normal_world"))]
-        let mut regs = Registers::default();
-        #[cfg(not(feature = "normal_world"))]
-        let mut platform = Platform::<1>::new(
-            crate::memory::DomainMemory {
-                base: crate::BANK,
-                length: crate::BANK_SIZE,
-            },
-            true,
-        );
-        #[cfg(not(feature = "normal_world"))]
-        secure_state::restore_protected(
-            epoch,
-            &*core::ptr::addr_of!(RECORD),
-            vmcb,
-            &mut regs,
-            &mut platform,
-        )
-        .unwrap();
+        let prepared =
+            secure_state::prepare_protected(epoch, &*core::ptr::addr_of!(RECORD)).unwrap();
         #[cfg(feature = "normal_world")]
-        let (mut normal, mut regs, mut platform) =
-            crate::domain_state::prepare_protected(epoch, &*core::ptr::addr_of!(RECORD))
-                .unwrap()
-                .install_owners(vmcb);
+        let prepared =
+            crate::domain_state::prepare_protected(epoch, &*core::ptr::addr_of!(RECORD)).unwrap();
+        #[cfg(feature = "normal_world")]
+        crate::log("monitor-runtime: candidate protected record validated\n");
+        prepared.install_transport_only();
+        let mut regs =
+            core::ptr::read_volatile(core::ptr::addr_of!(SECURE_REGISTERS).cast::<Registers>());
+        let mut platform =
+            core::ptr::read_volatile(core::ptr::addr_of!(SECURE_PLATFORM).cast::<Platform<1>>());
+        #[cfg(feature = "normal_world")]
+        let mut normal = core::ptr::read_volatile(
+            core::ptr::addr_of!(NORMAL_OWNER).cast::<crate::normal::Normal>(),
+        );
+        #[cfg(feature = "normal_world")]
+        crate::log("monitor-runtime: candidate protected owners installed\n");
         crate::log(if rolled_back {
             "monitor-runtime: old monitor resumed protected Trusty state through resident recovery\n"
         } else {
@@ -337,9 +373,11 @@ extern "C" fn monitor_resume() -> ! {
             "live readiness deadline exceeded"
         );
         if rolled_back {
-            for chunk in
-                core::slice::from_raw_parts_mut(0x80000000 as *mut u8, monitor_image::IMAGE_BYTES)
-                    .chunks_mut(1024 * 1024)
+            for chunk in core::slice::from_raw_parts_mut(
+                monitor_image::RETIRING_ALIAS as *mut u8,
+                monitor_image::IMAGE_BYTES,
+            )
+            .chunks_mut(1024 * 1024)
             {
                 chunk.fill(0);
                 #[cfg(feature = "normal_world")]
@@ -361,8 +399,10 @@ extern "C" fn monitor_resume() -> ! {
         }));
         // Diagnostic only: no product commitment is claimed. Poison and reuse
         // the entire old image through its resident mapping, then require IPC.
-        let old =
-            core::slice::from_raw_parts_mut(0x80000000 as *mut u8, monitor_image::IMAGE_BYTES);
+        let old = core::slice::from_raw_parts_mut(
+            monitor_image::RETIRING_ALIAS as *mut u8,
+            monitor_image::IMAGE_BYTES,
+        );
         for chunk in old.chunks_mut(1024 * 1024) {
             chunk.fill(0xa5);
             assert!(chunk.iter().all(|byte| *byte == 0xa5));

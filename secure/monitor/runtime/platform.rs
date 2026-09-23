@@ -47,11 +47,14 @@ impl<const N: usize> Platform<N> {
             devices: crate::devices::Devices::new(),
             memory,
             rpmb,
-            console: crate::console::Console::new(if rpmb { "[trusty] " } else { "[bexos] " }),
+            console: crate::console::Console::new(rpmb),
         }
     }
     pub fn reset(&mut self, cpu: usize) {
         self.run[cpu].reset();
+    }
+    pub fn memory_base(&self) -> u64 {
+        self.memory.base
     }
     pub fn before_entry(&mut self, cpu: usize, vmcb: &mut Vmcb, now: u64) -> bool {
         self.devices.before_entry(cpu, vmcb, now);
@@ -64,7 +67,7 @@ impl<const N: usize> Platform<N> {
         match vmcb.exit_code() {
             svm::EXIT_VMMCALL => {
                 unsafe {
-                    crate::transport::exit(self.rpmb, vmcb, regs);
+                    crate::transport::exit(self.rpmb, self.memory.base, vmcb, regs);
                 }
                 true
             }
@@ -264,9 +267,12 @@ impl<const N: usize> Platform<N> {
                     feature = "trusty_recovery_probe",
                     all(feature = "resident_nucleus", feature = "secure_product")
                 ))]
-                if let Some(value) =
-                    crate::secure_boot::fenced_rpmb_port(port, input, vmcb.rax() as u8)
-                {
+                if let Some(value) = crate::secure_boot::fenced_rpmb_port(
+                    self.memory.base,
+                    port,
+                    input,
+                    vmcb.rax() as u8,
+                ) {
                     if input {
                         vmcb.set_rax((vmcb.rax() & !255) | u64::from(value));
                     }

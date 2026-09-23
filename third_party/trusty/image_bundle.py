@@ -29,6 +29,20 @@ METADATA = "build.prototxt"
 REFRESH = "bazel run //third_party/trusty:refresh_image"
 MAX_ARTIFACT = 256 * 1024 * 1024
 MAX_TRUSTY_IMAGE = 14 * 1024 * 1024  # QEMU secure DRAM from BL32_BASE to 0x0f000000
+VARIANTS = (
+    "standard",
+    "authmgr_acceptance",
+    "trusty_generation2",
+    "trusty_generation3",
+    "trusty_incompatible_state",
+    "trusty_fault",
+    "trusty_hang",
+    "authmgr_acceptance_generation2",
+    "authmgr_acceptance_generation3",
+    "authmgr_acceptance_incompatible_state",
+    "authmgr_acceptance_fault",
+    "authmgr_acceptance_hang",
+)
 
 
 def digest(data):
@@ -127,7 +141,7 @@ def main(args):
     variant = "standard"
     if args[:1] == ["--variant"]:
         variant = args[1]
-        if variant not in ("standard", "authmgr_acceptance"):
+        if variant not in VARIANTS:
             raise ValueError("unknown firmware variant")
         args = args[2:]
     operation, destination, *sources = args

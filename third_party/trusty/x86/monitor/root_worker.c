@@ -26,6 +26,18 @@ long monitor_root_request(struct monitor_reply request, unsigned char* bytes) {
         for (unsigned i = 0; i < 8; ++i) bytes[i] = generation >> (i * 8);
         return 8;
     }
+    if (request.operation == BEXOS_ROOT_MIGRATION_ABI) {
+        if (request.length != 8 || request.capacity != 8) return ERR_INVALID_ARGS;
+        uint64_t migration_abi = BEXOS_TRUSTY_MIGRATION_ABI;
+        for (unsigned i = 0; i < 8; ++i) bytes[i] = migration_abi >> (i * 8);
+        return 8;
+    }
+    if (request.operation == BEXOS_ROOT_SERVICE_PROBE) {
+        if (request.length != 8 || request.capacity != 8) return ERR_INVALID_ARGS;
+        uint64_t services = (uint64_t)monitor_probe_services();
+        for (unsigned i = 0; i < 8; ++i) bytes[i] = services >> (i * 8);
+        return 8;
+    }
     return ERR_NOT_SUPPORTED;
 }
 

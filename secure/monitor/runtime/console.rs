@@ -3,7 +3,7 @@
 use core::arch::asm;
 pub struct Console {
     uart: bexos_secure_monitor::uart::Uart,
-    name: &'static str,
+    trusty: bool,
 }
 impl Console {
     pub fn snapshot(
@@ -18,10 +18,10 @@ impl Console {
     ) -> Result<(), bexos_secure_monitor::state_wire::InvalidState> {
         self.uart.restore_protected(input)
     }
-    pub const fn new(name: &'static str) -> Self {
+    pub const fn new(trusty: bool) -> Self {
         Self {
             uart: bexos_secure_monitor::uart::Uart::new(),
-            name,
+            trusty,
         }
     }
     pub fn read(&self, offset: u16) -> u8 {
@@ -33,7 +33,7 @@ impl Console {
             .write(offset, byte)
             .expect("validated UART offset")
         {
-            crate::log(self.name);
+            crate::log(if self.trusty { "[trusty] " } else { "[bexos] " });
             for value in line {
                 unsafe {
                     asm!("out dx, al", in("dx") 0x3f8u16, in("al") *value, options(nomem, nostack));

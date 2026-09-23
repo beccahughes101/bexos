@@ -17,11 +17,13 @@ sh_test(
     name = "cached_replacement_authentication_test",
     srcs = ["replacement_artifacts_test.sh"],
     args = ["$(location //tools/image:vbmeta)"] + ["$(location :cached/" + name + ")" for name in [
-        "boot_root.avbpubkey", "trusty.replacement.fw", "hypervisor.replacement.fw",
+        "boot_root.avbpubkey", "trusty.replacement.fw", "trusty.successor.fw",
+        "trusty.incompatible.fw", "trusty.fault.fw", "trusty.hang.fw", "hypervisor.replacement.fw",
         "hypervisor.fault.fw", "hypervisor.hang.fw", "hypervisor.successor.fw", "hypervisor.successor_fault.fw",
     ]],
     data = ["//tools/image:vbmeta"] + [":cached/" + name for name in [
-        "boot_root.avbpubkey", "trusty.replacement.fw", "hypervisor.replacement.fw",
+        "boot_root.avbpubkey", "trusty.replacement.fw", "trusty.successor.fw",
+        "trusty.incompatible.fw", "trusty.fault.fw", "trusty.hang.fw", "hypervisor.replacement.fw",
         "hypervisor.fault.fw", "hypervisor.hang.fw", "hypervisor.successor.fw", "hypervisor.successor_fault.fw",
     ]],
 )
