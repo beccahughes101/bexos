@@ -1,0 +1,56 @@
+library bexos.pkg;
+
+type PackageStatus = strict enum : int32 {
+    OK = 0;
+    NOT_FOUND = -10;
+    ACCESS_DENIED = -2;
+    INVALID_ARGS = -8;
+    RESOURCE_EXHAUSTED = -9;
+    VERIFY_FAILED = -21;
+    UNAVAILABLE = -95;
+    IO = -14;
+    TIMED_OUT = -6;
+};
+type HashType = strict enum : uint8 { SHA256 = 1; BLAKE3 = 2; };
+type ArtifactKind = strict enum : uint8 { APPLICATION = 1; DRIVER = 2; FONT = 3; FIRMWARE = 4; };
+struct BlobDigest { hash_type HashType; digest array<uint8, 32>; };
+struct ArtifactQuery {
+    registry_host string:128;
+    repository string:128;
+    tag string:64;
+    expected_digest vector<BlobDigest>:1;
+    kind ArtifactKind;
+};
+resource struct ResolvedBlob {
+    data handle:VMO;
+    content_length uint64;
+    verified_digest BlobDigest;
+};
+@discoverable
+protocol PackageResolver {
+    1: ResolveArtifact(struct { query ArtifactQuery; }) -> (resource struct {
+        status PackageStatus;
+        blob vector<ResolvedBlob>:1;
+    });
+    2: ResolveBlob(struct { digest BlobDigest; allow_network_fetch bool; }) -> (resource struct {
+        status PackageStatus;
+        blob vector<ResolvedBlob>:1;
+    });
+};
+@discoverable
+protocol CredentialManager {
+    1: SetRegistryCredential(struct {
+        registry_host string:128;
+        auth_token string:1024;
+        sealed_in_trusty bool;
+    }) -> (struct { status PackageStatus; });
+    2: SetRegistryMtlsIdentity(resource struct {
+        registry_host string:128;
+        certificate_chain handle:VMO;
+        certificate_chain_length uint64;
+        private_key handle:VMO;
+        private_key_length uint64;
+        sealed_in_trusty bool;
+    }) -> (struct { status PackageStatus; });
+    3: RemoveRegistryCredential(struct { registry_host string:128; }) -> (struct { status PackageStatus; });
+};

@@ -52,7 +52,7 @@ impl State for Runtime {
             return Err(Error::InvalidData);
         }
         let mut w = Encoder::new();
-        w.word(3);
+        w.word(4);
         w.word(self.control.0);
         w.word(self.migration.map_or(0, |c| c.0));
         w.word(self.generation);
@@ -90,7 +90,7 @@ impl State for Runtime {
         }
         let mut r = Decoder::new(bytes.ok_or(Error::InvalidData)?);
         let version = r.word()?;
-        if version != 1 && version != 2 && version != 3 {
+        if !(1..=4).contains(&version) {
             return Err(Error::UnsupportedVersion);
         }
         self.control = Channel(r.word()?);
@@ -184,6 +184,7 @@ fn encode_config(w: &mut Encoder, config: &TimedConfig) {
     w.word(config.use_nts as u64);
     w.word(config.slew_limit_ppm as i64 as u64);
     w.word(config.slew_step_threshold_ns as u64);
+    w.word(config.network_sync_enabled as u64);
 }
 
 fn decode_config(r: &mut Decoder<'_>, version: u64) -> Result<TimedConfig, Error> {
@@ -198,6 +199,9 @@ fn decode_config(r: &mut Decoder<'_>, version: u64) -> Result<TimedConfig, Error
     if version >= 2 {
         config.slew_limit_ppm = r.word()? as i64 as i32;
         config.slew_step_threshold_ns = r.word()? as i64;
+    }
+    if version >= 4 {
+        config.network_sync_enabled = decode_bool(r.word()?)?;
     }
     Ok(config)
 }

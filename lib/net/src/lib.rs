@@ -21,10 +21,15 @@ core::arch::global_asm!(
 "#
 );
 
+#[cfg(feature = "std")]
+pub mod async_connect;
+#[cfg(feature = "std")]
+pub mod async_http;
 pub mod doh;
 pub mod http1;
 pub mod http2;
 pub mod http3;
+pub mod http_stream;
 pub mod nts;
 pub mod quic;
 #[cfg(feature = "std")]

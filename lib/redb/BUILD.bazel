@@ -67,7 +67,7 @@ rust_library(
 
 rust_library(
     name = "redb",
-    srcs = ["src/lib.rs"],
+    srcs = ["src/lib.rs", "src/bounded.rs", "src/retained.rs"],
     crate_features = [
         "redb_backend",
         "redb_no_std",
@@ -79,7 +79,7 @@ rust_library(
 
 rust_library(
     name = "redb_std",
-    srcs = ["src/lib.rs"],
+    srcs = ["src/lib.rs", "src/bounded.rs", "src/retained.rs"],
     crate_features = ["std", "redb_backend"],
     crate_name = "bexos_redb",
     edition = "2024",
@@ -93,7 +93,7 @@ alias(
 
 rust_library(
     name = "redb_bexos_std",
-    srcs = ["src/lib.rs"],
+    srcs = ["src/lib.rs", "src/bounded.rs", "src/retained.rs"],
     crate_features = [
         "std",
         "redb_backend",
@@ -116,4 +116,11 @@ rust_test(
         ":redb_host",
         "@crates//:redb",
     ],
+)
+
+rust_test(
+    name = "retained_tests",
+    srcs = ["tests/retained_tests.rs"],
+    edition = "2024",
+    deps = [":redb_host", "@crates//:redb"],
 )

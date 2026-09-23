@@ -1,7 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use bexos_userspace::Socket;
 use net_fidl::{
     IpAddress as FidlIpAddress, Ipv4Address as FidlIpv4Address, Ipv6Address as FidlIpv6Address,
 };
@@ -27,6 +26,7 @@ pub struct SmoltcpRuntime {
     iface: Interface,
     sockets: SocketSet<'static>,
     dns_udp: Option<smoltcp::iface::SocketHandle>,
+    retired_tcp: Vec<smoltcp::iface::SocketHandle>,
 }
 
 impl SmoltcpRuntime {
@@ -39,6 +39,7 @@ impl SmoltcpRuntime {
             iface,
             sockets: SocketSet::new(Vec::new()),
             dns_udp: None,
+            retired_tcp: Vec::new(),
         }
     }
 
@@ -64,6 +65,7 @@ impl SmoltcpRuntime {
             .is_err()
         {
             socket.abort();
+            self.sockets.remove(handle);
             return false;
         }
         endpoint.smoltcp_handle = Some(handle);
@@ -130,6 +132,11 @@ impl SmoltcpRuntime {
         dns: &mut DnsCache,
     ) {
         self.iface.poll(now(), link, &mut self.sockets);
+        // Give aborted connections a chance to emit RST, then reclaim their
+        // buffers. They no longer have a consumer or migratable endpoint.
+        for handle in self.retired_tcp.drain(..) {
+            self.sockets.remove(handle);
+        }
         for endpoint in tcp {
             self.poll_endpoint(endpoint);
         }
@@ -178,9 +185,13 @@ impl SmoltcpRuntime {
             endpoint.state = TcpState::Closed;
         }
         if let Some(stream) = endpoint.stream {
-            pump_stream_to_tcp(stream, socket);
-            pump_tcp_to_stream(stream, socket);
+            crate::stream::pump(stream, socket);
         }
+    }
+
+    pub fn retire_tcp(&mut self, handle: smoltcp::iface::SocketHandle) {
+        self.sockets.get_mut::<tcp::Socket>(handle).abort();
+        self.retired_tcp.push(handle);
     }
 
     fn poll_listener(&mut self, listener: &mut TcpListenerState) {
@@ -305,34 +316,6 @@ fn apply_config(iface: &mut Interface, config: ActiveConfig) {
             .add_default_ipv6_route(Ipv6Address::from_octets(gateway));
     } else if config.source == ConfigSource::Unconfigured && !config.slaac_enabled {
         iface.routes_mut().remove_default_ipv6_route();
-    }
-}
-
-fn pump_stream_to_tcp(stream: Socket, socket: &mut tcp::Socket<'_>) {
-    if !socket.can_send() {
-        return;
-    }
-    let Ok(info) = stream.info() else {
-        return;
-    };
-    if info.readable_bytes == 0 {
-        return;
-    }
-    let max = info.readable_bytes.min(4096) as u32;
-    if let Ok(bytes) = stream.read(max) {
-        let _ = socket.send_slice(&bytes);
-    }
-}
-
-fn pump_tcp_to_stream(stream: Socket, socket: &mut tcp::Socket<'_>) {
-    if !socket.can_recv() {
-        return;
-    }
-    let mut bytes = [0u8; 4096];
-    if let Ok(len) = socket.recv_slice(&mut bytes) {
-        if len != 0 {
-            let _ = stream.write(&bytes[..len]);
-        }
     }
 }
 

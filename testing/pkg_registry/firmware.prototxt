@@ -1,0 +1,3 @@
+package_name: "bexos.test.pkg_firmware"
+name: "RFC 64 firmware delivery fixture"
+package_kind: LIBRARY

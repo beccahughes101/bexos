@@ -1,0 +1,22 @@
+load("//testing/e2e/qemu:qemu_e2e.bzl", "qemu_e2e_test", "QEMU_BOOT_ARTIFACTS")
+load("//testing/e2e/qemu:architecture_test.bzl", "qemu_suites")
+package(default_visibility = ["//visibility:public"])
+genrule(
+    name = "fixture_disk",
+    srcs = [QEMU_BOOT_ARTIFACTS["disk"], QEMU_BOOT_ARTIFACTS["key"], "//testing/pkg_registry:reject_archive", "//services/fontd:fontd_archive", "//testing/pkg_registry:probe_archive", "//testing/pkg_registry:denied_archive", "//testing/pkg_registry:protocol_archive", "//testing/pkg_registry:timed_archive"],
+    outs = ["fixture_disk.img"],
+    tools = ["//tools/image:bexfs_image"],
+    cmd = "cp $(location " + QEMU_BOOT_ARTIFACTS["disk"] + ") $@ && chmod u+w $@ && $(location //tools/image:bexfs_image) --inspect --image $@ --partition STORAGE --label STORAGE --key-file $(location " + QEMU_BOOT_ARTIFACTS["key"] + ") --entry updates/bexos.service.pkgd.rejected.bex=$(location //testing/pkg_registry:reject_archive) --entry pkg/bexos.service.fontd.bex=$(location //services/fontd:fontd_archive) --entry pkg/bexos.platform.pkg_probe.bex=$(location //testing/pkg_registry:probe_archive) --entry pkg/bexos.test.pkg_denied.bex=$(location //testing/pkg_registry:denied_archive) --entry pkg/bexos.test.pkg_protocol.bex=$(location //testing/pkg_registry:protocol_archive) --entry pkg/bexos.service.timed.bex=$(location //testing/pkg_registry:timed_archive)",
+)
+# The architecture transition selects test trust without changing product defaults.
+qemu_e2e_test(
+    boot_data = dict(QEMU_BOOT_ARTIFACTS, disk = ":fixture_disk"),
+    package_config = "//testing/pkg_registry:guest_config.prototxt",
+    # Both architecture fixtures use the same explicitly configured loopback port.
+    tags = ["exclusive"],
+    name = "package_resolution_test", src = "acceptance.rs", crate_name = "package_resolution_test",
+    deps = ["//testing/e2e", "//tools/qemu:qemu_test", "//host/debug_client", "//testing/pkg_registry:https_fixture", "@crates//:serde_json"],
+    extra_data = ["//testing/pkg_registry:responses.json"],
+    extra_args = ["$(rootpath //testing/pkg_registry:responses.json)"],
+)
+qemu_suites()

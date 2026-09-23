@@ -111,8 +111,13 @@ async fn serve<B: MigratableBackend + Default>(mut runtime: Runtime<B>) -> ! {
                 message.handles.first().copied(),
                 core::str::from_utf8(&message.bytes),
             ) {
-                if let Some(binding) = ServiceBinding::parse(metadata) {
+                if let Some(mut binding) = ServiceBinding::parse(metadata) {
                     if binding.protocol_is("TeeManager") {
+                        if binding.caller_package.as_deref() != Some("bexos.service.pkgd")
+                            || binding.capability != "PackageState"
+                        {
+                            binding.method_ordinals.retain(|ordinal| *ordinal != 14);
+                        }
                         runtime.clients.push(BoundServiceEndpoint::new(
                             Channel(endpoint),
                             binding.method_ordinals,
@@ -144,13 +149,25 @@ async fn poll_clients<B: TeeBackend>(runtime: &mut Runtime<B>) -> bool {
     let mut changed = false;
     let clients = core::mem::take(&mut runtime.clients);
     for client in clients {
-        match poll_client(&client, &mut runtime.service).await {
+        match poll_client(&client, &mut runtime.service, &mut runtime.session_owners).await {
             Ok(()) => {
                 changed = true;
                 runtime.clients.push(client);
             }
             Err(Status::ErrTimedOut) => runtime.clients.push(client),
-            Err(Status::ErrPeerClosed) => {}
+            Err(Status::ErrPeerClosed) => {
+                let sessions: Vec<_> = runtime
+                    .session_owners
+                    .iter()
+                    .filter(|(_, owner)| **owner == client.channel.0)
+                    .map(|(id, _)| *id)
+                    .collect();
+                for session in sessions {
+                    let _ = runtime.service.close_session(session).await;
+                    runtime.session_owners.remove(&session);
+                }
+                let _ = Memory::close(client.channel.0);
+            }
             Err(_) => runtime.clients.push(client),
         }
     }
@@ -160,11 +177,13 @@ async fn poll_clients<B: TeeBackend>(runtime: &mut Runtime<B>) -> bool {
 async fn poll_client<B: TeeBackend>(
     client: &BoundServiceEndpoint,
     service: &mut TeeService<B>,
+    owners: &mut alloc::collections::BTreeMap<u64, u64>,
 ) -> Result<(), Status> {
     let channel = client.channel;
     let message = channel.try_recv()?;
     let _received_handles = ReceivedHandles(message.handles.clone());
-    let (ordinal, req) = envelope(&message.bytes);
+    let message_bytes = PrivateRequest(message.bytes);
+    let (ordinal, req) = envelope(&message_bytes.0);
     let handles: Vec<_> = message
         .handles
         .iter()
@@ -174,6 +193,66 @@ async fn poll_client<B: TeeBackend>(
         return Ok(());
     }
     match ordinal {
+        14 => {
+            use tee_manager_fidl::{
+                TeeManagerExchangePackageStateRequest, TeeManagerExchangePackageStateResponse,
+            };
+            let result = match TeeManagerExchangePackageStateRequest::decode(req, &handles) {
+                Ok(request) if message.handles.is_empty() => {
+                    let bytes = request.request;
+                    if bytes.len() < 96 || bytes.len() > 3168 {
+                        Err(TeeStatus::ErrInvalidArgs)
+                    } else if service
+                        .info()
+                        .await
+                        .is_ok_and(|info| info.kind == tee_manager_fidl::TeeKind::SoftwareEmu)
+                    {
+                        Err(TeeStatus::ErrUnavailable)
+                    } else {
+                        match service
+                            .backend_mut()
+                            .open_endpoint("bexos.orchestrator", "com.bexos.package-state")
+                            .await
+                        {
+                            Ok(session) => {
+                                let result = service
+                                    .backend_mut()
+                                    .invoke_command(session, 0, &bytes)
+                                    .await;
+                                let closed = service.backend_mut().close_session(session).await;
+                                if closed != TeeStatus::Ok {
+                                    // A privileged internal session must never remain available to
+                                    // subsequent generic InvokeCommand requests after an error.
+                                    log(
+                                        "teed: package-state session close failed; failing closed\n",
+                                    );
+                                    bexos_userspace::exit();
+                                }
+                                result.map(|result| result.bytes)
+                            }
+                            Err(error) => Err(error),
+                        }
+                    }
+                }
+                _ => Err(TeeStatus::ErrInvalidArgs),
+            };
+            let (status, mut bytes) = match result {
+                Ok(bytes) => (TeeStatus::Ok, bytes),
+                Err(status) => (status, Vec::new()),
+            };
+            send_response(
+                channel,
+                &TeeManagerExchangePackageStateResponse {
+                    status,
+                    response: &bytes,
+                },
+            );
+            for byte in &mut bytes {
+                unsafe {
+                    core::ptr::write_volatile(byte, 0);
+                }
+            }
+        }
         1 => {
             let _ = TeeManagerGetTeeInfoRequest::decode(req, &handles);
             let response = match service.info().await {
@@ -273,12 +352,23 @@ async fn poll_client<B: TeeBackend>(
                     session_id: 0,
                 },
             };
+            if response.status == TeeStatus::Ok {
+                owners.insert(response.session_id, channel.0);
+            }
             send_response(channel, &response);
         }
         6 => {
             let response = match TeeManagerCloseSessionRequest::decode(req, &handles) {
                 Ok(request) => TeeManagerCloseSessionResponse {
-                    status: service.close_session(request.session_id).await,
+                    status: if owners.get(&request.session_id) != Some(&channel.0) {
+                        TeeStatus::ErrAccessDenied
+                    } else {
+                        let status = service.close_session(request.session_id).await;
+                        if status == TeeStatus::Ok {
+                            owners.remove(&request.session_id);
+                        }
+                        status
+                    },
                 },
                 Err(_) => TeeManagerCloseSessionResponse {
                     status: TeeStatus::ErrInvalidArgs,
@@ -287,7 +377,14 @@ async fn poll_client<B: TeeBackend>(
             send_response(channel, &response);
         }
         7 => {
-            let response = match TeeManagerInvokeCommandRequest::decode(req, &handles) {
+            let mut response = match TeeManagerInvokeCommandRequest::decode(req, &handles) {
+                Ok(request) if owners.get(&request.session_id) != Some(&channel.0) => {
+                    TeeManagerInvokeCommandResponse {
+                        status: TeeStatus::ErrAccessDenied,
+                        response: HandleRef { raw: 0 },
+                        response_len: 0,
+                    }
+                }
                 Ok(request) => match vmo_bytes(request.payload.raw, request.payload_len) {
                     Ok((mapped, payload)) => {
                         let result = service
@@ -326,6 +423,12 @@ async fn poll_client<B: TeeBackend>(
                     response_len: 0,
                 },
             };
+            // The existing InvokeCommand ABI requires a VMO even for an error.
+            // A zero handle cannot be transferred and would hide the status
+            // behind a client timeout (including session ownership failures).
+            if response.response.raw == 0 {
+                response.response.raw = Memory::create(4096, 0)?;
+            }
             send_response(channel, &response);
         }
         8 => {
@@ -434,6 +537,9 @@ async fn poll_client<B: TeeBackend>(
                     session_id: 0,
                 },
             };
+            if response.status == TeeStatus::Ok {
+                owners.insert(response.session_id, channel.0);
+            }
             send_response(channel, &response);
         }
         11 => {
@@ -582,7 +688,11 @@ fn send_response<T: FidlEncode>(client: Channel, response: &T) {
         .iter()
         .map(|handle| handle.raw)
         .collect();
-    let _ = client.send(&out[..encoded.bytes], &raw);
+    if client.send(&out[..encoded.bytes], &raw).is_err() {
+        for handle in raw {
+            let _ = Memory::close(handle);
+        }
+    }
 }
 
 fn envelope(bytes: &[u8]) -> (u64, &[u8]) {
@@ -596,4 +706,17 @@ fn envelope(bytes: &[u8]) -> (u64, &[u8]) {
 
 fn metadata_protocol(metadata: &str) -> Option<&str> {
     metadata.split('|').nth(1)
+}
+
+// Includes credential provisioning requests; no plaintext request copies survive dispatch.
+struct PrivateRequest(Vec<u8>);
+impl Drop for PrivateRequest {
+    fn drop(&mut self) {
+        for byte in &mut self.0 {
+            unsafe {
+                core::ptr::write_volatile(byte, 0);
+            }
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    }
 }

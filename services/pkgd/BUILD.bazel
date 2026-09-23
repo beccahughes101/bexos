@@ -1,0 +1,23 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//build/rules:userspace.bzl", "std_service_binary", "app_manifest")
+load("//build/rules:app_archive.bzl", "app_archive")
+package(default_visibility = ["//visibility:public"])
+PKG_DEPS = [
+    "//idl:pkg_fidl_rust", "//idl:kernel_fidl_rust", "//idl:tee_manager_fidl_rust",
+    "//lib/pkg_client", "//lib/pkg_config", "//lib/tuf", "//lib/component_config",
+    "//lib/userspace", "//lib/migration", "//lib/net:net_secure",
+    "@crates//:redb", "@crates//:serde_json", "@crates//:sha2", "@crates//:blake3", "@crates//:rustls",
+]
+rust_library(name = "pkgd", srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]), crate_features = ["guest"], crate_name = "bexos_pkgd", edition = "2024", deps = PKG_DEPS + ["//lib/redb:redb_bexos_std", "//idl:time_fidl_rust", "//idl:fs_fidl_rust"], compile_data = [":config"], rustc_env = {"PKGD_CONFIG": "$(execpath :config)"})
+rust_library(name = "pkgd_host", srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]), crate_name = "bexos_pkgd", edition = "2024", deps = PKG_DEPS + ["//lib/redb:redb_host"], compile_data = [":config"], rustc_env = {"PKGD_CONFIG": "$(execpath :config)"})
+label_flag(name = "config_source", build_setting_default = "package/config.prototxt")
+genrule(name = "config", srcs = [":config_source", "//idl:pkg_config_proto_src"], outs = ["config.pb"], tools = ["@protobuf//:protoc"], cmd = "$(location @protobuf//:protoc) --proto_path=. --encode=bexos.pkg.Config idl/bexos/pkg/config.proto < $(location :config_source) > $@")
+std_service_binary(name = "pkgd_elf", srcs = ["src/main.rs"], crate_name = "bexos_pkgd_elf", deps = [":pkgd"])
+std_service_binary(name = "replacement_elf", srcs = ["src/main.rs"], crate_name = "bexos_pkgd_replacement_elf", deps = [":pkgd"])
+app_manifest(name = "package_manifest", src = "package/pkgd.prototxt")
+app_archive(name = "pkgd_archive", manifest = ":package_manifest", entries = {"bin/pkgd": ":pkgd_elf", "config/pkgd.pb": ":config"}, compression = "zstd")
+app_archive(name = "replacement_archive", manifest = ":package_manifest", entries = {"bin/pkgd": ":replacement_elf", "config/pkgd.pb": ":config"}, compression = "zstd")
+rust_test(name = "tests", crate_root = "tests/tests.rs", srcs = glob(["tests/**/*.rs"]), edition = "2024", deps = [":pkgd_host", "//lib/pkg_client", "//lib/pkg_config", "//lib/tuf", "//lib/redb:redb_host", "@crates//:redb", "@crates//:serde_json", "@crates//:sha2", "@crates//:ed25519-dalek"])
+rust_test(name = "migration_tests", crate = ":pkgd", crate_features = ["guest"])
+
+rust_library(name = "test_fixture", testonly = True, crate_name = "pkg_test_fixture", crate_root = "tests/fixture.rs", srcs = ["tests/fixture.rs"], edition = "2024", deps = [":pkgd_host", "//lib/pkg_client", "//lib/pkg_config", "@crates//:ed25519-dalek", "@crates//:serde_json", "@crates//:sha2"])

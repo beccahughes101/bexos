@@ -17,6 +17,7 @@ pub mod manager;
 pub mod manifest;
 pub mod namespace;
 pub mod opener;
+pub mod package_install;
 pub mod permission_persistence;
 pub mod permission_route;
 pub mod platform_config;

@@ -28,7 +28,7 @@ Typography is a frequent source of performance degradation and security vulnerab
 
 BexOS resolves these challenges by centralizing verification and caching within `fontd`, sharing immutable physical pages across processes using microkernel VMOs, and dynamically pulling optional font families over standard OCI package infrastructure.
 
-The repository currently implements the complete local portion of this design. OCI/TUF discovery, `pkgd` integration, `/data/cache/fonts`, network activity, and download prompts remain future work. `allow_network_fetch` is retained in the stable protocol, but a disabled missing-font resolver returns `NOT_FOUND` without network or cache activity. See [CURRENT.md](CURRENT.md) for the exact implemented boundary.
+The repository implements the local portion and now includes a configured pkgd-backed remote miss path. Default products contain no remote registry roots or font mappings; guest OCI acceptance remains outstanding. Storage is centralized in pkgd rather than `/data/cache/fonts`. Download prompts remain future work. See [CURRENT.md](CURRENT.md) and [RFC 0064 current state](../0064/CURRENT.md) for the implemented boundary and validation.
 
 ---
 

@@ -316,11 +316,11 @@ pub fn handle_app_manager_message(
     channel: u64,
     bytes: &[u8],
     handles: &[u64],
-) {
+) -> bool {
     use app_manager::FidlDecode;
     if bytes.len() < 8 {
         close_handles(handles);
-        return;
+        return false;
     }
     let ordinal = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
     let request = &bytes[8..];
@@ -328,7 +328,61 @@ pub fn handle_app_manager_message(
         .iter()
         .map(|raw| app_manager::HandleRef { raw: *raw })
         .collect::<Vec<_>>();
+    let mut durable_changed = false;
     match ordinal {
+        4 => {
+            let result =
+                app_manager::AppManagerInstallAppFromArtifactRequest::decode(request, &handle_refs)
+                    .map_err(|_| app_manager::AppManagerStatus::InvalidArgs)
+                    .and_then(|request| {
+                        if !handles.is_empty()
+                            || request.query.kind != app_manager::InstallArtifactKind::Application
+                        {
+                            return Err(app_manager::AppManagerStatus::InvalidArgs);
+                        }
+                        let expected_digest = if request.query.expected_digest.len() == 0 {
+                            None
+                        } else {
+                            let expected = request
+                                .query
+                                .expected_digest
+                                .get(0)
+                                .map_err(|_| app_manager::AppManagerStatus::InvalidArgs)?;
+                            Some(pkg_fidl::BlobDigest {
+                                hash_type: match expected.hash_type {
+                                    app_manager::ArtifactDigestHash::Sha256 => {
+                                        pkg_fidl::HashType::Sha256
+                                    }
+                                    app_manager::ArtifactDigestHash::Blake3 => {
+                                        pkg_fidl::HashType::Blake3
+                                    }
+                                },
+                                digest: expected.digest,
+                            })
+                        };
+                        crate::package_install::begin(
+                            state,
+                            channel,
+                            bexos_pkg_client::ArtifactQuery {
+                                registry_host: request.query.registry_host.into(),
+                                repository: request.query.repository.into(),
+                                tag: request.query.tag.into(),
+                                expected_digest,
+                                kind: pkg_fidl::ArtifactKind::Application,
+                            },
+                        )
+                    });
+            close_handles(handles);
+            if let Err(status) = result {
+                app_manager_reply(
+                    channel,
+                    &app_manager::AppManagerInstallAppFromArtifactResponse {
+                        status,
+                        allocated_package_id: "",
+                    },
+                );
+            }
+        }
         1 => {
             let package_id;
             let response = match app_manager::AppManagerInstallAppFromUrlRequest::decode(
@@ -352,6 +406,7 @@ pub fn handle_app_manager_message(
                     association: app_manager::AssociationStatus::DomainUnreachable,
                 },
             };
+            durable_changed = response.status == app_manager::AppManagerStatus::Ok;
             app_manager_reply(channel, &response);
         }
         2 => {
@@ -375,6 +430,7 @@ pub fn handle_app_manager_message(
                     updated_handlers_count: 0,
                 },
             };
+            durable_changed = response.status == app_manager::AppManagerStatus::Ok;
             app_manager_reply(channel, &response);
         }
         3 => {
@@ -394,6 +450,7 @@ pub fn handle_app_manager_message(
         }
         _ => close_handles(handles),
     }
+    durable_changed
 }
 
 fn get_domain_association<'a>(

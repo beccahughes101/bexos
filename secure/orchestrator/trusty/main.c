@@ -10,6 +10,7 @@
 
 static struct bexos_orchestrator_state state;
 int bexos_journal_add_service(struct tipc_hset* hset);
+int bexos_package_add_service(struct tipc_hset* hset);
 
 static int on_message(const struct tipc_port* port, handle_t chan, void* ctx) {
     (void)port;
@@ -45,5 +46,6 @@ int main(void) {
     bexos_orchestrator_init(&state);
     int rc = tipc_add_service(hset, &port, 1, 1, &ops);
     if (!rc) rc = bexos_journal_add_service(hset);
+    if (!rc) rc = bexos_package_add_service(hset);
     return rc ? rc : tipc_run_event_loop(hset);
 }

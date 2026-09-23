@@ -148,3 +148,26 @@ fn test_runtime() -> tokio::runtime::Runtime {
         .build()
         .unwrap()
 }
+
+#[test]
+fn generic_tee_bindings_cannot_open_package_state_or_ambiguous_ports() {
+    test_runtime().block_on(async {
+        let mut service = TeeService::new(SoftwareEmuBackend::new());
+        assert_eq!(
+            service
+                .open_endpoint("bexos.orchestrator", "com.bexos.package-state")
+                .await,
+            Err(TeeStatus::ErrAccessDenied)
+        );
+        for port in [
+            "com.bexos.package-state\0suffix",
+            "com.bexos.package-state\n",
+            "com.bexos.package-state ",
+        ] {
+            assert_eq!(
+                service.open_endpoint("bexos.orchestrator", port).await,
+                Err(TeeStatus::ErrInvalidArgs)
+            );
+        }
+    });
+}

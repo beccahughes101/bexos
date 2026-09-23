@@ -22,6 +22,7 @@ pub struct Blob {
 }
 
 pub struct Runtime {
+    pub remote: crate::remote::Remote,
     pub control: Channel,
     pub migration: Option<Channel>,
     pub vfsd: Channel,
@@ -36,6 +37,7 @@ pub struct Runtime {
 impl Runtime {
     pub fn empty() -> Self {
         Self {
+            remote: crate::remote::Remote::default(),
             control: Channel(0),
             migration: None,
             vfsd: Channel(0),

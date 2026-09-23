@@ -12,7 +12,9 @@ RFC 0063's local implementation adds the `bexos.fonts.FontProvider` protocol,
 the transplantable wave-5 `fontd` service, system and per-user indexes,
 read-only shared-VMO clients, Inter/JetBrains Mono/Noto image packaging, and
 provider-backed Parley shaping in scened and the native Dioxus host. Dynamic
-OCI/pkgd discovery remains disabled future work. The focused host, migration,
+OCI/pkgd discovery was disabled at this local-font validation milestone; RFC 0064
+now adds a configured resolver path whose guest acceptance is tracked separately.
+The focused host, migration,
 manifest, disk-layout, and image-closure selection passes:
 
 ```sh
@@ -841,3 +843,34 @@ were corrected and covered by the final runs. Required Bazel Rust formatting
 completed. Frame timing and binary size exceed the design targets; firmware
 framebuffer and pending-handoff rejection coverage is host-side. See
 [boot UI](bootui.md) for exact commands, measurements, and current limitations.
+
+
+RFC 0064 now adds the centralized pkgd source implementation, including a
+configured font miss path, asynchronous app installation, OCI/TUF verification
+and a protected package-state endpoint. Default products contain no remote
+registry roots or mappings. The complete guest/lifecycle acceptance remains
+outstanding; see [package resolution current state](rfcs/0064/CURRENT.md).
+On 2026-09-13, 16 affected host targets passed, including retained database
+ownership across close/reopen. The ARM guest passed malformed-resource and
+cancellation probes and provisioned sealed credentials, then failed artifact
+resolution with `UNAVAILABLE`. Subsequent incremental TUF lookup changes passed
+15 TUF tests and 21 pkgd tests, including interrupted CAS writes and credential
+generation isolation. Shared userspace, kernel routing, appd and RTC-only timed
+checks also passed. The guest now validates RTC time and reaches authenticated
+OCI metadata and payload URLs after directory handoff and stream fixes. The
+last naturally completed ARM run failed with a TCP setup timeout before consumer
+success. Later diagnostic runs were deliberately stopped; one showed an HTTP
+deadline expiring after 294,908 of 361,234 application bytes. Configurable TCP/TLS
+and HTTP limits subsequently passed focused host checks: 21 pkgd tests, four
+lifecycle tests, four HTTPS/deadline tests, five shared network tests and the
+client dependency-policy check. No confirmed guest result exists for these new
+limits, and no verified guest artifact delivery is claimed.
+Netstack's 18 public tests, three internal tests and five shared network tests
+passed. Full guest delivery, replacement and reboot acceptance remain pending.
+The lifecycle fixture also needs explicit ordering to prove reads remain pending
+through service and credential replacement. Synchronous service/storage calls,
+ignored TCP buffer sizing and TLS root-bundle handle cleanup are open source
+findings. The authoritative [gap table](rfcs/0064/CURRENT.md#current-gaps)
+separates implementation defects, missing assertions, unpassed guest scenarios
+and final-tree architecture/product checks. No physical-hardware validation is
+claimed for RFC 0064.

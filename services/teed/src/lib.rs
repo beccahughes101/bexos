@@ -961,7 +961,7 @@ fn trusty_builtin_apps() -> Vec<TrustedApp> {
             ORCHESTRATOR_UUID,
             "bexos.orchestrator",
             "com.bexos.orchestrator",
-            &[ORCHESTRATOR_PORT],
+            &[ORCHESTRATOR_PORT, "com.bexos.package-state"],
         ),
     ]
 }
@@ -1063,7 +1063,13 @@ impl<B: TeeBackend> TeeService<B> {
         package_id: &str,
         service_port: &str,
     ) -> Result<u64, TeeStatus> {
-        if package_id.is_empty() || service_port.is_empty() {
+        if service_port == "com.bexos.package-state" {
+            return Err(TeeStatus::ErrAccessDenied);
+        }
+        if package_id.is_empty()
+            || service_port.is_empty()
+            || service_port.bytes().any(|byte| byte <= 32 || byte >= 127)
+        {
             return Err(TeeStatus::ErrInvalidArgs);
         }
         self.backend.open_endpoint(package_id, service_port).await

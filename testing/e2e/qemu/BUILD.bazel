@@ -10,6 +10,7 @@ E2E_PACKAGES = [
     "kernel/faults",
     "nvme",
     "preferences",
+    "pkg",
     "sysui",
     "trusty",
     "update",

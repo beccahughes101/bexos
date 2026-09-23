@@ -47,8 +47,21 @@ the mapped font data for glyph rendering. Retained documents migrate; mapped
 font and shaping caches are re-resolved after adoption. Signed package-local
 font assets remain supported by the existing scene asset path.
 
-Not implemented yet: OCI font manifests, registry lookup, pkgd/TUF integration,
-network permissions, `/data/cache/fonts`, WOFF2 decoding, SysUI download prompts,
-and Servo-specific consumers. `allow_network_fetch` remains in the FIDL contract,
-but local hits ignore it and local misses pass to a disabled resolver that returns
-`NOT_FOUND` without network or persistent cache activity.
+Configured remote misses now use pkgd through `lib/pkg_client`, with local
+matching taking priority and the existing parser validating returned metadata.
+Only misses with `allow_network_fetch=true` may trigger named network resolution;
+known digests otherwise use cache-only calls. Default products have no remote
+font mappings. Guest OCI acceptance, WOFF2 decoding, SysUI download prompts and
+Servo-specific consumers remain outstanding. CAS storage belongs to pkgd;
+fontd does not gain a network capability or a separate `/data/cache/fonts`.
+
+
+RFC 0064 now adds the centralized pkgd source implementation, including a
+configured font miss path, asynchronous app installation, OCI/TUF verification
+and a protected package-state endpoint. Default products contain no remote
+registry roots or mappings. The complete guest/lifecycle acceptance remains
+outstanding; see [package resolution current state](../0064/CURRENT.md).
+In particular, remote font indexing, immutable VMO reuse, user isolation and
+continuity through pkgd replacement have not passed guest acceptance. Existing
+local-font results do not establish remote resolution; see the resolver's
+[implementation and validation gaps](../0064/CURRENT.md#current-gaps).

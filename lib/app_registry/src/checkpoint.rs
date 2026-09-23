@@ -21,6 +21,7 @@ impl AppRecord {
             InstallSource::Bootfs => 1,
             InstallSource::SystemImage => 2,
             InstallSource::Debugd => 3,
+            InstallSource::Oci => 4,
         });
         w.word(match self.lifecycle_state {
             LifecycleState::Installed => 1,
@@ -73,6 +74,7 @@ impl AppRecord {
             1 => InstallSource::Bootfs,
             2 => InstallSource::SystemImage,
             3 => InstallSource::Debugd,
+            4 => InstallSource::Oci,
             _ => return Err(Error::InvalidData),
         };
         let lifecycle_state = match r.word()? {

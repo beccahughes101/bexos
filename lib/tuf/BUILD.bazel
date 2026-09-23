@@ -4,7 +4,7 @@ package(default_visibility = ["//visibility:public"])
 
 rust_library(
     name = "tuf",
-    srcs = ["src/lib.rs"],
+    srcs = glob(["src/**/*.rs"]),
     crate_name = "bexos_tuf",
     edition = "2024",
     deps = [

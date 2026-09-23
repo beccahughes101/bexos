@@ -1,0 +1,30 @@
+package_name: "bexos.platform.pkg_probe"
+name: "RFC 64 guest validation"
+processes {
+  name: "probe"
+  runner: "elf"
+  lifecycle { update_strategy: RESTART }
+  runner_options { [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/probe" } }
+}
+permissions { name: "BEXOS_SYSTEM_PRIVILEGED" requirement: PERMISSION_REQUIRED usage_description: "Provision signed local registry test credentials." }
+services_consumed {
+  name: "bexos.pkg.PackageResolver"
+  link_type: REQUIRED
+  capabilities { capability: "Resolve" methods { ordinal: 1 link_type: REQUIRED } methods { ordinal: 2 link_type: REQUIRED } }
+}
+services_consumed {
+  name: "bexos.pkg.CredentialManager"
+  link_type: REQUIRED
+  capabilities { capability: "ManageRegistryCredentials" methods { ordinal: 1 link_type: REQUIRED } methods { ordinal: 2 link_type: REQUIRED } methods { ordinal: 3 link_type: REQUIRED } }
+}
+services_consumed {
+  name: "AppManager"
+  link_type: REQUIRED
+  capabilities { capability: "Public" methods { ordinal: 4 link_type: REQUIRED } }
+}
+
+services_consumed {
+  name: "bexos.fonts.FontProvider"
+  link_type: REQUIRED
+  capabilities { capability: "Public" methods { ordinal: 1 link_type: REQUIRED } }
+}

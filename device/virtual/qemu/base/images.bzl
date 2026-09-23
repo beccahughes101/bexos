@@ -6,6 +6,8 @@ load("//lib/flatland_text:BUILD.fonts.bzl", "FONT_LICENSES", "SYSTEM_FONT_ENTRIE
 QEMU_STORAGE_SIZE_BYTES = 335544320
 
 QEMU_STORAGE_PREINSTALLS = [
+    {"archive": "//services/pkgd:pkgd_archive", "path": "pkg/bexos.service.pkgd.bex"},
+    {"archive": "//services/pkgd:replacement_archive", "path": "updates/bexos.service.pkgd.replacement.bex"},
     {"archive": "//apps/brush_shell", "path": "pkg/bexos.app.brush_shell.bex"},
     {"archive": "//apps/brush_shell:replacement_archive", "path": "updates/bexos.app.brush_shell.replacement.bex"},
     {"archive": "//testing/wasm:file_service_archive", "path": "pkg/bexos.test.wasm.file_service.bex"},

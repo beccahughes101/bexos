@@ -32,3 +32,43 @@ fn nts_cookie_validation_bounds_size() {
     assert!(nts::validate_cookie(&[0; 16]).is_ok());
     assert!(nts::validate_cookie(&[0; 15]).is_err());
 }
+
+#[test]
+fn streaming_http_handles_every_fragment_boundary_and_rejects_truncation() {
+    use bexos_net::http_stream::Decoder;
+    for response in [
+        b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nabcd".as_slice(),
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nab\r\n2\r\ncd\r\n0\r\n\r\n"
+            .as_slice(),
+    ] {
+        for width in 1..response.len() {
+            let mut decoder = Decoder::new(4);
+            let mut bytes = Vec::new();
+            for chunk in response.chunks(width) {
+                decoder
+                    .feed(chunk, &mut |status, chunk| {
+                        assert_eq!(status, 200);
+                        bytes.extend_from_slice(chunk);
+                        Ok(())
+                    })
+                    .unwrap();
+            }
+            assert_eq!(decoder.finish().unwrap().status, 200);
+            assert_eq!(bytes, b"abcd");
+        }
+    }
+    for response in [
+        b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nabc".as_slice(),
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nab\r\n".as_slice(),
+    ] {
+        let mut decoder = Decoder::new(4);
+        decoder.feed(response, &mut |_, _| Ok(())).unwrap();
+        assert!(decoder.finish().is_err());
+    }
+    for response in [
+        b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n".as_slice(),
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 4\r\n\r\n".as_slice(),
+    ] {
+        assert!(Decoder::new(4).feed(response, &mut |_, _| Ok(())).is_err());
+    }
+}
