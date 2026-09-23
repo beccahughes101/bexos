@@ -6,7 +6,7 @@
 
 ## Implementation summary
 
-TUF metadata verification and generic HTTPS helpers exist, but the OCI-backed metadata/payload transport described here is not implemented.
+RFC 0064 adds a pkgd OCI transport and strengthens the shared TUF verifier. Its current implementation and outstanding guest acceptance are tracked in [RFC 0064 CURRENT](../0064/CURRENT.md). The older runtime updater remains a separate consumer.
 
 ## Implemented behavior
 
@@ -15,15 +15,16 @@ TUF metadata verification and generic HTTPS helpers exist, but the OCI-backed me
 
 ## Gaps and deviations
 
-- No OCI registry client for role manifests/tags, descriptor/media-type resolution, blob fetching, authentication challenges, or role publication pipeline was found in the reviewed tools/services/libraries.
-- The specified tuf-root/tuf-timestamp/tuf-snapshot mapping and digest-pinned fetch sequence remain design examples.
+- `services/pkgd/src/oci.rs` implements role-manifest discovery, descriptor/media-type validation, digest-pinned blobs and bearer challenges. No role publication pipeline or completed guest OCI acceptance is claimed.
+- Pkgd uses sequential `tuf-root-N`, mutable `tuf-timestamp`, and authenticated SHA-256 references for snapshot/targets/payloads. Product configuration provides the initial trusted root.
+- Host HTTPS fixtures now exercise signed OCI/TUF, bearer and mTLS flows, but no guest has demonstrated verified artifact delivery. An ARM application download reached 294,908 of 361,234 bytes before timing out. Configurable deadlines have host coverage; their guest result is unconfirmed. See [RFC 0064's current gaps](../0064/CURRENT.md#current-gaps) for transport, resource ownership and lifecycle limitations.
 - TUF’s client library alone does not establish OCI tag-race/freshness protection. Updated’s time-zero feed check and lack of live delivery also apply; see RFC 0025.
 
 ## Sources and validation
 
 Implementation and contract evidence: [lib/tuf/src/lib.rs](../../../lib/tuf/src/lib.rs), [lib/distribution/src/lib.rs](../../../lib/distribution/src/lib.rs), [lib/distribution/BUILD.bazel](../../../lib/distribution/BUILD.bazel), [services/updated/src/service.rs](../../../services/updated/src/service.rs).
 
-No dedicated implementation test for this RFC was found in the reviewed tree.
+`//services/pkgd:tests` now exercises signed OCI metadata through an in-process transport fixture; it does not establish HTTPS/HTTP2 or Trusty guest acceptance.
 
 Detailed guides and previously recorded validation: [secure runtime updates](../../secure-runtime-updates.md).
 

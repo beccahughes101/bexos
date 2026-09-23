@@ -67,6 +67,18 @@ fn handle(runtime: &mut Runtime, client: &Client, bytes: &[u8], handles: &[u64])
                             );
                             return;
                         }
+                        Err(FontStatus::NotFound) => {
+                            match crate::remote::enqueue(
+                                runtime,
+                                client.channel,
+                                client.uid,
+                                &query,
+                                value.allow_network_fetch,
+                            ) {
+                                Ok(()) => return,
+                                Err(status) => resolve_error(status),
+                            }
+                        }
                         Err(status) => resolve_error(status),
                     }
                 }
@@ -174,7 +186,7 @@ fn invalid_reply(channel: Channel, ordinal: u64) {
     }
 }
 
-fn send_response<T: FidlEncode>(channel: Channel, response: &T) {
+pub(crate) fn send_response<T: FidlEncode>(channel: Channel, response: &T) {
     let mut bytes = vec![0; 65500];
     let mut handles = [HandleRef { raw: 0 }; 8];
     let Ok(encoded) = response.encode(&mut bytes, &mut handles) else {

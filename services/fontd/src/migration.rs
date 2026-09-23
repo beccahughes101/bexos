@@ -25,12 +25,13 @@ impl State for Runtime {
     }
 
     fn keys(&self) -> Vec<u64> {
-        vec![KEY_RUNTIME, KEY_INDEX, KEY_BLOBS]
+        vec![KEY_RUNTIME, KEY_INDEX, KEY_BLOBS, 3]
     }
 
     fn encode_record(&self, key: u64) -> Result<Option<Vec<u8>>, Error> {
         let mut writer = Encoder::new();
         match key {
+            3 => return Ok(Some(self.remote.encode())),
             KEY_RUNTIME => {
                 writer.word(1);
                 writer.word(self.control.0);
@@ -92,6 +93,10 @@ impl State for Runtime {
     }
 
     fn adopt_record(&mut self, key: u64, bytes: Option<&[u8]>) -> Result<(), Error> {
+        if key == 3 {
+            self.remote = crate::remote::Remote::decode(bytes.ok_or(Error::InvalidData)?)?;
+            return Ok(());
+        }
         let mut reader = Decoder::new(bytes.ok_or(Error::InvalidData)?);
         if reader.word()? != 1 {
             return Err(Error::UnsupportedVersion);
@@ -198,6 +203,8 @@ impl State for Runtime {
 
     fn resources(&self) -> Vec<Resource> {
         let mut handles = vec![self.control.0, self.vfsd.0, self.usersd.0];
+        handles.push(self.remote.endpoint);
+        handles.push(self.remote.directory);
         if let Some(channel) = self.migration {
             handles.push(channel.0);
         }

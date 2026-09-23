@@ -340,6 +340,8 @@ pub struct AppdState {
     pub commands: crate::command_state::CommandState,
     pub version_manager_bindings: Vec<u64>,
     pub app_manager_bindings: Vec<crate::AppManagerBinding>,
+    pub package_retry_after: u64,
+    pub package_installs: Vec<crate::package_install::PendingInstall>,
     pub worker_launcher_bindings: Vec<crate::AppManagerBinding>,
     pub service_directory_bindings: Vec<crate::ServiceDirectoryBinding>,
     pub worker_policy_watchers: Vec<u64>,
@@ -412,6 +414,8 @@ impl AppdState {
             commands: Default::default(),
             version_manager_bindings: Vec::new(),
             app_manager_bindings: Vec::new(),
+            package_retry_after: 0,
+            package_installs: Vec::new(),
             worker_launcher_bindings: Vec::new(),
             service_directory_bindings: Vec::new(),
             worker_policy_watchers: Vec::new(),
@@ -878,6 +882,7 @@ impl State for AppdState {
             .chain([
                 5,
                 6,
+                crate::package_install::KEY,
                 DRIVER_LIFECYCLE_STATE_KEY,
                 PERMISSION_STATE_KEY,
                 PERMISSION_ROUTE_STATE_KEY,
@@ -1028,6 +1033,9 @@ impl State for AppdState {
             }
             5 => encode_openers(&self.openers),
             6 => crate::manager::encode_domain_associations(&self.domain_associations),
+            crate::package_install::KEY => {
+                crate::package_install::encode(&self.package_installs, self.package_retry_after)
+            }
             DRIVER_LIFECYCLE_STATE_KEY => encode_driver_lifecycle_state(
                 &self.driver_routes,
                 &self.driver_recovery,
@@ -1397,6 +1405,10 @@ impl State for AppdState {
             6 => {
                 self.domain_associations = crate::manager::decode_domain_associations(bytes)?;
             }
+            crate::package_install::KEY => {
+                (self.package_installs, self.package_retry_after) =
+                    crate::package_install::decode(bytes)?;
+            }
             DRIVER_LIFECYCLE_STATE_KEY => {
                 let (routes, recovery, images) = decode_driver_lifecycle_state(bytes)?;
                 self.driver_routes = routes;
@@ -1585,6 +1597,12 @@ impl State for AppdState {
             self.users.0,
             self.migration.0,
         ];
+        handles.extend(
+            self.package_installs
+                .iter()
+                .flat_map(|pending| [pending.resolver, pending.caller])
+                .filter(|h| *h != 0),
+        );
         handles.extend(self.shell.clients.iter().map(|c| c.channel));
         if self.shell.users_channel != 0 {
             handles.push(self.shell.users_channel);

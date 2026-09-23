@@ -1,0 +1,68 @@
+package_name: "bexos.service.pkgd"
+name: "Package Resolver"
+processes {
+  name: "pkgd"
+  runner: "elf"
+  service: true
+  wave: 7
+  resource_group: "system"
+  permissions { name: "TEE_MANAGER_ACCESS" requirement: PERMISSION_REQUIRED usage_description: "Persist package trust in Trusty." }
+  lifecycle { update_strategy: HEART_TRANSPLANT migration_timeout_ms: 5000 }
+  runner_options { [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/pkgd" } }
+}
+services_exposed {
+  name: "bexos.pkg.PackageResolver"
+  protocol: "PackageResolver"
+  lifecycle: SINGLETON
+  visibility: PUBLIC
+  capabilities { capability: "Resolve" method_ordinals: 1 method_ordinals: 2 }
+}
+services_exposed {
+  name: "bexos.pkg.CredentialManager"
+  protocol: "CredentialManager"
+  lifecycle: SINGLETON
+  visibility: PUBLIC
+  bind_permission: "BEXOS_SYSTEM_PRIVILEGED"
+  capabilities { capability: "ManageRegistryCredentials" method_ordinals: 1 method_ordinals: 2 method_ordinals: 3 }
+}
+services_consumed {
+  name: "bexos.service.vfsd"
+  link_type: REQUIRED
+  capabilities { capability: "Public" methods { ordinal: 61 link_type: REQUIRED } }
+}
+services_consumed {
+  name: "bexos.net.Netstack"
+  link_type: OPTIONAL
+  capabilities { capability: "Public" methods { ordinal: 1 link_type: OPTIONAL } methods { ordinal: 4 link_type: OPTIONAL } }
+}
+services_consumed {
+  name: "bexos.security.trust.TlsTrustManager"
+  link_type: OPTIONAL
+  capabilities { capability: "Public" methods { ordinal: 1 link_type: OPTIONAL } }
+}
+services_consumed {
+  name: "tee_manager"
+  link_type: OPTIONAL
+  capabilities { capability: "PackageState" methods { ordinal: 14 link_type: OPTIONAL } }
+}
+
+permissions { name: "TEE_MANAGER_ACCESS" requirement: PERMISSION_REQUIRED usage_description: "Persist package trust and registry credentials in Trusty." }
+services_consumed {
+  name: "bexos.time.TimeManager"
+  link_type: OPTIONAL
+  capabilities { capability: "Public" methods { ordinal: 1 link_type: OPTIONAL } }
+}
+services_consumed {
+  name: "bexos.kernel.Clock"
+  link_type: REQUIRED
+  capabilities {
+    capability: "Public"
+    methods { ordinal: 6887237422062436418 link_type: REQUIRED }
+  }
+}
+
+services_consumed {
+ name: "ServiceDirectory"
+ link_type: REQUIRED
+ capabilities { capability: "Public" methods { ordinal: 2 link_type: REQUIRED } }
+}

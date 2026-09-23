@@ -10,6 +10,7 @@ mod resolver;
 mod shell;
 mod shell_users;
 pub mod state;
+mod tee_binding;
 mod trace_registry;
 mod update;
 
@@ -224,6 +225,7 @@ async fn boot(initial: Channel) -> Result<(), String> {
             &mut gate,
         )
         .map_err(|e| format!("driver readiness {e:?}"))?;
+    service_directory_bindings.append(&mut gate.service_directory_bindings);
     log("appd: boot driver waves ready\n");
     if let Some((framebuffer, descriptor)) = gate.framebuffer.take() {
         let _ = Memory::close(framebuffer);
@@ -814,6 +816,7 @@ async fn boot(initial: Channel) -> Result<(), String> {
     runtime.version_manager_bindings = version_manager_bindings;
     runtime.app_manager_bindings = app_manager_bindings;
     runtime.worker_launcher_bindings = worker_launcher_bindings;
+    runtime.service_directory_bindings = service_directory_bindings;
     runtime.lazy = lazy_state;
     runtime.permission_routes = permission_routes;
     runtime.domain_associations = domain_associations;
@@ -921,8 +924,10 @@ fn validate_secure_bootstrap(
 }
 
 fn initialize_keymint_boot(teed: Channel, evidence: &BootEvidenceV1) -> Result<(), String> {
-    let (bytes, handles) = call_teed_raw(
-        Some(teed),
+    let binding = tee_binding::TeeManagerBinding::new(teed)?;
+    let teed = binding.0;
+    let (bytes, handles) = call_teed_bound(
+        teed,
         5,
         &TeeManagerOpenSessionRequest { uuid: KEYMINT_UUID },
         &[],
@@ -987,12 +992,9 @@ fn initialize_keymint_boot(teed: Channel, evidence: &BootEvidenceV1) -> Result<(
             .map_err(|error| format!("KeyMint shared-secret negotiation: {error:?}"))?;
         Ok(())
     })();
-    if let Ok((bytes, handles)) = call_teed_raw(
-        Some(teed),
-        6,
-        &TeeManagerCloseSessionRequest { session_id },
-        &[],
-    ) {
+    if let Ok((bytes, handles)) =
+        call_teed_bound(teed, 6, &TeeManagerCloseSessionRequest { session_id }, &[])
+    {
         let _ = TeeManagerCloseSessionResponse::decode(&bytes, &handles);
     }
     result?;
@@ -1002,9 +1004,11 @@ fn initialize_keymint_boot(teed: Channel, evidence: &BootEvidenceV1) -> Result<(
 
 fn validate_avb_rollback(teed: Channel, generation: u64) -> Result<(), String> {
     const ROLLBACK_SLOT: u32 = 0;
+    let binding = tee_binding::TeeManagerBinding::new(teed)?;
+    let teed = binding.0;
 
-    let (bytes, handles) = call_teed_raw(
-        Some(teed),
+    let (bytes, handles) = call_teed_bound(
+        teed,
         5,
         &TeeManagerOpenSessionRequest { uuid: AVB_UUID },
         &[],
@@ -1090,12 +1094,9 @@ fn validate_avb_rollback(teed: Channel, generation: u64) -> Result<(), String> {
         decode_avb_empty(&response, AVB_CMD_LOCK_BOOT_STATE)
             .map_err(|_| "AVB boot-state lock malformed response".to_string())
     })();
-    if let Ok((bytes, handles)) = call_teed_raw(
-        Some(teed),
-        6,
-        &TeeManagerCloseSessionRequest { session_id },
-        &[],
-    ) {
+    if let Ok((bytes, handles)) =
+        call_teed_bound(teed, 6, &TeeManagerCloseSessionRequest { session_id }, &[])
+    {
         let _ = TeeManagerCloseSessionResponse::decode(&bytes, &handles);
     }
     result?;
@@ -1114,8 +1115,8 @@ fn invoke_trusty_boot(
 
     let payload_vmo = Memory::from_bytes(payload)
         .map_err(|error| format!("{service} command {command_id} payload VMO {error:?}"))?;
-    let call = call_teed_raw(
-        Some(teed),
+    let call = call_teed_bound(
+        teed,
         7,
         &TeeManagerInvokeCommandRequest {
             session_id,
@@ -1354,7 +1355,14 @@ fn bind_preinstalled_drivers(
                     &config.driver_policy,
                     |m| PackageIdentity {
                         package_id: &m.package_name,
-                        signer: "bexos_official_platform_v1",
+                        signer: if record.install_source == InstallSource::Oci {
+                            record
+                                .verified_signer
+                                .as_ref()
+                                .map_or("", |signer| signer.root_anchor_id.as_str())
+                        } else {
+                            "bexos_official_platform_v1"
+                        },
                         trust_tier: PackageTrustTier::SystemHardware,
                         is_driver: true,
                     },
@@ -1628,9 +1636,11 @@ async fn serve_lifecycle(mut state: state::AppdState, teed: Option<Channel>) -> 
             // This cache is reconstructed after appd's own transplant, while
             // prefsd retains the freeze used to stage it. Reconcile an unknown
             // state with the provider instead of assuming it is already thawed.
+            log("appd: thawing preferences for lifecycle dispatch\n");
             if preferences::freeze(&state, false).is_ok() {
                 state.preferences_frozen = Some(false);
             }
+            log("appd: preference thaw returned\n");
         }
         if pending.is_none() && !activation_sync_pending {
             input_hotplug::poll(&mut state, &mut kernel, &mut source);
@@ -1662,6 +1672,7 @@ async fn serve_lifecycle(mut state: state::AppdState, teed: Option<Channel>) -> 
                         bexos_userspace::syscall::ticks().saturating_add(activation_sync_delay);
                 }
                 let (ordinal, req) = envelope(&m.bytes);
+                log(&format!("appd: lifecycle request ordinal={ordinal}\n"));
                 let hs = lifecycle_refs(&m.handles);
                 let preferences_ready = if matches!(ordinal, 2 | 3) {
                     let ready = preferences::freeze(&state, true).is_ok();
@@ -2451,19 +2462,50 @@ async fn serve_lifecycle(mut state: state::AppdState, teed: Option<Channel>) -> 
                 );
             }
 
-            let mut app_manager_updates = false;
+            let configured = crate::package_install::acquire_configured(&mut state);
+            let (completed, installed, drivers) = crate::package_install::poll(&mut state);
+            // Pending reads are volatile migration state. Only completed installs
+            // change the durable registry; queuing or failing a download must
+            // not force a filesystem checkpoint in the service broker.
+            let mut app_manager_updates = installed;
+            if !drivers.is_empty() {
+                let mut gate = readiness::Gate::new();
+                gate.registry = core::mem::take(&mut state.devices);
+                gate.services = core::mem::take(&mut state.services);
+                let bound = bind_preinstalled_drivers(
+                    state.vfsd,
+                    &drivers,
+                    &state.registry,
+                    &state.config,
+                    &mut kernel,
+                    &mut state.broker,
+                    &mut gate,
+                    &AppdWaveOrchestrator::new(),
+                );
+                state.devices = gate.registry;
+                state.services = gate.services;
+                if let Err(error) = bound {
+                    log(&format!("appd: configured driver bind failed {error}\n"));
+                }
+                source.changed_keys(state.keys());
+            }
+            if configured || completed {
+                source.changed(crate::package_install::KEY);
+            }
             for binding in state.app_manager_bindings.clone() {
                 while let Ok(message) = Channel(binding.channel).try_recv() {
-                    crate::manager::handle_app_manager_message(
+                    app_manager_updates |= crate::manager::handle_app_manager_message(
                         &mut state,
                         binding.channel,
                         &message.bytes,
                         &message.handles,
                     );
-                    app_manager_updates = true;
+                    source.changed(crate::package_install::KEY);
                 }
             }
             if app_manager_updates {
+                source.changed(crate::package_install::KEY);
+                source.changed_keys(state.registry_keys(state.registry.list_packages().len()));
                 #[cfg(feature = "persistent")]
                 let _ = state.sync_stores();
                 source.changed(6);
@@ -2474,6 +2516,7 @@ async fn serve_lifecycle(mut state: state::AppdState, teed: Option<Channel>) -> 
                 );
             }
 
+            let directory_launches_before = state.launches.len();
             let mut service_directory_updates = false;
             for binding in state.service_directory_bindings.clone() {
                 while let Ok(message) = Channel(binding.channel).try_recv() {
@@ -2490,8 +2533,12 @@ async fn serve_lifecycle(mut state: state::AppdState, teed: Option<Channel>) -> 
             }
             if service_directory_updates {
                 source.changed(shell::KEY);
+                // Connecting to an already-running provider only changes channel
+                // bindings. Persist only if lazy activation launched a process.
                 #[cfg(feature = "persistent")]
-                let _ = state.sync_stores();
+                if state.launches.len() != directory_launches_before {
+                    let _ = state.sync_stores();
+                }
                 source.changed(state::SERVICE_DIRECTORY_STATE_KEY);
                 source.changed(state::LAZY_STATE_KEY);
                 source
@@ -2948,7 +2995,7 @@ fn process_terminated(process_handle: u64) -> bool {
         })
 }
 
-fn handle_peer_closed(handle: u64) -> bool {
+pub(crate) fn handle_peer_closed(handle: u64) -> bool {
     let item = kernel_fidl::InlineVectorStruct1 {
         h: kernel_fidl::HandleRef { raw: handle },
         signals: kernel_fidl::Signals::PEER_CLOSED,
@@ -3451,7 +3498,7 @@ fn publish_appd_manager_service(broker: &mut AppdBroker) -> Result<(), crate::Bi
             visibility: Visibility::Public,
             bind_permission: None,
             metadata: Vec::new(),
-            capabilities: vec![public_capability(&[1, 2, 3])],
+            capabilities: vec![public_capability(&[1, 2, 3, 4])],
             ..ExposedService::default()
         },
         bexos_kernel_core::ipc::Capability {
@@ -3714,7 +3761,13 @@ fn deliver_provider_endpoint(
         binding.provider_endpoint.object_id,
         binding.provider_endpoint.rights,
     )?;
-    Channel(binding.provider_manager.object_id).send(metadata, &[endpoint])
+    match Channel(binding.provider_manager.object_id).send(metadata, &[endpoint]) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = Memory::close(endpoint);
+            Err(error)
+        }
+    }
 }
 
 fn deliver_bound_capabilities_to_manager(
@@ -4764,6 +4817,17 @@ fn call_teed_raw<Q: TeeEncode>(
     handles: &[u64],
 ) -> Result<(Vec<u8>, Vec<TeeHandleRef>), lifecycle::AppLifecycleStatus> {
     let endpoint = bind_teed_manager(teed, &[ordinal])?;
+    let result = call_teed_bound(endpoint, ordinal, request, handles);
+    let _ = Memory::close(endpoint.0);
+    result
+}
+
+fn call_teed_bound<Q: TeeEncode>(
+    endpoint: Channel,
+    ordinal: u64,
+    request: &Q,
+    handles: &[u64],
+) -> Result<(Vec<u8>, Vec<TeeHandleRef>), lifecycle::AppLifecycleStatus> {
     let mut bytes = alloc::vec![0; 8192];
     let mut refs = [tee_manager::HandleRef { raw: 0 }; 16];
     let encoded = request
@@ -6109,10 +6173,16 @@ fn service_directory_connect(
         return crate::service_directory::status_from_lifecycle(status);
     }
     let metadata = provider_binding_metadata(&bound);
-    if deliver_provider_endpoint(&bound, &metadata).is_err() {
+    if let Err(error) = deliver_provider_endpoint(&bound, &metadata) {
+        log(&format!(
+            "appd: service directory endpoint delivery failed: {error:?}\n"
+        ));
         let _ = Memory::close(request.endpoint.raw);
         return service_directory::ServiceDirectoryStatus::LaunchFailed;
     }
+    // Delivery transfers a duplicate to the provider. This runtime request does
+    // not retain a binding record, so release the broker's original endpoint.
+    let _ = Memory::close(request.endpoint.raw);
     service_directory::ServiceDirectoryStatus::Ok
 }
 
@@ -7210,6 +7280,7 @@ fn lifecycle_info(record: &bexos_app_registry::AppRecord) -> lifecycle::AppInfo<
             InstallSource::Bootfs => lifecycle::AppInstallSource::Bootfs,
             InstallSource::SystemImage => lifecycle::AppInstallSource::SystemImage,
             InstallSource::Debugd => lifecycle::AppInstallSource::Debugd,
+            InstallSource::Oci => lifecycle::AppInstallSource::Oci,
         },
         protected: record.protected,
     }

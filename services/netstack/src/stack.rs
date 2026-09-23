@@ -169,10 +169,19 @@ impl Netstack {
     }
 
     pub fn remove_tcp(&mut self, control: u64) {
-        if let Some(socket) = self.tcp_mut(control) {
-            socket.close();
+        if let Some(index) = self.tcp.iter().position(|socket| socket.control == control) {
+            let mut endpoint = self.tcp.remove(index);
+            if let (Some(runtime), Some(handle)) =
+                (&mut self.smoltcp, endpoint.smoltcp_handle.take())
+            {
+                runtime.retire_tcp(handle);
+            }
+            endpoint.close();
+            let _ = bexos_userspace::Memory::close(endpoint.control);
+            if let Some(client) = endpoint.client_control.take() {
+                let _ = bexos_userspace::Memory::close(client);
+            }
         }
-        self.tcp.retain(|socket| socket.control != control);
     }
 
     pub fn remove_listener(&mut self, control: u64) {

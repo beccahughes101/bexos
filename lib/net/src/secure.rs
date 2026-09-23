@@ -232,11 +232,37 @@ fn read_to_close<R: Read>(reader: &mut R, max_bytes: usize, ms: u64) -> Result<V
 
 pub struct BexosSocketIo {
     socket: Socket,
+    nonblocking: bool,
+    control: Option<Channel>,
 }
 
 impl BexosSocketIo {
     pub fn new(socket: Socket) -> Self {
-        Self { socket }
+        Self {
+            socket,
+            nonblocking: false,
+            control: None,
+        }
+    }
+    pub fn with_control(socket: Socket, control: Channel) -> Self {
+        Self {
+            socket,
+            control: Some(control),
+            nonblocking: true,
+        }
+    }
+    pub fn nonblocking(mut self) -> Self {
+        self.nonblocking = true;
+        self
+    }
+}
+
+impl Drop for BexosSocketIo {
+    fn drop(&mut self) {
+        let _ = Memory::close(self.socket.0);
+        if let Some(control) = self.control.take() {
+            let _ = Memory::close(control.0);
+        }
     }
 }
 
@@ -250,6 +276,9 @@ impl Read for BexosSocketIo {
             match self.socket.info() {
                 Ok(info) if info.readable_bytes == 0 && info.peer_write_closed => return Ok(0),
                 Ok(info) if info.readable_bytes == 0 => {
+                    if self.nonblocking {
+                        return Err(would_block());
+                    }
                     if deadline.expired() {
                         return Err(would_block());
                     }

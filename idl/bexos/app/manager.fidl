@@ -1,4 +1,18 @@
 library bexos.app.manager;
+type InstallArtifactKind = strict enum : uint8 { APPLICATION = 1; DRIVER = 2; FONT = 3; FIRMWARE = 4; };
+type ArtifactDigestHash = strict enum : uint8 { SHA256 = 1; BLAKE3 = 2; };
+
+struct ExpectedArtifactDigest {
+    hash_type ArtifactDigestHash;
+    digest array<uint8, 32>;
+};
+struct InstallArtifactQuery {
+    registry_host string:128;
+    repository string:128;
+    tag string:64;
+    expected_digest vector<ExpectedArtifactDigest>:1;
+    kind InstallArtifactKind;
+};
 
 type AppManagerStatus = strict enum : int32 {
     OK = 0,
@@ -18,6 +32,10 @@ type AssociationStatus = strict enum : uint8 {
 };
 
 protocol AppManager {
+    4: InstallAppFromArtifact(struct { query InstallArtifactQuery; }) -> (struct {
+        status AppManagerStatus;
+        allocated_package_id string:128;
+    });
     1: InstallAppFromUrl(struct {
         url string:2048;
     }) -> (struct {

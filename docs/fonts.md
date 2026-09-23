@@ -27,7 +27,15 @@ caches it by face identity, and exposes Arc-backed bytes to `flatland_text`
 without copying. Scened and the native Dioxus host use this path for Parley
 shaping; consumer caches are deliberately reconstructed after heart transplant.
 
-Dynamic OCI/TUF fetching is not active. `allow_network_fetch` is stable ABI for
-future work, and a disabled missing-font resolver currently returns `NOT_FOUND`
-without contacting pkgd, using the network, writing `/data/cache/fonts`, or
-showing a download prompt.
+Configured remote misses now queue through `lib/pkg_client` when
+`allow_network_fetch=true`. Local fonts retain priority. Fontd validates the
+returned metadata and forwards pkgd's immutable VMO; known remote digests can
+use the resolver cache. Product defaults contain no remote mappings or trust
+roots. This path has not yet passed guest OCI acceptance; see
+[RFC 0064 current state](rfcs/0064/CURRENT.md). Fontd adds no network capability
+and does not create a separate `/data/cache/fonts` store.
+
+Remote font indexing, immutable VMO reuse, isolation and continuity across pkgd
+replacement still need guest acceptance. Passing local-font and parser tests
+does not validate those paths. Resolver transport and lifecycle test gaps are
+listed in [RFC 0064's gap table](rfcs/0064/CURRENT.md#current-gaps).

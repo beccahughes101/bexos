@@ -62,13 +62,14 @@ is not evidence that a native build passed on a different machine.
 
 ## Explicit firmware refresh
 
-Run `bazel run //third_party/trusty:refresh_image` to compile firmware and
-atomically save `third_party/trusty/image.bin`. QEMU runs and tests consume
-this gitignored snapshot through `cached_firmware`, which validates the bundle
-and extracts declared Bazel outputs. They do not depend on the compilation
-rule. Source-build and refresh targets are tagged `manual`, so wildcard
-repository builds also use the saved firmware. A missing or invalid bundle
-fails with the refresh command.
+QEMU products now consume the source-built firmware bundle through the existing
+`cached_firmware` extraction target. This ensures changes to secure applications,
+including RFC 64's package-state endpoint, reach the guest. Bazel caches unchanged
+firmware actions. Native source-build prerequisites are required on a cold build.
+
+`bazel run //third_party/trusty:refresh_image` additionally saves a validated,
+gitignored `third_party/trusty/image.bin` for explicit snapshot and recovery use.
+The saved image is not the standard product's firmware input.
 
 `image.bin` is a tar firmware bundle, not a raw guest disk. It contains BL1,
 BL2, BL31, Trusty (`lk.bin` and `lk.elf`), the matching signed BL33 verifier,
@@ -77,12 +78,9 @@ TF-A certificates, the host RPMB helper, a pristine RPMB template, and
 sizes, and SHA-256 digests. Writable RPMB state belongs to the QEMU instance
 outside the bundle and persists across that instance's reboots.
 
-Source changes never refresh a saved bundle automatically. Refresh after
-changing Trusty, TF-A, secure applications, firmware build settings, BL33, or
-its signing inputs. Changes confined to the normal-world kernel, services,
-drivers, and BootFS reuse the saved firmware. Failed refreshes preserve the
-previous complete bundle. The bundle includes a host executable and must be
-refreshed when changing host operating system or architecture.
+Source changes do not overwrite saved snapshots automatically. Explicit refreshes
+preserve the previous complete snapshot on failure. Bundles include a host
+executable and are validated against the host operating system and architecture.
 
 AuthMgr acceptance uses a separate image with its test service and client:
 

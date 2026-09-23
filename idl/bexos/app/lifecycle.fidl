@@ -14,6 +14,7 @@ type AppInstallSource = strict enum : uint8 {
     BOOTFS = 1,
     SYSTEM_IMAGE = 2,
     DEBUGD = 3,
+    OCI = 4,
 };
 
 type AppLifecycleState = strict enum : uint8 {

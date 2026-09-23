@@ -3,6 +3,7 @@ load("//build/platforms:architecture.bzl", "guest_select")
 load("//build/rules:assembly.bzl", "assembly_input_bundle", "product_app_config", "starlark_product")
 
 QEMU_PRODUCT_MANIFESTS = {
+        "//services/pkgd:pkgd_elf": "//services/pkgd:package_manifest",
         "//testing/e2e/qemu/graphics/input_fixture:fixture_elf": "//testing/e2e/qemu/graphics/input_fixture:package_manifest",
         "//drivers/d1/input/virtio:input_driver": "//drivers/d1/input/virtio:package_manifest",
         "//drivers/d1/display/virtio/gpu:gpu_driver": "//drivers/d1/display/virtio/gpu:package_manifest",

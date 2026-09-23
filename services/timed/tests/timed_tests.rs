@@ -78,6 +78,48 @@ fn guest_entry_is_tokio_future() {
 }
 
 #[test]
+fn rtc_only_policy_survives_migration_and_does_not_attempt_network_sync() {
+    use std::{
+        future::Future,
+        task::{Context, Poll, Waker},
+    };
+    let mut service = bexos_timed::service::TimedService::new(
+        bexos_timed::config::TimedConfig {
+            network_sync_enabled: false,
+            ..Default::default()
+        },
+        bexos_userspace::Channel(0),
+        vec![],
+    );
+    let quality = time_fidl::TimeQuality {
+        source: ClockSource::RtcHardware,
+        state: SyncState::Synced,
+        stratum: 0,
+        root_dispersion_ns: 0,
+        last_synced_timestamp_ns: 1_800_000_000_000_000_000,
+        utc_offset_ns: 1_800_000_000_000_000_000,
+        last_error: Status::Ok,
+    };
+    service.set_migration_test_state(quality, Default::default(), vec![], vec![], 99);
+    let runtime = bexos_timed::migration::Runtime::new(
+        bexos_userspace::Channel(18),
+        Some(bexos_userspace::Channel(19)),
+        service,
+    );
+    let bytes = runtime.encode_record(0).unwrap().unwrap();
+    let mut adopted = bexos_timed::migration::Runtime::empty();
+    adopted.adopt_record(0, Some(&bytes)).unwrap();
+    {
+        let mut sync = Box::pin(adopted.service.force_sync());
+        assert_eq!(
+            sync.as_mut().poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(Status::ErrUnsupported)
+        );
+    }
+    assert_eq!(adopted.service.quality(), quality);
+}
+
+#[test]
 fn migration_round_trips_quality_nts_clients_and_schedule() {
     let quality = time_fidl::TimeQuality {
         source: ClockSource::NtsSecure,

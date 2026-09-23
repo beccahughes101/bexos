@@ -138,15 +138,19 @@ async fn serve(mut runtime: Runtime) -> ! {
                 }
             }
         }
-        if poll_netstack_clients(
+        // Every class must be polled even when another one made progress.
+        // Short-circuiting here lets repeated directory/DNS activity starve
+        // TCP setup, stream control and cancellation indefinitely.
+        let mut changed = poll_netstack_clients(
             &mut runtime.clients,
             &mut runtime.link_watchers,
             &mut runtime.stack,
             runtime.link.as_mut(),
-        ) || poll_tcp_clients(&mut runtime.stack)
-            || poll_listener_clients(&mut runtime.stack)
-            || poll_udp_clients(&mut runtime.stack)
-        {
+        );
+        changed |= poll_tcp_clients(&mut runtime.stack);
+        changed |= poll_listener_clients(&mut runtime.stack);
+        changed |= poll_udp_clients(&mut runtime.stack);
+        if changed {
             source.changed(0);
         }
         bexos_userspace::yield_now();
@@ -183,8 +187,14 @@ fn poll_netstack_clients(
                         .map(|request| {
                             let status = stack.connect_tcp(request.socket.raw, request.remote_addr);
                             if status == Status::Ok {
-                                stack.attach_tcp_to_link(request.socket.raw, link.as_deref_mut())
+                                let status = stack
+                                    .attach_tcp_to_link(request.socket.raw, link.as_deref_mut());
+                                if status != Status::Ok {
+                                    stack.remove_tcp(request.socket.raw);
+                                }
+                                status
                             } else {
+                                let _ = bexos_userspace::Memory::close(request.socket.raw);
                                 status
                             }
                         })
@@ -253,7 +263,11 @@ fn poll_netstack_clients(
             }
             true
         }
-        Err(kernel_fidl::Status::ErrPeerClosed) => false,
+        Err(kernel_fidl::Status::ErrPeerClosed) => {
+            changed = true;
+            let _ = bexos_userspace::Memory::close(client.channel.0);
+            false
+        }
         Err(_) => true,
     });
     changed
@@ -287,7 +301,16 @@ fn poll_tcp_clients(stack: &mut Netstack) -> bool {
         .collect::<Vec<_>>();
     for control in controls {
         let channel = Channel(control);
-        if let Ok(message) = channel.try_recv() {
+        let message = match channel.try_recv() {
+            Ok(message) => message,
+            Err(kernel_fidl::Status::ErrPeerClosed) => {
+                stack.remove_tcp(control);
+                changed = true;
+                continue;
+            }
+            Err(_) => continue,
+        };
+        {
             changed = true;
             let (ordinal, req) = envelope(&message.bytes);
             let handles = handle_refs(&message.handles);

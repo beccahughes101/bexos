@@ -1,0 +1,7 @@
+# Products provision repositories and offline trust roots explicitly.
+max_cache_bytes: 268435456
+max_payload_bytes: 67108864
+max_inflight: 16
+max_waiters: 64
+connect_timeout_ms: 10000
+request_timeout_ms: 30000

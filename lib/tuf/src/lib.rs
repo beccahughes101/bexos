@@ -3,6 +3,10 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 extern crate alloc;
+mod canonical;
+mod pattern;
+mod search;
+pub use search::TargetSearch;
 
 use bexos_update::ArtifactKind;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
@@ -54,9 +58,161 @@ pub struct ClientState {
     pub timestamp_version: u64,
     pub snapshot_version: u64,
     pub targets_versions: BTreeMap<String, u64>,
+    metadata_hashes: BTreeMap<String, [u8; 32]>,
+    snapshot_versions: BTreeMap<String, u64>,
 }
 
 impl ClientState {
+    /// Verify a single sequential root update before following new role keys.
+    pub fn rotate_root(&mut self, bytes: &[u8]) -> Result<(), TufError> {
+        if bytes.len() > MAX_METADATA_BYTES {
+            return Err(TufError::BadLength);
+        }
+        let old = signed_root(&self.root.bytes)?;
+        let new = signed_root(bytes)?;
+        if new.signed.version != self.root.version.checked_add(1).ok_or(TufError::Rollback)? {
+            return Err(TufError::Rollback);
+        }
+        verify_role(bytes, &old.signed, "root")?;
+        verify_role(bytes, &new.signed, "root")?;
+        self.reset_rotated_online_keys(&old.signed, &new.signed);
+        self.root = TrustedRoot {
+            bytes: bytes.to_vec(),
+            version: new.signed.version,
+        };
+        Ok(())
+    }
+
+    // TUF fast-forward recovery: only a root-signed online-key change resets
+    // timestamp/snapshot versions. Target metadata and artifact grants remain.
+    fn reset_rotated_online_keys(&mut self, old: &RootMetadata, new: &RootMetadata) {
+        let changed = ["timestamp", "snapshot"].iter().any(|role| {
+            if old.roles.get(*role) != new.roles.get(*role) {
+                return true;
+            }
+            old.roles.get(*role).is_some_and(|keys| {
+                keys.keyids
+                    .iter()
+                    .any(|id| old.keys.get(id) != new.keys.get(id))
+            })
+        });
+        if changed {
+            self.timestamp_version = 0;
+            self.snapshot_version = 0;
+            self.snapshot_versions.clear();
+            self.metadata_hashes.remove("timestamp");
+            self.metadata_hashes.remove("snapshot");
+        }
+    }
+
+    /// Only authenticated metadata references may drive subsequent network requests.
+    pub fn timestamp_reference(
+        &self,
+        bytes: &[u8],
+        now: u64,
+    ) -> Result<MetadataReference, TufError> {
+        if bytes.len() > MAX_METADATA_BYTES {
+            return Err(TufError::BadLength);
+        }
+        let root = signed_root(&self.root.bytes)?;
+        expire(root.signed.expires.as_deref(), now)?;
+        verify_role(bytes, &root.signed, "timestamp")?;
+        let timestamp = signed_timestamp(bytes)?;
+        expire(timestamp.signed.expires.as_deref(), now)?;
+        if timestamp.signed.version < self.timestamp_version {
+            return Err(TufError::Rollback);
+        }
+        reference(
+            "snapshot.json",
+            timestamp
+                .signed
+                .meta
+                .get("snapshot.json")
+                .ok_or(TufError::MissingMetadata)?,
+        )
+    }
+
+    pub fn snapshot_references(
+        &self,
+        bytes: &[u8],
+        expected: &MetadataReference,
+        now: u64,
+    ) -> Result<Vec<MetadataReference>, TufError> {
+        expected.verify(bytes)?;
+        let root = signed_root(&self.root.bytes)?;
+        verify_role(bytes, &root.signed, "snapshot")?;
+        let snapshot = signed_snapshot(bytes)?;
+        expire(snapshot.signed.expires.as_deref(), now)?;
+        if snapshot.signed.version != expected.version
+            || snapshot.signed.version < self.snapshot_version
+        {
+            return Err(TufError::Rollback);
+        }
+        if snapshot.signed.meta.len() > 256 {
+            return Err(TufError::DelegationLimit);
+        }
+        if !snapshot.signed.meta.contains_key("targets.json") {
+            return Err(TufError::MissingMetadata);
+        }
+        snapshot
+            .signed
+            .meta
+            .iter()
+            .map(|(name, meta)| reference(name, meta))
+            .collect()
+    }
+
+    /// Advance only a fully verified timestamp; callers persist this before fetching snapshot.
+    pub fn accept_timestamp(
+        &mut self,
+        bytes: &[u8],
+        now: u64,
+    ) -> Result<MetadataReference, TufError> {
+        let reference = self.timestamp_reference(bytes, now)?;
+        if reference.version < self.snapshot_version {
+            return Err(TufError::Rollback);
+        }
+        let version = signed_timestamp(bytes)?.signed.version;
+        self.remember_metadata("timestamp", self.timestamp_version, version, bytes)?;
+        self.timestamp_version = version;
+        Ok(reference)
+    }
+    /// Advance verified snapshot state before fetching referenced targets.
+    pub fn accept_snapshot(
+        &mut self,
+        bytes: &[u8],
+        expected: &MetadataReference,
+        now: u64,
+    ) -> Result<Vec<MetadataReference>, TufError> {
+        let references = self.snapshot_references(bytes, expected, now)?;
+        for (name, old_version) in &self.snapshot_versions {
+            if references
+                .iter()
+                .find(|r| &r.name == name)
+                .is_none_or(|r| r.version < *old_version)
+            {
+                return Err(TufError::Rollback);
+            }
+        }
+        for (role, old_version) in &self.targets_versions {
+            if references
+                .iter()
+                .find(|r| r.name == format!("{role}.json"))
+                .is_none_or(|r| r.version < *old_version)
+            {
+                return Err(TufError::Rollback);
+            }
+        }
+        let version = signed_snapshot(bytes)?.signed.version;
+        self.remember_metadata("snapshot", self.snapshot_version, version, bytes)?;
+        self.snapshot_version = version;
+        self.snapshot_versions = references
+            .iter()
+            .map(|r| (r.name.clone(), r.version))
+            .collect();
+        Ok(references)
+    }
+
     pub fn new(root: Vec<u8>) -> Result<Self, TufError> {
         let signed = signed_root(&root)?;
         Ok(TrustedRoot {
@@ -67,6 +223,17 @@ impl ClientState {
     }
 
     pub fn refresh(
+        &mut self,
+        metadata: &MetadataSet,
+        now_unix_seconds: u64,
+    ) -> Result<VerifiedRepository, TufError> {
+        let mut candidate = self.clone();
+        let repository = candidate.refresh_inner(metadata, now_unix_seconds)?;
+        *self = candidate;
+        Ok(repository)
+    }
+
+    fn refresh_inner(
         &mut self,
         metadata: &MetadataSet,
         now_unix_seconds: u64,
@@ -86,36 +253,23 @@ impl ClientState {
         let root = signed_root(&metadata.root)?;
         verify_role(&metadata.root, &old_root.signed, "root")?;
         verify_role(&metadata.root, &root.signed, "root")?;
-        if root.signed.version < self.root.version {
+        if root.signed.version < self.root.version
+            || root.signed.version > self.root.version.saturating_add(1)
+            || (root.signed.version == self.root.version
+                && canonical_signed(&metadata.root)? != canonical_signed(&self.root.bytes)?)
+        {
             return Err(TufError::Rollback);
         }
         expire(root.signed.expires.as_deref(), now_unix_seconds)?;
+        self.reset_rotated_online_keys(&old_root.signed, &root.signed);
         self.root = TrustedRoot {
             bytes: metadata.root.clone(),
             version: root.signed.version,
         };
 
-        let timestamp = signed_timestamp(&metadata.timestamp)?;
-        verify_role(&metadata.timestamp, &root.signed, "timestamp")?;
-        if timestamp.signed.version < self.timestamp_version {
-            return Err(TufError::Rollback);
-        }
-        expire(timestamp.signed.expires.as_deref(), now_unix_seconds)?;
-        self.timestamp_version = timestamp.signed.version;
-
-        let snapshot_meta = timestamp
-            .signed
-            .meta
-            .get("snapshot.json")
-            .ok_or(TufError::MissingMetadata)?;
-        verify_meta(snapshot_meta, &metadata.snapshot)?;
+        let expected_snapshot = self.accept_timestamp(&metadata.timestamp, now_unix_seconds)?;
+        self.accept_snapshot(&metadata.snapshot, &expected_snapshot, now_unix_seconds)?;
         let snapshot = signed_snapshot(&metadata.snapshot)?;
-        verify_role(&metadata.snapshot, &root.signed, "snapshot")?;
-        if snapshot.signed.version < self.snapshot_version {
-            return Err(TufError::Rollback);
-        }
-        expire(snapshot.signed.expires.as_deref(), now_unix_seconds)?;
-        self.snapshot_version = snapshot.signed.version;
 
         let root_targets = metadata
             .targets
@@ -139,11 +293,20 @@ impl ClientState {
             None,
         ));
         while let Some((role_name, meta_name, bytes, depth, parent)) = queue.pop_front() {
-            if depth > MAX_DELEGATION_DEPTH {
+            if depth > MAX_DELEGATION_DEPTH
+                || verified.len() >= 256
+                || verified.contains_key(&role_name)
+            {
                 return Err(TufError::DelegationLimit);
             }
             let role = signed_targets(&bytes)?;
-            if role.signed.version < snapshot_meta.version.unwrap_or(0) {
+            if snapshot
+                .signed
+                .meta
+                .get(&meta_name)
+                .and_then(|meta| meta.version)
+                != Some(role.signed.version)
+            {
                 return Err(TufError::Rollback);
             }
             verify_targets_role(&bytes, &root.signed, &role_name, parent.as_ref())?;
@@ -151,12 +314,24 @@ impl ClientState {
             if role.signed.version < *self.targets_versions.get(&role_name).unwrap_or(&0) {
                 return Err(TufError::Rollback);
             }
+            self.remember_metadata(
+                &format!("targets:{role_name}"),
+                *self.targets_versions.get(&role_name).unwrap_or(&0),
+                role.signed.version,
+                &bytes,
+            )?;
             self.targets_versions
                 .insert(role_name.clone(), role.signed.version);
             for path in role.signed.targets.keys() {
                 ensure_safe_target_path(path)?;
             }
             for delegated in role.signed.delegations.roles.iter().flatten() {
+                ensure_safe_target_path(&delegated.name)?;
+                if delegated.name == "targets"
+                    || delegated.paths.is_some() == delegated.path_hash_prefixes.is_some()
+                {
+                    return Err(TufError::UnsafeTargetPath);
+                }
                 let child_meta_name = format!("{}.json", delegated.name);
                 let snapshot_meta = snapshot
                     .signed
@@ -177,15 +352,34 @@ impl ClientState {
                     Some(role.signed.clone()),
                 ));
             }
-            let _ = meta_name;
             verified.insert(role_name, role);
         }
         Ok(VerifiedRepository { targets: verified })
     }
 
+    fn remember_metadata(
+        &mut self,
+        role: &str,
+        previous: u64,
+        version: u64,
+        bytes: &[u8],
+    ) -> Result<(), TufError> {
+        let hash: [u8; 32] = Sha256::digest(canonical_signed(bytes)?).into();
+        if version == previous
+            && self
+                .metadata_hashes
+                .get(role)
+                .is_some_and(|old| old != &hash)
+        {
+            return Err(TufError::Rollback);
+        }
+        self.metadata_hashes.insert(role.into(), hash);
+        Ok(())
+    }
+
     pub fn encode_state(&self) -> Vec<u8> {
         let mut out = Vec::new();
-        put_u64(&mut out, 1);
+        put_u64(&mut out, 3);
         put_bytes(&mut out, &self.root.bytes);
         put_u64(&mut out, self.root.version);
         put_u64(&mut out, self.timestamp_version);
@@ -195,12 +389,23 @@ impl ClientState {
             put_bytes(&mut out, role.as_bytes());
             put_u64(&mut out, *version);
         }
+        put_u64(&mut out, self.metadata_hashes.len() as u64);
+        for (role, hash) in &self.metadata_hashes {
+            put_bytes(&mut out, role.as_bytes());
+            put_bytes(&mut out, hash);
+        }
+        put_u64(&mut out, self.snapshot_versions.len() as u64);
+        for (name, version) in &self.snapshot_versions {
+            put_bytes(&mut out, name.as_bytes());
+            put_u64(&mut out, *version);
+        }
         out
     }
 
     pub fn decode_state(bytes: &[u8]) -> Result<Self, TufError> {
         let mut cursor = StateCursor { bytes, offset: 0 };
-        if cursor.u64()? != 1 {
+        let format = cursor.u64()?;
+        if !(1..=3).contains(&format) {
             return Err(TufError::UnsupportedSpec);
         }
         let root_bytes = cursor.bytes(MAX_METADATA_BYTES)?.to_vec();
@@ -208,15 +413,59 @@ impl ClientState {
         let timestamp_version = cursor.u64()?;
         let snapshot_version = cursor.u64()?;
         let mut targets_versions = BTreeMap::new();
-        for _ in 0..cursor.u64()?.min(256) {
+        let count = cursor.u64()?;
+        if count > 256 {
+            return Err(TufError::BadLength);
+        }
+        for _ in 0..count {
             let role = core::str::from_utf8(cursor.bytes(256)?)
                 .map_err(|_| TufError::InvalidJson)?
                 .to_string();
             let version = cursor.u64()?;
-            targets_versions.insert(role, version);
+            if targets_versions.insert(role, version).is_some() {
+                return Err(TufError::InvalidJson);
+            }
+        }
+        let mut metadata_hashes = BTreeMap::new();
+        if format >= 2 {
+            let count = cursor.u64()?;
+            if count > 258 {
+                return Err(TufError::BadLength);
+            }
+            for _ in 0..count {
+                let role = core::str::from_utf8(cursor.bytes(264)?)
+                    .map_err(|_| TufError::InvalidJson)?
+                    .to_string();
+                let hash = cursor
+                    .bytes(32)?
+                    .try_into()
+                    .map_err(|_| TufError::BadLength)?;
+                if metadata_hashes.insert(role, hash).is_some() {
+                    return Err(TufError::InvalidJson);
+                }
+            }
+        }
+        let mut snapshot_versions = BTreeMap::new();
+        if format >= 3 {
+            let count = cursor.u64()?;
+            if count > 256 {
+                return Err(TufError::BadLength);
+            }
+            for _ in 0..count {
+                let name = core::str::from_utf8(cursor.bytes(264)?)
+                    .map_err(|_| TufError::InvalidJson)?
+                    .to_string();
+                let version = cursor.u64()?;
+                if snapshot_versions.insert(name, version).is_some() {
+                    return Err(TufError::InvalidJson);
+                }
+            }
         }
         if cursor.offset != bytes.len() {
             return Err(TufError::InvalidJson);
+        }
+        if signed_root(&root_bytes)?.signed.version != root_version {
+            return Err(TufError::Rollback);
         }
         Ok(Self {
             root: TrustedRoot {
@@ -226,6 +475,8 @@ impl ClientState {
             timestamp_version,
             snapshot_version,
             targets_versions,
+            metadata_hashes,
+            snapshot_versions,
         })
     }
 }
@@ -237,6 +488,8 @@ impl From<TrustedRoot> for ClientState {
             timestamp_version: 0,
             snapshot_version: 0,
             targets_versions: BTreeMap::new(),
+            metadata_hashes: BTreeMap::new(),
+            snapshot_versions: BTreeMap::new(),
         }
     }
 }
@@ -246,28 +499,99 @@ pub struct VerifiedRepository {
     targets: BTreeMap<String, TargetsMetadata>,
 }
 
+#[derive(Clone, Debug)]
+pub struct MetadataReference {
+    pub name: String,
+    pub version: u64,
+    pub length: u64,
+    pub sha256: [u8; 32],
+}
+impl MetadataReference {
+    pub fn verify(&self, bytes: &[u8]) -> Result<(), TufError> {
+        if bytes.len() as u64 != self.length {
+            return Err(TufError::BadLength);
+        }
+        if <[u8; 32]>::from(Sha256::digest(bytes)) != self.sha256 {
+            return Err(TufError::BadHash);
+        }
+        Ok(())
+    }
+}
+fn reference(name: &str, meta: &MetaFile) -> Result<MetadataReference, TufError> {
+    ensure_safe_target_path(name)?;
+    let version = meta.version.filter(|v| *v > 0).ok_or(TufError::Rollback)?;
+    let length = meta
+        .length
+        .filter(|v| *v > 0 && *v <= MAX_METADATA_BYTES as u64)
+        .ok_or(TufError::BadLength)?;
+    let digest = meta
+        .hashes
+        .as_ref()
+        .and_then(|hashes| hashes.get("sha256"))
+        .ok_or(TufError::BadHash)?;
+    let sha256 = hex_bytes(digest)?
+        .try_into()
+        .map_err(|_| TufError::BadHash)?;
+    Ok(MetadataReference {
+        name: name.into(),
+        version,
+        length,
+        sha256,
+    })
+}
+
 impl VerifiedRepository {
     pub fn verified_target(&self, path: &str) -> Option<VerifiedTarget> {
-        self.targets.iter().find_map(|(role, metadata)| {
-            metadata
-                .signed
-                .targets
-                .get(path)
-                .map(|target| VerifiedTarget {
-                    role: role.clone(),
+        self.lookup("targets", path, 0).0
+    }
+
+    fn lookup(&self, role: &str, path: &str, depth: usize) -> (Option<VerifiedTarget>, bool) {
+        if depth > MAX_DELEGATION_DEPTH {
+            return (None, true);
+        }
+        let Some(metadata) = self.targets.get(role) else {
+            return (None, false);
+        };
+        if let Some(target) = metadata.signed.targets.get(path) {
+            return (
+                Some(VerifiedTarget {
+                    role: role.to_string(),
                     path: path.to_string(),
                     length: target.length,
                     hashes: target.hashes.clone(),
                     url: target.custom.bexos.url.clone(),
                     generation: target.custom.bexos.generation.unwrap_or(0),
-                })
-        })
+                    kind: target.custom.bexos.kind.clone(),
+                    target_id: target.custom.bexos.target_id.clone(),
+                }),
+                false,
+            );
+        }
+        for child in metadata.signed.delegations.roles.iter().flatten() {
+            if !delegation_matches(child, path) {
+                continue;
+            }
+            let (target, terminated) = self.lookup(&child.name, path, depth + 1);
+            if target.is_some() {
+                return (target, false);
+            }
+            if terminated || child.terminating.unwrap_or(false) {
+                return (None, true);
+            }
+        }
+        (None, false)
     }
 
     pub fn candidates(&self, selector: UpdateSelector) -> Vec<UpdateCandidate> {
         let mut out = Vec::new();
         for (role, metadata) in &self.targets {
             for (path, target) in &metadata.signed.targets {
+                if self
+                    .verified_target(path)
+                    .is_none_or(|found| found.role != *role)
+                {
+                    continue;
+                }
                 let Some(kind) = target.custom.bexos.kind.as_deref().and_then(kind_from_str) else {
                     continue;
                 };
@@ -304,6 +628,8 @@ pub struct VerifiedTarget {
     pub hashes: BTreeMap<String, String>,
     pub url: Option<String>,
     pub generation: u64,
+    pub kind: Option<String>,
+    pub target_id: Option<String>,
 }
 
 impl VerifiedTarget {
@@ -471,6 +797,7 @@ struct DelegatedRole {
     keyids: Vec<String>,
     threshold: u64,
     paths: Option<Vec<String>>,
+    path_hash_prefixes: Option<Vec<String>>,
     terminating: Option<bool>,
 }
 
@@ -509,6 +836,9 @@ fn signed_root(bytes: &[u8]) -> Result<SignedEnvelope<RootMetadata>, TufError> {
     if root.signed.role_type != "root" || !root.signed.spec_version.starts_with("1.") {
         return Err(TufError::UnsupportedSpec);
     }
+    if root.signed.version == 0 {
+        return Err(TufError::Rollback);
+    }
     detect_duplicate_keys(&root.signed.keys)?;
     Ok(root)
 }
@@ -519,6 +849,9 @@ fn signed_timestamp(bytes: &[u8]) -> Result<SignedEnvelope<TimestampMetadata>, T
     if role.signed.role_type != "timestamp" || !role.signed.spec_version.starts_with("1.") {
         return Err(TufError::WrongRole);
     }
+    if role.signed.version == 0 {
+        return Err(TufError::Rollback);
+    }
     Ok(role)
 }
 
@@ -528,6 +861,9 @@ fn signed_snapshot(bytes: &[u8]) -> Result<SignedEnvelope<SnapshotMetadata>, Tuf
     if role.signed.role_type != "snapshot" || !role.signed.spec_version.starts_with("1.") {
         return Err(TufError::WrongRole);
     }
+    if role.signed.version == 0 {
+        return Err(TufError::Rollback);
+    }
     Ok(role)
 }
 
@@ -535,6 +871,9 @@ fn signed_targets(bytes: &[u8]) -> Result<TargetsMetadata, TufError> {
     let role: TargetsMetadata = serde_json::from_slice(bytes).map_err(|_| TufError::InvalidJson)?;
     if role.signed.role_type != "targets" || !role.signed.spec_version.starts_with("1.") {
         return Err(TufError::WrongRole);
+    }
+    if role.signed.version == 0 {
+        return Err(TufError::Rollback);
     }
     Ok(role)
 }
@@ -595,6 +934,10 @@ fn verify_signatures(
 ) -> Result<(), TufError> {
     let signed = canonical_signed(bytes)?;
     let allowed: BTreeSet<_> = keyids.iter().collect();
+    if threshold == 0 || threshold > allowed.len() as u64 || allowed.len() != keyids.len() {
+        return Err(TufError::Threshold);
+    }
+    detect_duplicate_keys(keys)?;
     let mut accepted = BTreeSet::new();
     for sig in signatures {
         if !allowed.contains(&sig.keyid) || accepted.contains(&sig.keyid) {
@@ -613,7 +956,7 @@ fn verify_signatures(
 }
 
 fn verify_key_signature(key: &TufKey, payload: &[u8], sig_hex: &str) -> Result<bool, TufError> {
-    if key.keytype != "ed25519" || !matches!(key.scheme.as_str(), "ed25519" | "ed25519-ph") {
+    if key.keytype != "ed25519" || key.scheme != "ed25519" {
         return Err(TufError::UnsupportedKey);
     }
     let public = hex_bytes(&key.keyval.public)?;
@@ -668,10 +1011,9 @@ impl<'a> StateCursor<'a> {
 }
 
 fn canonical_signed(bytes: &[u8]) -> Result<Vec<u8>, TufError> {
-    let value: serde_json::Value =
-        serde_json::from_slice(bytes).map_err(|_| TufError::InvalidJson)?;
+    let value = canonical::parse(bytes)?;
     let signed = value.get("signed").ok_or(TufError::InvalidJson)?;
-    serde_json::to_vec(signed).map_err(|_| TufError::InvalidJson)
+    canonical::encode(signed)
 }
 
 fn verify_meta(meta: &MetaFile, bytes: &[u8]) -> Result<(), TufError> {
@@ -716,6 +1058,7 @@ fn detect_duplicate_keys(keys: &BTreeMap<String, TufKey>) -> Result<(), TufError
 
 fn ensure_safe_target_path(path: &str) -> Result<(), TufError> {
     if path.is_empty()
+        || path.len() > 1024
         || path.starts_with('/')
         || path.contains('\\')
         || path
@@ -727,14 +1070,32 @@ fn ensure_safe_target_path(path: &str) -> Result<(), TufError> {
     Ok(())
 }
 
+fn delegation_matches(role: &DelegatedRole, path: &str) -> bool {
+    if let Some(prefixes) = &role.path_hash_prefixes {
+        let hash = hex(&Sha256::digest(path.as_bytes()));
+        return prefixes.iter().any(|prefix| {
+            !prefix.is_empty()
+                && prefix.len() <= 64
+                && prefix
+                    .bytes()
+                    .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+                && hash.starts_with(prefix)
+        });
+    }
+    role.paths
+        .iter()
+        .flatten()
+        .any(|pattern| pattern::matches(pattern, path))
+}
+
 fn expire(expires: Option<&str>, now: u64) -> Result<(), TufError> {
     let Some(expires) = expires else {
-        return Ok(());
+        return Err(TufError::Expired);
     };
     let Some(ts) = parse_rfc3339_seconds(expires) else {
         return Err(TufError::Expired);
     };
-    if ts < now {
+    if ts <= now {
         Err(TufError::Expired)
     } else {
         Ok(())

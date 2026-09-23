@@ -51,6 +51,7 @@ services_exposed {
   method_ordinals: 1
   method_ordinals: 2
   method_ordinals: 3
+  method_ordinals: 4
  }
 }
 services_exposed {

@@ -1,0 +1,47 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+package(default_visibility = ["//visibility:public"])
+cc_binary(name = "certificate_generator", srcs = ["certificates.c"], deps = ["@secure_boot_host_openssl//:openssl"])
+genrule(name = "certificates", outs = ["root.der", "server.der", "server.key", "client.der", "client.key"], tools = [":certificate_generator"], cmd = "$(location :certificate_generator) $(@D)")
+
+load("@rules_rust//rust:defs.bzl", "rust_test", "rust_library")
+rust_test(name = "https_test", crate_root = "https_test.rs", srcs = ["https_test.rs", "server.rs"], edition = "2024", deps = ["//services/pkgd:test_fixture", "//services/pkgd:pkgd_host", "//lib/redb:redb_host", "//lib/net:net_secure", "@crates//:h2", "@crates//:http", "@crates//:rustls"], compile_data = [":root.der", ":server.der", ":server.key", ":client.der", ":client.key"], rustc_env = {"ROOT_CERT":"$(execpath :root.der)", "SERVER_CERT":"$(execpath :server.der)", "SERVER_KEY":"$(execpath :server.key)", "CLIENT_CERT":"$(execpath :client.der)", "CLIENT_KEY":"$(execpath :client.key)"})
+
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+load("//build/rules:userspace.bzl", "std_service_binary", "app_manifest")
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:assembly.bzl", "app_config", "component_config_override")
+component_config_override(name = "time_override", src = "time.prototxt")
+app_config(name = "time_config", manifest = "//services/timed:package_manifest", override = ":time_override_bin")
+app_archive(name = "timed_archive", manifest = "//services/timed:package_manifest", entries = {"bin/timed": "//services/timed:timed_elf"}, config = ":time_config", compression = "zstd")
+std_service_binary(name = "remote_app", srcs = ["remote_app.rs"], crate_name = "pkg_remote_app", deps = [])
+app_manifest(name = "remote_manifest", src = "remote_app.prototxt")
+app_archive(name = "remote_archive", manifest = ":remote_manifest", entries = {"bin/remote": ":remote_app"}, compression = "zstd")
+rust_binary(name = "generate", srcs = ["generate.rs", "font.rs"], edition = "2024", deps = ["@crates//:ed25519-dalek", "@crates//:serde_json", "@crates//:sha2"])
+genrule(name = "guest_fixture", srcs = [":root.der", ":remote_archive", "@inter//file", ":driver_archive", ":firmware_archive"], outs = ["guest_config.prototxt", "responses.json", "application.digest"], tools = [":generate"], cmd = "$(location :generate) $(location :guest_config.prototxt) $(location :responses.json) $(location :application.digest) $(location :root.der) $(location :remote_archive) $(location @inter//file) $(location :driver_archive) $(location :firmware_archive)")
+rust_library(
+    name = "probe_lib", crate_name = "pkg_probe", srcs = ["probe.rs", "font_probe.rs"], crate_root = "probe.rs", edition = "2024",
+    deps = ["//lib/userspace", "//lib/pkg_client", "//idl:pkg_fidl_rust", "//idl:app_manager_fidl_rust", "//idl:kernel_fidl_rust", "//idl:fonts_fidl_rust", "//lib/bexos_libc", "@crates//:sha2"],
+    compile_data = [":application.digest", ":client.der", ":client.key"],
+    rustc_env = {"APPLICATION_DIGEST":"$(execpath :application.digest)", "CLIENT_CERT":"$(execpath :client.der)", "CLIENT_KEY":"$(execpath :client.key)"},
+)
+
+std_service_binary(name = "probe", srcs = ["probe_main.rs"], crate_name = "pkg_probe_binary", deps = [":probe_lib"])
+app_manifest(name = "probe_manifest", src = "probe.prototxt")
+app_archive(name = "probe_archive", manifest = ":probe_manifest", entries = {"bin/probe": ":probe"}, compression = "zstd")
+rust_library(name = "https_fixture", testonly = True, crate_name = "pkg_https_fixture", crate_root = "server.rs", srcs = ["server.rs"], edition = "2024", deps = ["//lib/net:net_secure", "@crates//:h2", "@crates//:http", "@crates//:rustls"], compile_data = [":root.der", ":server.der", ":server.key", ":client.der", ":client.key"], rustc_env = {"ROOT_CERT":"$(execpath :root.der)", "SERVER_CERT":"$(execpath :server.der)", "SERVER_KEY":"$(execpath :server.key)", "CLIENT_CERT":"$(execpath :client.der)", "CLIENT_KEY":"$(execpath :client.key)"})
+
+app_manifest(name = "reject_manifest", src = "reject.prototxt")
+app_archive(name = "reject_archive", manifest = ":reject_manifest", entries = {"bin/pkgd": "//testing/e2e/qemu/update:candidate_reject"}, compression = "zstd")
+
+rust_test(name = "font_test", crate_root = "font_test.rs", srcs = ["font_test.rs", "font.rs"], edition = "2024", deps = ["//services/fontd"], compile_data = ["@inter//file"], rustc_env = {"INTER": "$(execpath @inter//file)"})
+app_manifest(name = "denied_manifest", src = "denied.prototxt")
+app_archive(name = "denied_archive", manifest = ":denied_manifest", entries = {"bin/probe": ":probe"}, compression = "zstd")
+app_manifest(name = "driver_manifest", src = "driver.prototxt")
+app_archive(name = "driver_archive", manifest = ":driver_manifest", entries = {"bin/virtio_net_driver": "//drivers/d1/nic/virtio/net:virtio_net_driver"}, compression = "zstd")
+app_manifest(name = "firmware_manifest", src = "firmware.prototxt")
+app_archive(name = "firmware_archive", manifest = ":firmware_manifest", entries = {"firmware/fixture.prototxt": "firmware_payload.prototxt"}, compression = "zstd")
+
+rust_library(name = "protocol_lib", crate_name = "pkg_protocol_probe", crate_root = "protocol_probe.rs", srcs = ["protocol_probe.rs"], edition = "2024", deps = ["//lib/userspace", "//lib/bexos_libc", "//lib/pkg_client", "//idl:pkg_fidl_rust", "//idl:kernel_fidl_rust"])
+std_service_binary(name = "protocol_probe", srcs = ["protocol_main.rs"], crate_name = "pkg_protocol_binary", deps = [":protocol_lib"])
+app_manifest(name = "protocol_manifest", src = "protocol.prototxt")
+app_archive(name = "protocol_archive", manifest = ":protocol_manifest", entries = {"bin/probe": ":protocol_probe"}, compression = "zstd")

@@ -1,6 +1,8 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
+pub mod bounded;
+pub mod retained;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BlockStoreError {

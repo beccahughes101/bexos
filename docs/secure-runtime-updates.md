@@ -178,10 +178,11 @@ Both saved ARM bundles now include the patch. Standard security-stack and
 kernel-replacement regressions passed in 133.4 s and 174.2 s respectively,
 with retained client progress and a 2 ms kernel cutover.
 
-TF-A and Trusty/LK are refreshed explicitly through the saved firmware bundle
-and take effect on the next QEMU launch. Integrated x86 product builds now also
-consume the saved EFI/monitor closure from `//boot/efi:cached_firmware`, refreshed
-explicitly by `//boot/efi:refresh_firmware`; its verifier accepts independently
+TF-A and Trusty/LK source changes enter the source-built firmware bundle and
+take effect on the next QEMU launch. Integrated x86 product builds consume the
+source-built EFI/monitor/Trusty closure through `//boot/efi:cached_firmware`.
+`//boot/efi:refresh_firmware` remains an explicit saved-snapshot operation.
+The verifier accepts independently
 authenticated bounded kernel/BootFS snapshots and constructs its own handoff.
 The runtime core-update entry point uses a dedicated pinned 64 KiB bounce buffer
 to transfer full-sized images into monitor-private memory. The versioned
@@ -267,3 +268,17 @@ registers with secure AckCtl and leaves Group 0 delivery on FIQ; its firmware
 refresh and guest checks are pending. See the validation log for exact results.
 The protocol reference is Google's
 [Trusty IRQ driver](https://android.googlesource.com/kernel/google-modules/trusty/+/2494a3e105ef21fd204c44598e1a960f73400b90/drivers/trusty/trusty-irq.c).
+
+
+RFC 0064 now adds the centralized pkgd source implementation, including a
+configured font miss path, asynchronous app installation, OCI/TUF verification
+and a protected package-state endpoint. Default products contain no remote
+registry roots or mappings. The complete guest/lifecycle acceptance remains
+outstanding; see [package resolution current state](rfcs/0064/CURRENT.md).
+Pkgd's four lifecycle host tests do not establish live replacement or Trusty
+credential/rollback persistence across reboot. The guest fixture must strengthen
+its pending-read and credential-replacement ordering assertions before a pass
+can establish those properties. Final-tree x86 source-firmware, EFI boundary and
+both-architecture product checks also remain outstanding; see the
+[current gaps](rfcs/0064/CURRENT.md#current-gaps). Existing runtime-update evidence
+above must not be counted as acceptance of the new package-state endpoint.

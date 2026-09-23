@@ -21,7 +21,7 @@ def x86_firmware_bundle(name, firmware, boot, acceptance = False, variant = "sta
     native.filegroup(name = name + "_saved_image", srcs = native.glob([name + "_image.bin"], allow_empty = True))
     native.genrule(
         name = name + "_cached_firmware",
-        srcs = [":" + name + "_saved_image"],
+        srcs = [":" + name + "_built_image"],
         outs = ["cached_" + name + "/" + file for file in ["lk.bin", "lk.elf", "boot.elf", "rpmb_dev", "RPMB_DATA", "build.prototxt"]],
         tools = [":image_bundle_tool"],
         cmd = "$(location :image_bundle_tool) " + " ".join(flags) + " extract $(@D)/cached_" + name + " $(SRCS)",

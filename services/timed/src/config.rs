@@ -7,6 +7,7 @@ pub struct TimedConfig {
     pub poll_interval_ms: u32,
     pub initial_retry_ms: u32,
     pub use_nts: bool,
+    pub network_sync_enabled: bool,
     pub slew_limit_ppm: i32,
     pub slew_step_threshold_ns: i64,
 }
@@ -18,6 +19,7 @@ impl Default for TimedConfig {
             poll_interval_ms: 60_000,
             initial_retry_ms: 1_000,
             use_nts: false,
+            network_sync_enabled: true,
             slew_limit_ppm: 500,
             slew_step_threshold_ns: 1_000_000_000,
         }
@@ -67,6 +69,7 @@ impl TimedConfig {
             .filter(|value| *value <= 60_000)
             .unwrap_or(1_000);
         config.use_nts = table.get_bool("use_nts").unwrap_or(false);
+        config.network_sync_enabled = table.get_bool("network_sync_enabled").unwrap_or(true);
         config.slew_limit_ppm = table
             .get_u32("slew_limit_ppm")
             .ok()

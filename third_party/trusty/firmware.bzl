@@ -93,11 +93,9 @@ set -eu
 WORK="$(@D)/%OUTPUT_DIR%-input"
 mkdir -p "$$WORK/source" "$$WORK/overlay"
 TRUSTY_ROOT="$$(dirname "$(location @trusty_src//:BUILD.bazel)")"
-if [ "$$(uname -s)" = Darwin ]; then
-  cp -cRL "$$TRUSTY_ROOT/." "$$WORK/source/"
-else
-  cp -RL "$$TRUSTY_ROOT/." "$$WORK/source/"
-fi
+# Upstream includes dangling editor/test-fixture symlinks; dereference declared
+# source files while preserving the build's failure on missing compiler inputs.
+python3 -c 'import os,shutil,sys; shutil.copytree(sys.argv[1], sys.argv[2], dirs_exist_ok=True, ignore=lambda directory,names: [name for name in names if name == ".git" or (os.path.islink(os.path.join(directory,name)) and not os.path.exists(os.path.join(directory,name)))])' "$$TRUSTY_ROOT" "$$WORK/source"
 for src in $(locations //secure/orchestrator/trusty:all_sources); do
   rel="$${src#*secure/orchestrator/trusty/}"
   mkdir -p "$$WORK/overlay/$$(dirname "$$rel")"
