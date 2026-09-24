@@ -1,6 +1,7 @@
 load("//testing/e2e/qemu:architecture_test.bzl", "architecture_test")
 load("@rules_rust//rust:defs.bzl", "rust_binary")
 package(default_visibility = ["//visibility:public"])
+QEMU_TAGS = ["cpu:4", "local", "no-sandbox", "requires-qemu", "resources:memory:2048"]
 constraint_setting(name = "fixture_abi")
 constraint_value(name = "musl_abi", constraint_setting = ":fixture_abi")
 config_setting(name = "is_musl_fixture", constraint_values = [":musl_abi"])
@@ -34,7 +35,7 @@ sh_test(
         "VENUS_LINUX_KERNEL": "$(rootpath :vmlinuz)",
         "VENUS_LINUX_INITRAMFS": "$(rootpath :initramfs.cpio.gz)",
     },
-    tags = ["requires-qemu", "exclusive", "local", "no-sandbox"],
+    tags = QEMU_TAGS + ["e2e-tier-extended"],
     timeout = "long",
 )
 genrule(
@@ -56,10 +57,10 @@ sh_test(
         "VENUS_LINUX_INITRAMFS": "$(rootpath :guest_initramfs.cpio.gz)",
         "VENUS_LINUX_DISK": "$(rootpath //device/virtual/qemu/input_test:qemu_nvme_development_gpt.img)",
     },
-    tags = ["requires-qemu", "exclusive", "local", "no-sandbox"],
+    tags = QEMU_TAGS + ["e2e-tier-extended"],
     timeout = "eternal",
 )
-architecture_test(name="guest_aarch64",architecture="aarch64",test=":guest_test",tags=["requires-qemu","exclusive","local","no-sandbox"],timeout="eternal")
+architecture_test(name="guest_aarch64",architecture="aarch64",test=":guest_test",tags=QEMU_TAGS + ["e2e-tier-extended", "qemu-integrated"],timeout="eternal")
 sh_test(
     name = "framebuffer_tests",
     srcs = ["framebuffer_test.sh"],
@@ -83,7 +84,7 @@ sh_test(
         "VENUS_LINUX_INITRAMFS": "$(rootpath :guest_initramfs.cpio.gz)",
         "VENUS_LINUX_DISK": "$(rootpath //device/virtual/qemu/input_test:qemu_nvme_development_gpt.img)",
     },
-    tags = ["requires-qemu", "exclusive", "local", "no-sandbox"],
+    tags = QEMU_TAGS + ["e2e-tier-performance"],
     timeout = "eternal",
 )
-architecture_test(name="performance_all_aarch64",architecture="aarch64",test=":performance_all_test",tags=["requires-qemu","exclusive","local","no-sandbox"],timeout="eternal")
+architecture_test(name="performance_all_aarch64",architecture="aarch64",test=":performance_all_test",tags=QEMU_TAGS + ["e2e-tier-performance", "qemu-integrated"],timeout="eternal")

@@ -13,6 +13,7 @@ def network_transplant_test(name, boot_data, development):
     boot["disk"] = ":" + name + "_disk"
     rule = qemu_development_e2e_test if development else qemu_e2e_test
     rule(
+        tier = "extended",
         name = name, src = "elf_e2e_test.rs", extra_srcs = ["echo.rs", "transplant.rs"], crate_name = "network_transplant_test",
         boot_data = boot,
         deps = ["//testing/e2e", "//tools/qemu:qemu_test", "//host/debug_client"],

@@ -10,6 +10,7 @@ genrule(
 )
 # The architecture transition selects test trust without changing product defaults.
 qemu_e2e_test(
+    tier = "extended",
     boot_data = dict(QEMU_BOOT_ARTIFACTS, disk = ":fixture_disk"),
     package_config = "//testing/pkg_registry:guest_config.prototxt",
     # Both architecture fixtures use the same explicitly configured loopback port.

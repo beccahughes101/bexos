@@ -24,6 +24,7 @@ genrule(
 )
 BOOT = dict(BOOT, disk = ":test_disk")
 qemu_e2e_test(
+    tier = "extended",
     name = "localization_e2e_test", src = "localization_e2e_test.rs", crate_name = "localization_e2e",
     extra_srcs = [":test_helpers"], boot_data = BOOT,
     locales = ["en-US", "de-DE", "ru", "ar"],

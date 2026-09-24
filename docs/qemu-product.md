@@ -112,11 +112,25 @@ ConfirmationUI is intentionally not enabled. A future secure confirmation UI
 requires exclusive secure display and input ownership that this QEMU product
 does not implement.
 
-The QEMU E2E suite is tagged `requires-qemu`; run it with:
+The QEMU E2E suite is tagged `requires-qemu`. The three warm-cache PR gates are:
 
 ```sh
-bazel test -c opt //testing/e2e/qemu/... --test_tag_filters=requires-qemu --test_output=errors
+bazel test --config=e2e //testing/e2e/qemu:presubmit_aarch64
+bazel test --config=e2e //testing/e2e/qemu:presubmit_x86_64
+bazel test --config=e2e //testing/e2e/qemu:presubmit_x86_64_development
 ```
+
+Use `:aarch64`, `:x86_64`, or `:x86_64_development` for the complete maintained
+profile. Extended work is also split into `platform`, `ui`, `update`, and
+`security` labels such as `:extended_x86_64_ui`. Each test owns its QEMU process,
+writable disks, QMP/debug sockets, and helper state beneath `TEST_TMPDIR`; Bazel
+reserves four CPUs and 2 GiB for it. Separate VMs may run concurrently when
+local resources allow. The fixed-port package-registry fixture remains
+serialized.
+
+The harness derives its hard deadline from `TEST_TIMEOUT`, reserves 30 seconds
+for cleanup, and fails a 120-second named-milestone stall. Phase timings and
+failure diagnostics are emitted through `TEST_UNDECLARED_OUTPUTS_DIR`.
 
 See `third_party/trusty/README.md` for bundle contents and the separate AuthMgr
 acceptance refresh command, and `testing-status.md` for actual verification.

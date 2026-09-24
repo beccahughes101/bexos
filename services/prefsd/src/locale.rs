@@ -99,12 +99,17 @@ pub fn poll(runtime: &mut Runtime, client: &Client) {
             }
             _ => return Err(Error::AccessDenied),
         };
+        bexos_userspace::log(&alloc::format!(
+            "prefsd: locale request uid={uid} ordinal={ordinal}\n"
+        ));
         if runtime.service.pending.is_some() {
             return Err(Error::Busy);
         }
         runtime.check_user(uid)?;
+        bexos_userspace::log(&alloc::format!("prefsd: locale load uid={uid}\n"));
         let key = runtime.service.package(PACKAGE_ID)?.key.clone();
-        runtime.load(&key, uid)?;
+        runtime.load_authorized(&key, uid)?;
+        bexos_userspace::log(&alloc::format!("prefsd: locale ready uid={uid}\n"));
         let (generation, settings) = snapshot(&runtime.service, uid)?;
         if listener.is_some() && runtime.service.locale_observers.len() >= 256 {
             return Err(Error::Bounds);

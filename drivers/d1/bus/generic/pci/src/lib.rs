@@ -256,17 +256,14 @@ impl<C: ConfigSpace> PciRootBus<C> {
         let command = self.config.read16(address, REG_COMMAND)?;
         self.config.write16(address, REG_COMMAND, command & !6)?;
         let cursor = self.next_mmio_base;
-        match self
-            .assign_memory_bars(device)
-            .and_then(|bars| {
-                // Decoding the assigned BARs is safe before a driver binds, but
-                // DMA remains disabled until appd commits the binding through
-                // PciDeviceControl.
-                let command = command_with_memory_and_bus_master(command) & !(1 << 2);
-                self.config.write16(address, REG_COMMAND, command)?;
-                Ok(device_node(device, bars))
-            })
-        {
+        match self.assign_memory_bars(device).and_then(|bars| {
+            // Decoding the assigned BARs is safe before a driver binds, but
+            // DMA remains disabled until appd commits the binding through
+            // PciDeviceControl.
+            let command = command_with_memory_and_bus_master(command) & !(1 << 2);
+            self.config.write16(address, REG_COMMAND, command)?;
+            Ok(device_node(device, bars))
+        }) {
             Ok(node) => Ok(node),
             Err(error) => {
                 self.next_mmio_base = cursor;

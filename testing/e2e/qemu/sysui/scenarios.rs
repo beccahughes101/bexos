@@ -2,6 +2,15 @@ use crate::{checks as c, qmp::Qmp};
 use bexos_debug_client::{DebugClient, DebugTransport};
 use std::time::Duration;
 
+pub fn smoke(client: &mut DebugClient<impl DebugTransport>, q: &mut Qmp) -> Result<(), String> {
+    eprintln!("sysui: presubmit window smoke");
+    q.click(40, 580)?;
+    c::screen(client, q, "smoke-launcher", 2, 2, [35, 48, 68])?;
+    q.click(100, 36)?;
+    c::cold_screen(client, q, "smoke-window", 50, 35, [60, 92, 136])?;
+    Ok(())
+}
+
 pub fn login_screen_migration(
     client: &mut DebugClient<impl DebugTransport>,
     q: &mut Qmp,
@@ -34,11 +43,11 @@ pub fn login_screen_migration(
 pub fn windows(client: &mut DebugClient<impl DebugTransport>, q: &mut Qmp) -> Result<(), String> {
     eprintln!("sysui: launch two applications through the desktop");
     q.click(40, 580)?;
-    c::screen(client, q, "launcher", 2, 2, [28, 38, 56])?;
+    c::screen(client, q, "launcher", 2, 2, [35, 48, 68])?;
     q.click(100, 36)?;
     c::cold_screen(client, q, "first-window", 50, 35, [60, 92, 136])?;
     q.click(40, 580)?;
-    c::screen(client, q, "launcher-second", 2, 2, [28, 38, 56])?;
+    c::screen(client, q, "launcher-second", 2, 2, [35, 48, 68])?;
     q.click(100, 74)?;
     // The first window also covers (75, 63). Use the exposed end of the
     // second title bar so this cannot pass before the second view arrives.
@@ -115,7 +124,7 @@ pub fn windows(client: &mut DebugClient<impl DebugTransport>, q: &mut Qmp) -> Re
     c::screen(client, q, "gesture-cancelled", 135, 103, [60, 92, 136])?;
     q.click(575, 45)?;
     c::process(client, "bexos.app.dioxus_demo", false)?;
-    c::screen(client, q, "closed-first", 70, 50, [27, 48, 68])?;
+    c::screen(client, q, "closed-first", 400, 580, [18, 25, 38])?;
     Ok(())
 }
 
@@ -138,7 +147,7 @@ pub fn recovery(client: &mut DebugClient<impl DebugTransport>, q: &mut Qmp) -> R
     if c::process(client, "bexos.app.userui", true)? == user {
         return Err("UserUI was not replaced".into());
     }
-    c::cold_screen(client, q, "userui-loss", 10, 10, [27, 48, 68])?;
+    c::cold_screen(client, q, "userui-loss", 400, 580, [18, 25, 38])?;
     Ok(())
 }
 

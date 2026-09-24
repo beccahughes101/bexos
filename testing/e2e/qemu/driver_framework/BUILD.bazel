@@ -26,10 +26,12 @@ INTEL_NIC_QEMU_ARGS = [
 ]
 
 qemu_e2e_test(
+    tier = "extended",
     name = "driver_framework_acceptance_test",
     src = "driver_framework_acceptance_test.rs",
     crate_name = "driver_framework_acceptance_test",
     boot_data = DRIVER_FRAMEWORK_BOOT_DATA,
+    architectures = ["x86_64"],
     # Driver-framework coverage does not depend on the x86 secure-product
     # firmware snapshot.  Use the ordinary development loader so this suite
     # validates the current kernel/appd/driver image directly.

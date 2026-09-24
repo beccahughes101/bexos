@@ -8,6 +8,9 @@ use bexos_debug_client::{DebugClient, DebugClientError, DebugTransport};
 use bexos_trace::{BufferMode, TraceOutputFormat};
 pub use bexos_trace_analysis::TraceAnalysis;
 
+mod context;
+pub use context::{DEFAULT_STALL_TIMEOUT, E2eContext};
+
 pub const BOOT_MARKERS: &[&[u8]] = &[
     b"userspace: entering el0 appd",
     b"pl011: EL0 driver ready",
@@ -231,6 +234,8 @@ impl<T: DebugTransport> DebugSession<T> {
         mut observe: impl FnMut(&[u8]),
     ) -> Result<Vec<u8>, String> {
         let deadline = Instant::now() + timeout;
+        let mut progress = 0;
+        let mut progressed_at = Instant::now();
         let mut output = self.combined_serial_output();
         while Instant::now() < deadline {
             observe(&output);
@@ -241,12 +246,40 @@ impl<T: DebugTransport> DebugSession<T> {
                 "guest fault during traced QEMU boot",
             )?;
             assert_absent_with_tail(&output, b"boot failed:", "guest boot failed")?;
-            if markers.iter().all(|marker| contains(&output, marker)) {
+            let current_progress = markers
+                .iter()
+                .filter(|marker| contains(&output, marker))
+                .count();
+            if current_progress == markers.len() {
                 return Ok(output);
             }
-            self.client.health_check().map_err(format_debug_error)?;
+            if current_progress != progress {
+                progress = current_progress;
+                progressed_at = Instant::now();
+                eprintln!(
+                    "e2e: marker progress {progress}/{} elapsed_ms={}",
+                    markers.len(),
+                    timeout
+                        .saturating_sub(deadline.saturating_duration_since(Instant::now()))
+                        .as_millis(),
+                );
+            }
+            if progressed_at.elapsed() >= DEFAULT_STALL_TIMEOUT {
+                let missing = markers
+                    .iter()
+                    .filter(|marker| !contains(&output, marker))
+                    .map(|marker| String::from_utf8_lossy(marker).into_owned())
+                    .collect::<Vec<_>>();
+                return Err(format!(
+                    "stalled for {DEFAULT_STALL_TIMEOUT:?} waiting for serial markers: {}\n{}",
+                    missing.join(", "),
+                    serial_tail(&output),
+                ));
+            }
+            self.client
+                .drain_for(Duration::from_millis(250))
+                .map_err(format_debug_error)?;
             output = self.combined_serial_output();
-            std::thread::sleep(Duration::from_millis(250));
         }
         assert_markers(&output, markers)?;
         Err("timed out waiting for traced QEMU boot markers".into())

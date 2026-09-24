@@ -70,13 +70,15 @@ pub fn spawn(
     }
     fs::write(&entropy, seed).map_err(|e| e.to_string())?;
     seed.fill(0);
-    let idle = work.join("debug-idle.sock");
+    let idle = work.join("d0.sock");
     let debug = debug.unwrap_or(&idle);
-    let control = work.join("monitor-qmp.sock");
+    let control = work.join("q.sock");
+    let runtime_rpmb = work.join("normalrpmb-x.sock");
     for path in [debug, control.as_path()] {
         super::remove_stale_socket(path)?;
     }
     let mut command = Command::new(&device.qemu);
+    command.current_dir(work);
     command.args([
         "-machine",
         "q35,accel=tcg,smm=on",
@@ -115,22 +117,19 @@ pub fn spawn(
     ] {
         command.arg("-drive").arg(drive);
     }
-    command
-        .arg("-qmp")
-        .arg(format!("unix:{},server=on,wait=off", control.display()));
+    command.arg("-qmp").arg("unix:q.sock,server=on,wait=off");
     // OVMF must never send terminal probes into the opaque RPMB protocol.
     for name in ["rpmb", "normalrpmb"] {
-        let detached = work.join(format!("{name}-detached.sock"));
+        let detached = work.join(format!("{name}-x.sock"));
         super::remove_stale_socket(&detached)?;
         command.arg("-chardev").arg(format!(
-            "socket,id={name},path={},server=on,wait=off",
-            detached.display()
+            "socket,id={name},path={name}-x.sock,server=on,wait=off"
         ));
     }
     command.args(["-serial", "chardev:rpmb"]);
     command.arg("-chardev").arg(format!(
         "socket,id=debug0,path={},server=on,wait=off",
-        debug.display()
+        super::socket_argument(work, debug).display()
     ));
     for value in [
         "isa-ide,id=firmwarebus,iobase=0x1f0,iobase2=0x3f6,irq=14",
@@ -185,9 +184,9 @@ pub fn spawn(
         original,
         control,
         socket,
+        runtime_rpmb,
         super::rpmb_relay::Transfer {
             boot_device: "rpmb",
-            runtime_device: "normalrpmb",
             attach_marker: b"monitor-runtime: entering assigned Trusty domain",
             release_marker: b"monitor-runtime: boot RPMB owner release verified",
             initially_attached: false,

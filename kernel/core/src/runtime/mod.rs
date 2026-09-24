@@ -796,9 +796,7 @@ impl<B: Backend> Runtime<B> {
     }
 
     pub fn bind_interrupt(&mut self, irq_number: u32, flags: u32) -> Result<u64> {
-        if self.processes[self.current].hardware != 2
-            || self.processes[self.current].quarantined
-        {
+        if self.processes[self.current].hardware != 2 || self.processes[self.current].quarantined {
             return Err(Status::ErrAccessDenied);
         }
         if self.interrupts.iter().flatten().any(|interrupt| {
@@ -850,8 +848,7 @@ impl<B: Backend> Runtime<B> {
         let irq_number = interrupt.irq_number;
         self.changed(incremental::INTERRUPT, id);
         let hardware_masked = self.interrupts.iter().flatten().any(|interrupt| {
-            interrupt.irq_number == irq_number
-                && (interrupt.masked || interrupt.awaiting_ack)
+            interrupt.irq_number == irq_number && (interrupt.masked || interrupt.awaiting_ack)
         });
         Ok((irq_number, hardware_masked))
     }
@@ -872,8 +869,7 @@ impl<B: Backend> Runtime<B> {
         let irq_number = interrupt.irq_number;
         self.changed(incremental::INTERRUPT, id);
         let hardware_masked = self.interrupts.iter().flatten().any(|interrupt| {
-            interrupt.irq_number == irq_number
-                && (interrupt.masked || interrupt.awaiting_ack)
+            interrupt.irq_number == irq_number && (interrupt.masked || interrupt.awaiting_ack)
         });
         Ok((irq_number, hardware_masked))
     }
@@ -899,8 +895,7 @@ impl<B: Backend> Runtime<B> {
                 interrupt.events_in_window = 0;
             }
             interrupt.events_in_window = interrupt.events_in_window.saturating_add(1);
-            let this_flooded =
-                interrupt.events_in_window > interrupt.flood_limit_per_second;
+            let this_flooded = interrupt.events_in_window > interrupt.flood_limit_per_second;
             interrupt.masked = true;
             interrupt.awaiting_ack = !this_flooded;
             flooded |= this_flooded;

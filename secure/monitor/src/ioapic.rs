@@ -55,8 +55,11 @@ impl IoApic {
             }
             self.high[index] = value;
         } else {
-            // Fixed delivery, physical destination, edge-triggered input.
-            if value & !(0xff | (1 << 13) | (1 << 16)) != 0
+            // Fixed delivery to a physical domain CPU. PCI INTx routes are
+            // level-triggered while HPET routes are edge-triggered, so retain
+            // the guest-visible polarity and trigger bits without exposing a
+            // physical host destination or delivery mode.
+            if value & !(0xff | (1 << 13) | (1 << 15) | (1 << 16)) != 0
                 || value & (1 << 16) == 0 && (value as u8) < 16
             {
                 return false;
@@ -87,6 +90,8 @@ mod tests {
         assert!(!io.write(0x10, 0x440));
         assert!(io.write(0x10, 80));
         assert_eq!(io.route(16), Some((3, 80)));
+        assert!(io.write(0x10, (1 << 15) | 83));
+        assert_eq!(io.route(16), Some((3, 83)));
         assert_eq!(other.route(16), None);
         assert!(io.write(0x10, (1 << 16) | 80));
         assert_eq!(io.route(16), None);

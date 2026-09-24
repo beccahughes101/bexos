@@ -1201,7 +1201,9 @@ impl ControlPlane {
         let record = self
             .handles
             .get(interrupt_handle.raw)
-            .filter(|record| record.kind == ObjectKind::Interrupt && record.has_rights(RIGHT_SIGNAL))
+            .filter(|record| {
+                record.kind == ObjectKind::Interrupt && record.has_rights(RIGHT_SIGNAL)
+            })
             .ok_or(KernelServiceStatus::AccessDenied)?;
         self.interrupts.acknowledge(record.object_id)?;
         self.handles.remove_signals_for_object(
@@ -1220,7 +1222,9 @@ impl ControlPlane {
         let record = self
             .handles
             .get(interrupt_handle.raw)
-            .filter(|record| record.kind == ObjectKind::Interrupt && record.has_rights(RIGHT_SIGNAL))
+            .filter(|record| {
+                record.kind == ObjectKind::Interrupt && record.has_rights(RIGHT_SIGNAL)
+            })
             .ok_or(KernelServiceStatus::AccessDenied)?;
         self.interrupts.mask(record.object_id, masked)
     }

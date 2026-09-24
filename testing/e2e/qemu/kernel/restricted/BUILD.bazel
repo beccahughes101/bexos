@@ -22,6 +22,7 @@ app_archive(
 )
 
 qemu_e2e_test(
+    tier = "extended",
     name = "restricted_test",
     src = "restricted_e2e_test.rs",
     crate_name = "restricted_e2e_test",

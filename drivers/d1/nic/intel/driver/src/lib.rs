@@ -202,13 +202,7 @@ impl State for Runtime {
                     .ok_or(Error::BadState)?
                     .checkpoint(),
             ),
-            2 => writer.bytes(
-                &self
-                    .ethernet
-                    .as_ref()
-                    .ok_or(Error::BadState)?
-                    .checkpoint(),
-            ),
+            2 => writer.bytes(&self.ethernet.as_ref().ok_or(Error::BadState)?.checkpoint()),
             _ => return Err(Error::InvalidData),
         }
         Ok(Some(writer.finish()))
@@ -263,9 +257,7 @@ impl State for Runtime {
             self.checkpoint.as_deref().ok_or(Error::BadState)?,
         )?);
         self.ethernet = Some(EthernetRuntime::adopt(
-            self.ethernet_checkpoint
-                .as_deref()
-                .ok_or(Error::BadState)?,
+            self.ethernet_checkpoint.as_deref().ok_or(Error::BadState)?,
         )?);
         Ok(())
     }

@@ -1,3 +1,4 @@
+use bexos_qemu_test::connect_unix;
 use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, Write},
@@ -19,7 +20,7 @@ pub fn pixel(image: &[u8], x: usize, y: usize) -> Option<[u8; 3]> {
 }
 impl Qmp {
     pub fn connect(path: &Path, directory: PathBuf) -> Result<Self, String> {
-        let stream = UnixStream::connect(path).map_err(|e| e.to_string())?;
+        let stream = connect_unix(path).map_err(|e| e.to_string())?;
         stream
             .set_read_timeout(Some(Duration::from_secs(20)))
             .map_err(|e| e.to_string())?;

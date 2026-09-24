@@ -3,12 +3,14 @@ package(default_visibility = ["//visibility:public"])
 # Every package publishes both its suites and its complete scenario inventory.
 E2E_PACKAGES = [
     "bexfs",
+    "driver_framework",
     "elf",
     "graphics",
     "jobs",
     "kernel",
     "kernel/faults",
     "kernel/restricted",
+    "localization",
     "nvme",
     "preferences",
     "pkg",
@@ -24,6 +26,33 @@ E2E_PACKAGES = [
     name = architecture,
     tests = ["//testing/e2e/qemu/" + package + ":" + architecture for package in E2E_PACKAGES],
 ) for architecture in ["aarch64", "x86_64", "x86_64_development"] ]
+
+[
+    test_suite(
+        name = tier + "_" + architecture,
+        tests = ["//testing/e2e/qemu/" + package + ":" + tier + "_" + architecture for package in E2E_PACKAGES],
+        tags = ["e2e-tier-" + tier],
+    )
+    for tier in ["presubmit", "extended", "focused"]
+    for architecture in ["aarch64", "x86_64", "x86_64_development"]
+]
+
+E2E_SHARDS = {
+    "platform": ["bexfs", "driver_framework", "elf", "jobs", "kernel", "kernel/faults", "kernel/restricted", "localization", "nvme", "preferences", "pkg", "starnix", "usb", "wasm"],
+    "ui": ["graphics", "sysui"],
+    "update": ["update"],
+    "security": ["trusty"],
+}
+
+[
+    test_suite(
+        name = "extended_" + architecture + "_" + shard,
+        tests = ["//testing/e2e/qemu/" + package + ":extended_" + architecture for package in packages],
+        tags = ["e2e-tier-extended", "e2e-shard-" + shard],
+    )
+    for architecture in ["aarch64", "x86_64", "x86_64_development"]
+    for shard, packages in E2E_SHARDS.items()
+]
 
 test_suite(
     name = "all_architectures",
@@ -41,6 +70,16 @@ test_suite(
         "//third_party/trusty:aarch64_replacement_authentication_test",
         "//third_party/trusty:x86_64_boot_test", "//third_party/trusty:x86_64_acceptance_test",
         "//third_party/trusty:x86_64_replacement_bundle_test",
+        "//third_party/trusty:x86_64_fault_acceptance_test",
+        "//third_party/trusty:x86_64_fault_boot_test",
+        "//third_party/trusty:x86_64_generation2_acceptance_test",
+        "//third_party/trusty:x86_64_generation2_boot_test",
+        "//third_party/trusty:x86_64_generation3_acceptance_test",
+        "//third_party/trusty:x86_64_generation3_boot_test",
+        "//third_party/trusty:x86_64_hang_acceptance_test",
+        "//third_party/trusty:x86_64_hang_boot_test",
+        "//third_party/trusty:x86_64_incompatible_state_acceptance_test",
+        "//third_party/trusty:x86_64_incompatible_state_boot_test",
     ],
 )
 
@@ -63,8 +102,8 @@ filegroup(
 genquery(
     name = "uncovered_tests",
     testonly = True,
-    expression = 'attr("tags", "requires-qemu", kind(".*_test rule", deps(//testing/e2e/qemu:declared_tests))) except tests(set(//testing/e2e/qemu:all_architectures //testing/e2e/qemu:x86_64_development //testing/e2e/qemu:firmware_acceptance //testing/e2e/qemu:performance)) except labels("test", kind("architecture_test rule", deps(//testing/e2e/qemu:declared_tests)))',
-    scope = [":declared_tests", ":all_architectures", ":x86_64_development", ":firmware_acceptance", ":performance"],
+    expression = 'attr("tags", "requires-qemu", kind(".*_test rule", deps(//testing/e2e/qemu:declared_tests))) except tests(set(//testing/e2e/qemu:all_architectures //testing/e2e/qemu:x86_64_development //testing/e2e/qemu:focused_aarch64 //testing/e2e/qemu:focused_x86_64 //testing/e2e/qemu:focused_x86_64_development //testing/e2e/qemu:firmware_acceptance //testing/e2e/qemu:performance)) except labels("test", kind("architecture_test rule", deps(//testing/e2e/qemu:declared_tests)))',
+    scope = [":declared_tests", ":all_architectures", ":x86_64_development", ":focused_aarch64", ":focused_x86_64", ":focused_x86_64_development", ":firmware_acceptance", ":performance"],
 )
 
 sh_test(

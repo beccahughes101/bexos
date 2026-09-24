@@ -19,7 +19,6 @@ fn run() -> Result<(), String> {
     let output = std::env::var_os("TEST_UNDECLARED_OUTPUTS_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
-    let qmp_path = std::env::temp_dir().join(format!("locale-{}.sock", std::process::id()));
     // Q35 secure-product policy authenticates the workstation devices at
     // slots 7-9. The AArch64 harness already reserves slot 7 for its RPMB
     // serial bridge, so keep the same device identities at free virt slots.
@@ -45,9 +44,10 @@ fn run() -> Result<(), String> {
             "virtio-tablet-pci,addr={tablet_slot},disable-legacy=on,disable-modern=off,iommu_platform=on"
         ),
         "-qmp".into(),
-        format!("unix:{},server=on,wait=off", qmp_path.display()),
+        "unix:l.sock,server=on,wait=off".into(),
     ];
     let mut device = QemuDevice::new(artifacts)?;
+    let qmp_path = device.temporary_path("l.sock")?;
     let mut markers = boot_markers();
     markers.push(b"appd: app lifecycle registry ready for debugd");
     markers.push(b"fontd: ready");

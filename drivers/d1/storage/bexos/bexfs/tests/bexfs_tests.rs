@@ -60,6 +60,8 @@ fn encrypted_sys_state_roundtrips_across_remount() {
 fn wrong_key_and_unsafe_paths_are_rejected() {
     let mut device = MemoryBlockDevice::new(BEXFS_BLOCK_SIZE, BLOCKS);
     let mut fs = format(&mut device);
+    let root = fs.open(fs.root_inode(), ".", 0x1 | 0x20).unwrap();
+    assert_eq!(root.inode(), fs.root_inode());
     assert_eq!(
         fs.open(fs.root_inode(), "/absolute", 0x1),
         Err(BexFsError::InvalidArgs)

@@ -784,10 +784,10 @@ fn route(
             let r = rt
                 .acknowledge_interrupt(q.irq_handle.raw)
                 .and_then(|(irq, masked)| {
-                crate::arch::CurrentArch::mask_interrupt(irq, masked)
-                    .then_some(())
-                    .ok_or(Status::ErrInvalidArgs)
-            });
+                    crate::arch::CurrentArch::mask_interrupt(irq, masked)
+                        .then_some(())
+                        .ok_or(Status::ErrInvalidArgs)
+                });
             reply!(SystemPrivilegedAcknowledgeInterruptResponse { status: status(&r) })
         }
         (4, Some("MaskInterrupt")) => {
@@ -795,10 +795,10 @@ fn route(
             let r = rt
                 .mask_interrupt(q.irq_handle.raw, q.masked)
                 .and_then(|(irq, masked)| {
-                crate::arch::CurrentArch::mask_interrupt(irq, masked)
-                    .then_some(())
-                    .ok_or(Status::ErrInvalidArgs)
-            });
+                    crate::arch::CurrentArch::mask_interrupt(irq, masked)
+                        .then_some(())
+                        .ok_or(Status::ErrInvalidArgs)
+                });
             reply!(SystemPrivilegedMaskInterruptResponse { status: status(&r) })
         }
         (4, Some("RequestSystemPowerState")) => {

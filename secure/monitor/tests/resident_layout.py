@@ -23,7 +23,7 @@ def verify(path, secure, nucleus=False):
         assert virtual == physical and filesz <= memsz and offset + filesz <= len(data)
         assert flags & 3 != 3, 'root load segment is writable and executable'
         assert ((0x18000000 <= physical < physical + memsz <= 0x20000000 or
-                 flags & 1 == 0 and 0x04200000 <= physical < physical + memsz <= 0x14800000) if nucleus else
+                 flags & 1 == 0 and 0x04200000 <= physical < physical + memsz <= 0x16800000) if nucleus else
                 (0x04000000 <= physical < physical + memsz <= 0x18000000
                  or 0x18000000 <= physical < physical + memsz <= 0x18200000)), \
             'root load segment escapes image/resident assignments'

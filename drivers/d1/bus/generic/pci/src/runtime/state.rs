@@ -275,16 +275,12 @@ impl State for Runtime {
             resources.push(Resource::Handle(self.registry.0));
         }
         resources.extend(self.power.iter().map(|c| Resource::Handle(c.0)));
-        resources.extend(
-            self.device_controls
-                .iter()
-                .flat_map(|control| {
-                    [control.channel.0, control.interrupt]
-                        .into_iter()
-                        .filter(|handle| *handle != 0)
-                        .map(Resource::Handle)
-                }),
-        );
+        resources.extend(self.device_controls.iter().flat_map(|control| {
+            [control.channel.0, control.interrupt]
+                .into_iter()
+                .filter(|handle| *handle != 0)
+                .map(Resource::Handle)
+        }));
         if let Some(control) = self.pending.as_ref().and_then(|pending| pending.control) {
             resources.push(Resource::Handle(control.0));
         }

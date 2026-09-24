@@ -221,7 +221,10 @@ bazel run //third_party/trusty:refresh_authmgr_acceptance_image
 bazel test --config=e2e //testing/e2e/qemu:all_architectures
 ```
 
-Use `:aarch64` or `:x86_64` for one suite. `--config=e2e` includes
+Use `:aarch64`, `:x86_64`, or `:x86_64_development` for one complete maintained
+profile. For the fast local gate use the corresponding `:presubmit_<profile>`
+label; main/manual CI adds the `:extended_<profile>_<shard>` labels.
+`--config=e2e` includes
 `--keep_going` and optimized builds (`-c opt`). See
 [QEMU products](docs/qemu-product.md) for configuration layering and
 [testing status](docs/testing-status.md) for verification results.

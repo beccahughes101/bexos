@@ -35,17 +35,21 @@ QEMU_SECURE_FIRMWARE = {
 }
 
 QEMU_TEST_TAGS = [
-    "exclusive",
+    "cpu:4",
     "local",
     "no-sandbox",
     "requires-qemu",
+    "resources:memory:2048",
 ]
+
+E2E_TIERS = ["presubmit", "extended", "focused", "performance"]
 
 def qemu_e2e_test(
         name,
         src,
         crate_name,
         deps,
+        tier,
         boot_data = QEMU_BOOT_ARTIFACTS,
         extra_data = [],
         extra_srcs = [],
@@ -64,6 +68,8 @@ def qemu_e2e_test(
         trusty_variant = "standard",
         package_config = "",
         locales = []):
+    if tier not in E2E_TIERS:
+        fail("%s must select exactly one E2E tier from %s" % (name, E2E_TIERS))
     if native.existing_rule("declared_tests") != None:
         fail("qemu_suites() must follow every QEMU scenario in this package")
     test_env = {
@@ -82,6 +88,7 @@ def qemu_e2e_test(
         "BEXOS_QEMU_KEY": "$(rootpath %s)" % boot_data["key"],
         "BEXOS_QEMU_RPMBD": "$(rootpath %s)" % QEMU_HOST_RPMBD,
         "BEXOS_QEMU_RPMB_TEMPLATE": "$(rootpath %s)" % boot_data["rpmb_template"],
+        "BEXOS_E2E_TIER": tier,
     }
     test_data = [
         boot_data["kernel"],
@@ -167,7 +174,7 @@ def qemu_e2e_test(
         deps = deps,
         data = [QEMU_HOST_RPMBD] + guest_select(arm_data, x86_data),
         env = guest_select(arm_env, x86_env),
-        tags = QEMU_TEST_TAGS + tags + ["manual"],
+        tags = QEMU_TEST_TAGS + tags + ["e2e-tier-" + tier, "manual"],
         use_libtest_harness = False,
         **kwargs
     )
@@ -180,7 +187,7 @@ def qemu_e2e_test(
             architecture = arch,
             package_config = package_config,
             trusty_variant = trusty_variant if arch == "x86_64" else "standard",
-            tags = QEMU_TEST_TAGS + tags + ["guest-" + arch, "qemu-development" if development else "qemu-integrated"],
+            tags = QEMU_TEST_TAGS + tags + ["e2e-tier-" + tier, "guest-" + arch, "qemu-development" if development else "qemu-integrated"],
             **kwargs
         )
     native.alias(name = name, actual = ":" + name + "_" + architectures[0] if len(architectures) == 1 else guest_select(":" + name + "_aarch64", ":" + name + "_x86_64"), tags = ["manual"])

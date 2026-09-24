@@ -628,8 +628,7 @@ impl<B: Backend> Runtime<B> {
                     let awaiting_ack = r.flag()?;
                     let window_started_ns = r.word()?;
                     let events_in_window = u32::try_from(r.word()?).map_err(|_| bad)?;
-                    let flood_limit_per_second =
-                        u32::try_from(r.word()?).map_err(|_| bad)?;
+                    let flood_limit_per_second = u32::try_from(r.word()?).map_err(|_| bad)?;
                     if flood_limit_per_second == 0 || (!masked && awaiting_ack) {
                         return Err(bad);
                     }

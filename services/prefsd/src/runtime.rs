@@ -144,6 +144,13 @@ impl Runtime {
     }
     pub fn load(&mut self, key: &str, uid: u64) -> Result<(), Error> {
         self.check_user(uid)?;
+        self.load_authorized(key, uid)
+    }
+
+    /// Load preferences after the caller has just completed `check_user`.
+    /// Keeping this separate prevents protocols that need preflight policy
+    /// checks from issuing two consecutive untagged usersd RPCs.
+    pub(crate) fn load_authorized(&mut self, key: &str, uid: u64) -> Result<(), Error> {
         let package = self.service.package(key)?.clone();
         let siblings = self
             .service

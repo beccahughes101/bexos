@@ -17,6 +17,7 @@ app_archive(
 )
 
 qemu_e2e_test(
+    tier = "focused",
     name = "jobs_smoke_e2e_test",
     src = "jobs_smoke_e2e_test.rs",
     crate_name = "jobs_smoke_e2e_test",
@@ -33,6 +34,7 @@ qemu_e2e_test(
 
 
 qemu_development_e2e_test(
+    tier = "focused",
     name = "jobs_development_test",
     src = "jobs_smoke_e2e_test.rs",
     crate_name = "jobs_development_test",

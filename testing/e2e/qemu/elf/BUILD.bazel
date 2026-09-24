@@ -19,6 +19,7 @@ app_manifest(name = "probe_manifest", src = "probe.prototxt")
 app_archive(name = "library_archive", manifest = ":library_manifest", entries = {"lib/libbexos_elf_fixture.so": ":library"}, compression = "zstd")
 app_archive(name = "probe_archive", manifest = ":probe_manifest", entries = {"bin/elf_probe": ":probe"}, compression = "zstd")
 qemu_development_e2e_test(
+    tier = "extended",
     name = "elf_development_test", src = "elf_e2e_test.rs", crate_name = "elf_development_test",
     extra_srcs = ["echo.rs", "transplant.rs"],
     deps = ["//testing/e2e", "//tools/qemu:qemu_test", "//host/debug_client"],
@@ -26,6 +27,7 @@ qemu_development_e2e_test(
     extra_args = ["$(rootpath :library_archive)", "$(rootpath :probe_archive)"],
 )
 qemu_e2e_test(
+    tier = "extended",
     name = "elf_test", src = "elf_e2e_test.rs", crate_name = "elf_test",
     extra_srcs = ["echo.rs", "transplant.rs"],
     deps = ["//testing/e2e", "//tools/qemu:qemu_test", "//host/debug_client"],
@@ -33,12 +35,14 @@ qemu_e2e_test(
     extra_args = ["$(rootpath :library_archive)", "$(rootpath :probe_archive)"],
 )
 qemu_e2e_test(
+    tier = "extended",
     name = "lazy_keychain_test", src = "lazy_keychain_e2e_test.rs", crate_name = "lazy_keychain_test",
     deps = ["//testing/e2e", "//tools/qemu:qemu_test", "//host/debug_client"],
     extra_data = [":library_archive", ":probe_archive"],
     extra_args = ["$(rootpath :library_archive)", "$(rootpath :probe_archive)"],
 )
 qemu_development_e2e_test(
+    tier = "extended",
     name = "lazy_keychain_development_test", src = "lazy_keychain_e2e_test.rs", crate_name = "lazy_keychain_development_test",
     deps = ["//testing/e2e", "//tools/qemu:qemu_test", "//host/debug_client"],
     extra_data = [":library_archive", ":probe_archive"],

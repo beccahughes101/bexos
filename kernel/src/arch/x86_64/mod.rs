@@ -125,12 +125,7 @@ impl super::ArchAPI for X86_64 {
         (0xc000_0000, 0xfebf_0000)
     }
     fn configure_interrupt(irq_number: u32, flags: u32) -> bool {
-        ioapic::route(
-            irq_number,
-            cpu::apic_id(0),
-            flags & 2 != 0,
-            flags & 1 != 0,
-        )
+        ioapic::route(irq_number, cpu::apic_id(0), flags & 2 != 0, flags & 1 != 0)
     }
     fn mask_interrupt(irq_number: u32, masked: bool) -> bool {
         if masked {

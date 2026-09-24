@@ -137,7 +137,7 @@ impl<T: DebugTransport> DebugClient<T> {
                 // 120-second call budget to cross an ARM UART under TCG. Keep
                 // the bound finite, but match other on-device update and user
                 // operations so slow emulation does not abandon a live upload.
-                self.response_deadline_with_default(600),
+                self.response_deadline_with_default(300),
             )?;
             let status = decode_debug_status(&response.payload)?;
             if status.status != 0 {
@@ -169,15 +169,15 @@ impl<T: DebugTransport> DebugClient<T> {
         // A cold component launch can include validated on-device compilation
         // after package I/O. Its debugd-to-appd envelope allows 900 seconds.
         let timeout = match method_id {
-            METHOD_LAUNCH_APP => 1200,
+            METHOD_LAUNCH_APP => 600,
             bexos_debug_wire::METHOD_SHELL_OPEN
             | METHOD_COMMIT_APP_BUNDLE_UPLOAD
             | bexos_debug_wire::METHOD_CREATE_USER
             | bexos_debug_wire::METHOD_UPDATE_USER
             | bexos_debug_wire::METHOD_DELETE_USER
             | bexos_debug_wire::METHOD_UNLOCK_USER
-            | bexos_debug_wire::METHOD_LOCK_USER => 600,
-            _ => 120,
+            | bexos_debug_wire::METHOD_LOCK_USER => 300,
+            _ => 60,
         };
         let deadline = self.response_deadline_with_default(timeout);
         let request_id = self.send_frame(method_id, payload)?;
@@ -259,7 +259,7 @@ impl<T: DebugTransport> DebugClient<T> {
     }
 
     pub(super) fn response_deadline(&self) -> Instant {
-        self.response_deadline_with_default(120)
+        self.response_deadline_with_default(60)
     }
 
     fn response_deadline_with_default(&self, default_seconds: u64) -> Instant {

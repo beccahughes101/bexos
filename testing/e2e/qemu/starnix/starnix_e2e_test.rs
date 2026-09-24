@@ -1,5 +1,6 @@
-use bexos_e2e::E2eDevice;
+use bexos_e2e::{DEFAULT_STALL_TIMEOUT, E2eContext, E2eDevice};
 use bexos_qemu_test::{QemuArtifacts, QemuDevice};
+use std::time::Duration;
 
 fn loop_sequences(trace: &[u8]) -> Vec<u64> {
     String::from_utf8_lossy(trace)
@@ -19,69 +20,81 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
+    let context = E2eContext::from_env("starnix");
     let (artifacts, extra) =
         QemuArtifacts::from_env_or_args(&std::env::args().skip(1).collect::<Vec<_>>())?;
     let archive = std::fs::read(extra.first().ok_or("missing Starnix fixture archive")?)
         .map_err(|error| error.to_string())?;
     let mut device = QemuDevice::new(artifacts)?;
-    let mut session =
-        device.boot_with_debugd(&[b"appd: app lifecycle registry ready for debugd"])?;
-    session.assert_debugd_ready()?;
-    session
-        .client
-        .install_app_bundle(0x53544152, &archive)
-        .map_err(|error| format!("install Starnix fixture: {error:?}"))?;
-    session.client.clear_received_trace();
-    if let Err(error) = session
-        .client
-        .launch_app("bexos.platform.starnix_fixture", "hello", 0, 0)
-    {
-        return Err(format!(
-            "launch Starnix fixture: {error:?}\n{}",
-            String::from_utf8_lossy(session.client.received_trace())
-        ));
-    }
-
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    loop {
+    let mut session = context.run_phase("boot", || {
+        device.boot_with_debugd(&[b"appd: app lifecycle registry ready for debugd"])
+    })?;
+    context.run_phase("debugd-ready", || session.assert_debugd_ready())?;
+    context.run_phase("install-fixture", || {
         session
             .client
+            .install_app_bundle(0x53544152, &archive)
+            .map_err(|error| format!("install Starnix fixture: {error:?}"))
+    })?;
+    context.run_phase("hello", || {
+        session.client.clear_received_trace();
+        if let Err(error) =
+            session
+                .client
+                .launch_app("bexos.platform.starnix_fixture", "hello", 0, 0)
+        {
+            return Err(format!(
+                "launch Starnix fixture: {error:?}\n{}",
+                String::from_utf8_lossy(session.client.received_trace())
+            ));
+        }
+        context.wait_until(
+            "Starnix hello completion",
+            Duration::from_secs(30),
+            Duration::from_millis(50),
+            Duration::from_secs(30),
+            || {
+                session
+                    .client
+                    .health_check()
+                    .map_err(|error| format!("Starnix health: {error:?}"))?;
+                let trace = String::from_utf8_lossy(session.client.received_trace());
+                if trace.contains("guest panic") || trace.contains("kernel panic") {
+                    return Err(format!("Starnix guest panic: {trace}"));
+                }
+                let hello = trace.contains("hello starnix\n");
+                let exited = trace.contains("starnix_runner: guest exited 0");
+                Ok((
+                    (hello && exited).then_some(()),
+                    hello as u64 + exited as u64,
+                ))
+            },
+        )?;
+        let health = session
+            .client
             .health_check()
-            .map_err(|error| format!("Starnix health: {error:?}"))?;
-        let trace = String::from_utf8_lossy(session.client.received_trace());
-        if trace.contains("guest panic") || trace.contains("kernel panic") {
-            return Err(format!("Starnix guest panic: {trace}"));
+            .map_err(|error| format!("kernel health after Starnix: {error:?}"))?;
+        if health.status != "SERVING" {
+            return Err("kernel stopped serving after Starnix".into());
         }
-        if trace.contains("hello starnix\n") && trace.contains("starnix_runner: guest exited 0") {
-            break;
-        }
-        if std::time::Instant::now() >= deadline {
-            return Err(format!("Starnix guest timed out: {trace}"));
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    let health = session
-        .client
-        .health_check()
-        .map_err(|error| format!("kernel health after Starnix: {error:?}"))?;
-    if health.status != "SERVING" {
-        return Err("kernel stopped serving after Starnix".into());
-    }
+        Ok(())
+    })?;
 
-    session.client.clear_received_trace();
-    if let Err(error) = session
-        .client
-        .launch_app("bexos.platform.starnix_fixture", "looping", 0, 0)
-    {
-        return Err(format!(
-            "launch looping Starnix fixture: {error:?}\n{}",
-            String::from_utf8_lossy(session.client.received_trace())
-        ));
-    }
-    session.wait_for_serial_markers(
-        &[b"starnix loop 0000000000000000"],
-        std::time::Duration::from_secs(60),
-    )?;
+    context.run_phase("looping-start", || {
+        session.client.clear_received_trace();
+        if let Err(error) =
+            session
+                .client
+                .launch_app("bexos.platform.starnix_fixture", "looping", 0, 0)
+        {
+            return Err(format!(
+                "launch looping Starnix fixture: {error:?}\n{}",
+                String::from_utf8_lossy(session.client.received_trace())
+            ));
+        }
+        session
+            .wait_for_serial_markers(&[b"starnix loop 0000000000000000"], Duration::from_secs(60))
+    })?;
     let before_sequence = loop_sequences(session.client.received_trace())
         .into_iter()
         .last()
@@ -111,80 +124,94 @@ fn run() -> Result<(), String> {
         KEY_ID,
         SEED,
     );
-    session
-        .client
-        .upload_update(0x5354_4152, &update, &archive)
-        .map_err(|error| format!("upload Starnix replacement: {error:?}"))?;
-    let applied = session
-        .client
-        .exec_command("update.apply_service", &[])
-        .map_err(|error| format!("apply Starnix replacement: {error:?}"))?;
-    if applied.exit_code != 0 {
-        return Err(format!("Starnix transplant rejected: {applied:?}"));
-    }
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
-    loop {
-        let status = session
-            .client
-            .exec_command(
-                "update.service.status",
-                &["bexos.platform.starnix_fixture".into()],
-            )
-            .map_err(|error| format!("Starnix transplant status: {error:?}"))?;
-        if status.stdout.contains("pending=false") {
-            if !status.stdout.contains("generation=1 ") {
-                return Err(format!("Starnix transplant did not commit: {status:?}"));
-            }
-            break;
-        }
-        if std::time::Instant::now() >= deadline {
-            return Err(format!("Starnix transplant timed out: {status:?}"));
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-    session.client.clear_received_trace();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    loop {
+    context.run_phase("transplant-apply", || {
         session
             .client
-            .health_check()
-            .map_err(|error| format!("health after Starnix transplant: {error:?}"))?;
-        let trace = session.client.received_trace();
-        let sequences = loop_sequences(trace);
-        if !sequences.is_empty() {
-            if sequences[0] <= before_sequence
-                || sequences.windows(2).any(|pair| pair[1] <= pair[0])
-            {
-                return Err(format!(
-                    "Starnix state/output sequence was not preserved: before={before_sequence:x} after={sequences:x?}"
-                ));
-            }
-            break;
+            .upload_update(0x5354_4152, &update, &archive)
+            .map_err(|error| format!("upload Starnix replacement: {error:?}"))?;
+        let applied = session
+            .client
+            .exec_command("update.apply_service", &[])
+            .map_err(|error| format!("apply Starnix replacement: {error:?}"))?;
+        if applied.exit_code != 0 {
+            return Err(format!("Starnix transplant rejected: {applied:?}"));
         }
-        if String::from_utf8_lossy(trace).contains("panic") {
-            return Err(format!(
-                "panic after Starnix transplant: {}",
-                String::from_utf8_lossy(trace)
-            ));
+        Ok(())
+    })?;
+    context.run_phase("transplant-commit", || {
+        let mut last_status = String::new();
+        context
+            .wait_until(
+                "Starnix transplant commit",
+                Duration::from_secs(180),
+                Duration::from_millis(100),
+                DEFAULT_STALL_TIMEOUT,
+                || {
+                    let status = session
+                        .client
+                        .exec_command(
+                            "update.service.status",
+                            &["bexos.platform.starnix_fixture".into()],
+                        )
+                        .map_err(|error| format!("Starnix transplant status: {error:?}"))?;
+                    last_status = status.stdout.clone();
+                    if status.stdout.contains("pending=false") {
+                        if !status.stdout.contains("generation=1 ") {
+                            return Err(format!("Starnix transplant did not commit: {status:?}"));
+                        }
+                        return Ok((Some(()), 2));
+                    }
+                    Ok((None, u64::from(status.stdout.contains("pending=true"))))
+                },
+            )
+            .map_err(|error| format!("{error}; last status: {last_status}"))
+    })?;
+    context.run_phase("retained-client", || {
+        session.client.clear_received_trace();
+        context.wait_until(
+            "Starnix retained client",
+            Duration::from_secs(60),
+            Duration::from_millis(50),
+            Duration::from_secs(60),
+            || {
+                session
+                    .client
+                    .health_check()
+                    .map_err(|error| format!("health after Starnix transplant: {error:?}"))?;
+                let trace = session.client.received_trace();
+                let sequences = loop_sequences(trace);
+                if !sequences.is_empty() {
+                    if sequences[0] <= before_sequence
+                        || sequences.windows(2).any(|pair| pair[1] <= pair[0])
+                    {
+                        return Err(format!(
+                            "Starnix state/output sequence was not preserved: before={before_sequence:x} after={sequences:x?}"
+                        ));
+                    }
+                    return Ok((Some(()), *sequences.last().unwrap()));
+                }
+                if String::from_utf8_lossy(trace).contains("panic") {
+                    return Err(format!(
+                        "panic after Starnix transplant: {}",
+                        String::from_utf8_lossy(trace)
+                    ));
+                }
+                Ok((None, 0))
+            },
+        )
+    })?;
+    context.run_phase("final-health", || {
+        let after = session
+            .client
+            .list_processes()
+            .map_err(|error| format!("process list after Starnix transplant: {error:?}"))?;
+        if !after.iter().any(|process| {
+            process.package_id == "bexos.platform.starnix_fixture"
+                && process.state == "Running"
+                && process.pid != old_pid
+        }) {
+            return Err(format!("Starnix replacement identity missing: {after:?}"));
         }
-        if std::time::Instant::now() >= deadline {
-            return Err(format!(
-                "no output after Starnix transplant: {}",
-                String::from_utf8_lossy(trace)
-            ));
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    let after = session
-        .client
-        .list_processes()
-        .map_err(|error| format!("process list after Starnix transplant: {error:?}"))?;
-    if !after.iter().any(|process| {
-        process.package_id == "bexos.platform.starnix_fixture"
-            && process.state == "Running"
-            && process.pid != old_pid
-    }) {
-        return Err(format!("Starnix replacement identity missing: {after:?}"));
-    }
-    Ok(())
+        Ok(())
+    })
 }

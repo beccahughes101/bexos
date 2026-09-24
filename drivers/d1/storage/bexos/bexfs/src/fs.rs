@@ -773,6 +773,14 @@ impl BexFs {
     }
 
     fn resolve(&self, base: u64, path: &str) -> Result<u64, BexFsError> {
+        if path == "." {
+            return self
+                .namespace
+                .nodes
+                .contains_key(&base)
+                .then_some(base)
+                .ok_or(BexFsError::NotFound);
+        }
         let components = validate_relative_path(path)?;
         let mut current = base;
         if !self.namespace.nodes.contains_key(&current) {

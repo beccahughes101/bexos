@@ -4,6 +4,7 @@ load("//testing/e2e/qemu:qemu_e2e.bzl", "QEMU_BOOT_DATA", "qemu_e2e_test", "qemu
 package(default_visibility = ["//visibility:public"])
 
 qemu_e2e_test(
+    tier = "focused",
     name = "kernel_smoke_test",
     src = "kernel_smoke_test.rs",
     crate_name = "kernel_smoke_test",
@@ -17,6 +18,7 @@ qemu_e2e_test(
 
 
 qemu_development_e2e_test(
+    tier = "focused",
     name = "kernel_development_smoke_test",
     src = "kernel_smoke_test.rs",
     crate_name = "kernel_development_smoke_test",

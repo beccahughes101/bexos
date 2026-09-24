@@ -393,7 +393,10 @@ impl QemuDevice {
         canonicalize_artifacts(&mut artifacts)?;
         let qemu = find_qemu(artifacts.architecture)?;
         let instance = INSTANCE_ID.fetch_add(1, Ordering::Relaxed);
-        let workdir = PathBuf::from(format!("/tmp/bexos-qemu-{}-{instance}", std::process::id()));
+        let temporary = std::env::var_os("TEST_TMPDIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        let workdir = instance_workdir(&temporary, std::process::id(), instance);
         fs::create_dir_all(&workdir).map_err(|e| format!("create workdir: {e}"))?;
         let seeded_handoff = workdir.join("boot_handoff.bin");
         entropy::stage(&artifacts.handoff, &seeded_handoff)?;
@@ -630,9 +633,10 @@ impl QemuDevice {
             return x86_secure::spawn(self, debug_socket, launch);
         }
         let mut command = Command::new(&self.qemu);
+        command.current_dir(&self.workdir);
         host_activity::configure(&mut command)?;
         let (mut rpmb, rpmb_socket) = if self.artifacts.development {
-            (None, self.workdir.join("unused-rpmb.sock"))
+            (None, self.workdir.join("u.sock"))
         } else {
             let (child, socket) = self.spawn_rpmb()?;
             (Some(child), socket)
@@ -648,8 +652,9 @@ impl QemuDevice {
         } else {
             None
         };
-        let idle_socket = self.workdir.join("debug-idle.sock");
+        let idle_socket = self.workdir.join("d0.sock");
         let serial_socket = debug_socket.unwrap_or(&idle_socket);
+        let serial_socket_arg = socket_argument(&self.workdir, serial_socket);
         if debug_socket.is_some() || x86 {
             remove_stale_socket(serial_socket)?;
         }
@@ -681,7 +686,7 @@ impl QemuDevice {
             ]);
             command.arg(format!(
                 "socket,id=debug0,path={},server=on,wait=off",
-                serial_socket.display()
+                serial_socket_arg.display()
             ));
             command.args(["-monitor", "none"]);
         } else {
@@ -699,7 +704,7 @@ impl QemuDevice {
             ]);
             command.arg(format!(
                 "socket,id=debug0,path={},server=on,wait=off",
-                serial_socket.display()
+                serial_socket_arg.display()
             ));
             command.args(["-monitor", "none"]);
         }
@@ -808,13 +813,14 @@ impl QemuDevice {
     }
 
     fn spawn_rpmb(&self) -> Result<(Child, PathBuf), String> {
-        let socket = self.workdir.join("rpmb.sock");
+        let socket = self.workdir.join("r.sock");
         let _ = fs::remove_file(&socket);
         let mut child = Command::new(&self.artifacts.rpmbd)
+            .current_dir(&self.workdir)
             .arg("--dev")
             .arg(&self.rpmb)
             .arg("--sock")
-            .arg(&socket)
+            .arg("r.sock")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -845,8 +851,82 @@ impl QemuDevice {
             thread::sleep(Duration::from_millis(10));
         }
         kill_child(&mut child);
-        Err("Trusty RPMB proxy did not create its socket".into())
+        let mut stderr = String::new();
+        if let Some(mut pipe) = child.stderr.take() {
+            let _ = pipe.read_to_string(&mut stderr);
+        }
+        Err(format!(
+            "Trusty RPMB proxy did not create {} (absolute path length {}): {}",
+            socket.display(),
+            socket.as_os_str().len(),
+            stderr.trim()
+        ))
     }
+
+    pub fn temporary_path(&self, name: &str) -> Result<PathBuf, String> {
+        let path = Path::new(name);
+        if path.file_name() != Some(path.as_os_str()) {
+            return Err(format!("temporary path must be one file name: {name}"));
+        }
+        Ok(self.workdir.join(path))
+    }
+}
+
+pub(crate) fn socket_argument(workdir: &Path, socket: &Path) -> PathBuf {
+    if socket.parent() == Some(workdir) {
+        socket
+            .file_name()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| socket.to_path_buf())
+    } else {
+        socket.to_path_buf()
+    }
+}
+
+static CWD_SOCKET_LOCK: Mutex<()> = Mutex::new(());
+
+pub(crate) fn with_socket_cwd<T>(
+    directory: &Path,
+    operation: impl FnOnce() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    let _guard = CWD_SOCKET_LOCK
+        .lock()
+        .map_err(|_| std::io::Error::other("socket cwd lock poisoned"))?;
+    let original = std::env::current_dir()?;
+    std::env::set_current_dir(directory)?;
+    let result = operation();
+    let restored = std::env::set_current_dir(original);
+    match (result, restored) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+    }
+}
+
+/// Connect to a UNIX socket, falling back to a short cwd-relative address on
+/// platforms whose `sockaddr_un` cannot hold Bazel's absolute test path.
+pub fn connect_unix(path: &Path) -> std::io::Result<UnixStream> {
+    match UnixStream::connect(path) {
+        Ok(stream) => Ok(stream),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::InvalidInput | std::io::ErrorKind::PermissionDenied
+            ) =>
+        {
+            match (path.parent(), path.file_name()) {
+                (Some(directory), Some(name)) => {
+                    with_socket_cwd(directory, || UnixStream::connect(name))
+                }
+                _ => Err(error),
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn instance_workdir(root: &Path, pid: u32, instance: u64) -> PathBuf {
+    root.join(format!("q{pid}-{instance}"))
 }
 
 fn canonicalize_artifacts(artifacts: &mut QemuArtifacts) -> Result<(), String> {
@@ -902,14 +982,21 @@ fn verify_boot_artifacts(artifacts: &QemuArtifacts) -> Result<(), String> {
         // Host preflight is only a convenience check of the supplied images.
         let read =
             |path: &Path| fs::read(path).map_err(|e| format!("read {}: {e}", path.display()));
-        return bexos_secure_monitor::boot_verify::verify(
-            &read(&artifacts.vbmeta)?,
-            &read(&artifacts.avb_public_key)?,
-            &read(&artifacts.kernel)?,
-            &read(&artifacts.bootfs)?,
-        )
-        .map(|_| ())
-        .map_err(|e| format!("x86 boot payload preflight: {e:?}"));
+        let metadata = read(&artifacts.vbmeta)?;
+        let root = read(&artifacts.avb_public_key)?;
+        let kernel = read(&artifacts.kernel)?;
+        let bootfs = read(&artifacts.bootfs)?;
+        return bexos_secure_monitor::boot_verify::verify(&metadata, &root, &kernel, &bootfs)
+            .map(|_| ())
+            .map_err(|e| {
+                format!(
+                    "x86 boot payload preflight: {e:?} (vbmeta={} key={} kernel={} bootfs={})",
+                    metadata.len(),
+                    root.len(),
+                    kernel.len(),
+                    bootfs.len()
+                )
+            });
     }
     let evidence_bytes =
         fs::read(&artifacts.evidence).map_err(|e| format!("read verified-boot evidence: {e}"))?;
@@ -1033,9 +1120,23 @@ impl Drop for ManagedQemuChild {
 mod tests {
     use super::{
         QemuArtifacts, RAW_QEMU_AARCH64_MACHINE, SECURE_QEMU_AARCH64_MACHINE, prepare_rpmb_image,
-        qemu_aarch64_machine_configuration,
+        qemu_aarch64_machine_configuration, socket_argument,
     };
     use std::fs;
+    use std::path::Path;
+
+    #[test]
+    fn sockets_use_short_names_inside_owned_workdir() {
+        let workdir = Path::new("/a/very/long/bazel/test/tmpdir");
+        assert_eq!(
+            socket_argument(workdir, &workdir.join("debug.sock")),
+            Path::new("debug.sock")
+        );
+        assert_eq!(
+            socket_argument(workdir, Path::new("/tmp/operator.sock")),
+            Path::new("/tmp/operator.sock")
+        );
+    }
 
     #[test]
     fn developer_readiness_waits_for_shell_dependencies() {
@@ -1225,6 +1326,42 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_instances_use_isolated_paths_under_test_tmpdir() {
+        let root = std::path::Path::new("/test/tmpdir");
+        let first = super::instance_workdir(root, 42, 0);
+        let second = super::instance_workdir(root, 42, 1);
+        let other_process = super::instance_workdir(root, 43, 0);
+        assert_ne!(first, second);
+        assert_ne!(first, other_process);
+        for path in [&first, &second, &other_process] {
+            assert!(path.starts_with(root));
+        }
+    }
+
+    #[test]
+    fn named_boot_progress_ignores_unrelated_log_traffic() {
+        let marker = b"scenario-ready".as_slice();
+        let markers = [marker];
+        let initial = super::named_boot_progress(b"arbitrary log line", &markers);
+        assert_eq!(
+            initial,
+            super::named_boot_progress(b"different arbitrary line", &markers)
+        );
+        assert!(super::named_boot_progress(b"scenario-ready", &markers) > initial);
+        assert!(
+            super::named_boot_progress(b"appd: process ready package=bexos.service.jobd", &markers,)
+                > initial
+        );
+        let one =
+            super::named_boot_progress(b"appd: boot disk package imported package=one\n", &markers);
+        let two = super::named_boot_progress(
+            b"appd: boot disk package imported package=one\nappd: boot disk package imported package=two\n",
+            &markers,
+        );
+        assert!(two > one);
+    }
+
+    #[test]
     fn fragmented_boot_failure_preserves_error_detail() {
         use std::io::Write;
         use std::os::unix::net::UnixStream;
@@ -1333,7 +1470,7 @@ impl E2eDevice for QemuDevice {
         &mut self,
         markers: &[&[u8]],
     ) -> Result<DebugSession<Self::DebugTransport>, String> {
-        let socket = self.workdir.join("debugd.sock");
+        let socket = self.workdir.join("d.sock");
         eprintln!("e2e: qemu spawn");
         let mut child = self.spawn(Some(&socket))?;
         eprintln!("e2e: qemu connect debug socket");
@@ -1361,16 +1498,22 @@ impl E2eDevice for QemuDevice {
                 .readers
                 .push(spawn_reader(stderr, diagnostics.clone()));
         }
-        read_debug_boot(
+        if let Err(error) = read_debug_boot(
             &mut child.qemu,
             &mut serial,
             &mut output,
             markers,
             &diagnostics,
             60,
-        )?;
+        ) {
+            publish_failure_diagnostics("boot", &output);
+            return Err(error);
+        }
         eprintln!("e2e: qemu boot markers read");
-        validate_boot(&output, markers)?;
+        if let Err(error) = validate_boot(&output, markers) {
+            publish_failure_diagnostics("markers", &output);
+            return Err(error);
+        }
         if !contains(&output, DEBUGD_READY) {
             return Err("debugd did not report QEMU socket readiness".into());
         }
@@ -1494,6 +1637,14 @@ fn without_rpmb_critical_exit(output: &[u8]) -> Vec<u8> {
         .collect()
 }
 
+fn bounded_test_timeout(requested_seconds: u64) -> u64 {
+    let test_budget = std::env::var("TEST_TIMEOUT")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(|seconds| seconds.saturating_sub(30).max(1));
+    test_budget.map_or(requested_seconds, |budget| requested_seconds.min(budget))
+}
+
 fn read_until_done_mode(
     child: &mut Child,
     mut serial: Option<&mut UnixStream>,
@@ -1501,13 +1652,23 @@ fn read_until_done_mode(
     stop_markers: &[&[u8]],
     rpmb_critical_exit: bool,
 ) -> Result<(), String> {
-    let timeout = std::env::var("BEXOS_QEMU_TIMEOUT_SECONDS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(60);
+    let timeout = bounded_test_timeout(
+        std::env::var("BEXOS_QEMU_TIMEOUT_SECONDS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(60),
+    );
     let deadline = Instant::now() + Duration::from_secs(timeout);
     let shared = Arc::new(Mutex::new(Vec::new()));
     let mut readers = Vec::new();
+    let stall_timeout = std::env::var("BEXOS_QEMU_STALL_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::from_secs(120));
+    let mut progress = 0;
+    let mut progressed_at = Instant::now();
+    let mut stall_error = None;
     if let Some(stdout) = child.stdout.take() {
         readers.push(spawn_reader(stdout, shared.clone()));
     }
@@ -1527,6 +1688,11 @@ fn read_until_done_mode(
             let current = shared.lock().map_err(|_| "QEMU output lock poisoned")?;
             output.clear();
             output.extend_from_slice(&current);
+            let current_progress = named_boot_progress(output, stop_markers);
+            if current_progress != progress {
+                progress = current_progress;
+                progressed_at = Instant::now();
+            }
             if (!stop_markers.is_empty() && stop_markers.iter().all(|m| contains(output, m)))
                 || contains(
                     output,
@@ -1539,6 +1705,13 @@ fn read_until_done_mode(
                         || contains(output, b"bl33: FATAL:")
                         || secure_boot_rejected(output)))
             {
+                break;
+            }
+            if progressed_at.elapsed() >= stall_timeout {
+                stall_error = Some(format!(
+                    "QEMU boot stalled for {stall_timeout:?} at progress generation {progress}\n{}",
+                    diagnostic_tail(output)
+                ));
                 break;
             }
         }
@@ -1566,6 +1739,10 @@ fn read_until_done_mode(
     output.clear();
     output.extend_from_slice(&current);
     eprint!("{}", String::from_utf8_lossy(output));
+    if let Some(error) = stall_error {
+        publish_failure_diagnostics("boot-stall", output);
+        return Err(error);
+    }
     Ok(())
 }
 
@@ -1577,11 +1754,13 @@ fn read_debug_boot(
     diagnostics: &Arc<Mutex<Vec<u8>>>,
     default_timeout_seconds: u64,
 ) -> Result<(), String> {
-    let timeout = std::env::var("BEXOS_QEMU_DEBUG_BOOT_TIMEOUT_SECONDS")
-        .or_else(|_| std::env::var("BEXOS_QEMU_TIMEOUT_SECONDS"))
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(default_timeout_seconds);
+    let timeout = bounded_test_timeout(
+        std::env::var("BEXOS_QEMU_DEBUG_BOOT_TIMEOUT_SECONDS")
+            .or_else(|_| std::env::var("BEXOS_QEMU_TIMEOUT_SECONDS"))
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(default_timeout_seconds),
+    );
     serial
         .set_nonblocking(true)
         .map_err(|e| format!("set debug serial nonblocking: {e}"))?;
@@ -1592,6 +1771,13 @@ fn read_debug_boot(
     let mut diagnostic_cursor = 0;
     let mut timed_out = true;
     let mut terminated = false;
+    let stall_timeout = std::env::var("BEXOS_QEMU_STALL_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::from_secs(120));
+    let mut progress = 0;
+    let mut progressed_at = Instant::now();
     while Instant::now() < deadline {
         if shutdown::requested() {
             return Err(format!(
@@ -1617,6 +1803,19 @@ fn read_debug_boot(
                 timed_out = false;
                 break;
             }
+        }
+        let current_progress = named_boot_progress(output, markers);
+        if current_progress != progress {
+            progress = current_progress;
+            progressed_at = Instant::now();
+            eprintln!("e2e: boot progress generation={progress}");
+        } else if progressed_at.elapsed() >= stall_timeout {
+            let error = format!(
+                "QEMU boot stalled for {stall_timeout:?} at progress generation {progress}\n{}",
+                diagnostic_tail(output)
+            );
+            publish_failure_diagnostics("debug-boot-stall", output);
+            return Err(error);
         }
         match serial.read(&mut buf) {
             Ok(0) => {
@@ -1680,6 +1879,75 @@ fn read_debug_boot(
         .set_write_timeout(Some(Duration::from_secs(10)))
         .map_err(|e| format!("set debug serial write timeout: {e}"))?;
     Ok(())
+}
+
+fn named_boot_progress(output: &[u8], markers: &[&[u8]]) -> usize {
+    const MILESTONES: &[&[u8]] = &[
+        b"Booting Trusted Firmware",
+        b"UEFI",
+        b"kernel: boot kernel_main",
+        b"kernel: early console ready",
+        b"userspace: entering",
+        b"appd: boot storage services ready",
+        b"appd: boot driver waves ready",
+        b"appd: KeyMint verified boot, HAL information, and authentication-token key installed",
+        b"usersd: persistent user store ready",
+        b"appd: boot import disk manifests",
+        b"appd: post-BootFS memory",
+        b"appd: guest SYS_STATE durable generation=",
+        b"appd: persistent registry stores installed",
+        b"appd: boot launch storage services",
+        b"pivot complete; /boot removed",
+        // These are durable appd state transitions, not arbitrary log
+        // traffic. Slow TCG guests can spend more than two minutes bringing
+        // up the complete dependency graph, so let each completed service
+        // advance the stall watchdog while still detecting a service that is
+        // genuinely stuck for 120 seconds.
+        b"appd: process ready package=bexos.service.vfsd",
+        b"appd: process ready package=bexos.service.teed",
+        b"appd: process ready package=bexos.service.trustd",
+        b"appd: process ready package=bexos.service.updated",
+        b"appd: process ready package=bexos.service.usersd",
+        b"appd: process ready package=bexos.service.traced",
+        b"appd: process ready package=bexos.service.powerd",
+        b"appd: process ready package=bexos.service.netstackd",
+        b"appd: process ready package=bexos.service.prefsd",
+        b"appd: process ready package=bexos.service.localed",
+        b"appd: process ready package=bexos.service.timed",
+        b"appd: process ready package=bexos.service.jobd",
+        b"appd: process ready package=bexos.service.pkgd",
+        b"appd: process ready package=bexos.service.fontd",
+        b"appd: process ready package=bexos.service.scened",
+        DEBUGD_READY,
+    ];
+    let fixed = MILESTONES
+        .iter()
+        .chain(markers.iter())
+        .filter(|marker| contains(output, marker))
+        .count();
+    fixed
+        + named_transition_count(output, b"appd: boot disk package imported package=")
+        + named_transition_count(output, b"appd: launched preinstalled service package=")
+}
+
+fn named_transition_count(output: &[u8], transition: &[u8]) -> usize {
+    output
+        .split(|byte| *byte == b'\n')
+        .filter(|line| {
+            line.windows(transition.len())
+                .any(|part| part == transition)
+        })
+        .count()
+}
+
+fn publish_failure_diagnostics(kind: &str, output: &[u8]) {
+    let Some(directory) = std::env::var_os("TEST_UNDECLARED_OUTPUTS_DIR") else {
+        return;
+    };
+    let directory = PathBuf::from(directory);
+    let _ = fs::create_dir_all(&directory);
+    let path = directory.join(format!("qemu-{kind}-failure.log"));
+    let _ = fs::write(path, output);
 }
 
 fn diagnostic_tail(output: &[u8]) -> String {
@@ -1866,7 +2134,7 @@ fn connect_socket(path: &Path) -> Result<UnixStream, String> {
         if shutdown::requested() {
             return Err("QEMU launch interrupted".into());
         }
-        match UnixStream::connect(path) {
+        match connect_unix(path) {
             Ok(stream) => {
                 stream
                     .set_read_timeout(Some(Duration::from_secs(20)))

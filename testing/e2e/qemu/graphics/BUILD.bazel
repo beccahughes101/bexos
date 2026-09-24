@@ -4,6 +4,8 @@ load("//build/platforms:architecture.bzl", "guest_select")
 load("//testing/e2e/qemu:architecture_test.bzl", "architecture_test")
 package(default_visibility = ["//visibility:public"])
 
+QEMU_GRAPHICS_TAGS = ["cpu:4", "local", "no-sandbox", "requires-qemu", "resources:memory:2048"]
+
 TRANSPLANT_ARCHIVE_ENV = {
     "BOOT_UI_GPU_REPLACEMENT_ARCHIVE": "$(rootpath //drivers/d1/display/virtio/gpu:replacement_archive)",
     "BOOT_UI_GPU_REJECT_ARCHIVE": "$(rootpath :gpu_reject_archive)",
@@ -49,11 +51,11 @@ sh_test(
         "BOOT_UI_KERNEL": "$(rootpath //device/virtual/qemu/workstation:x86_64_boot_image)",
     }.items() + TRANSPLANT_ARCHIVE_ENV.items())),
     data = [":transplant_probe", "boot_ui_test.py", "//testing/performance/scened:guest.py", "input_hotplug.py", "//device/virtual/qemu/workstation:bootfs.emulated.img", "//device/virtual/qemu/workstation:boot_handoff.emulated.bin", "//device/virtual/qemu/workstation:boot_evidence.emulated.bin", "//device/virtual/qemu/workstation:qemu_nvme_development_gpt.img"] + guest_select(["//kernel:kernel"], ["//device/virtual/qemu/workstation:x86_64_boot_image"]) + TRANSPLANT_ARCHIVE_DATA,
-    tags = ["requires-qemu", "local", "exclusive", "no-sandbox"],
+    tags = QEMU_GRAPHICS_TAGS + ["e2e-tier-extended"],
     timeout = "long",
 )
-architecture_test(scened_standalone = True, name = "boot_ui_aarch64", architecture = "aarch64", test = ":boot_ui_test", tags = ["requires-qemu", "local", "exclusive", "no-sandbox"], timeout = "long")
-architecture_test(scened_standalone = True, name = "boot_ui_x86_64", architecture = "x86_64", test = ":boot_ui_test", tags = ["requires-qemu", "local", "exclusive", "no-sandbox"], timeout = "long")
+architecture_test(scened_standalone = True, name = "boot_ui_aarch64", architecture = "aarch64", test = ":boot_ui_test", tags = QEMU_GRAPHICS_TAGS + ["e2e-tier-extended", "qemu-integrated"], timeout = "long")
+architecture_test(scened_standalone = True, name = "boot_ui_x86_64", architecture = "x86_64", test = ":boot_ui_test", tags = QEMU_GRAPHICS_TAGS + ["e2e-tier-extended", "qemu-integrated"], timeout = "long")
 
 rust_binary(name = "transplant_probe", srcs = ["transplant_probe.rs"], edition = "2024", deps = ["//host/debug_client"])
 
@@ -75,10 +77,10 @@ sh_test(
         "BOOT_UI_FIRMWARE": "$(rootpath //third_party/trusty:bl1.bin)",
     }.items() + TRANSPLANT_ARCHIVE_ENV.items()),
     data = [":transplant_probe", "boot_ui_test.py", "//testing/performance/scened:guest.py", "input_hotplug.py", "//kernel:kernel_bin", "//device/virtual/qemu/workstation:bootfs.img", "//device/virtual/qemu/workstation:boot_handoff.bin", "//device/virtual/qemu/workstation:boot_evidence.bin", "//device/virtual/qemu/workstation:qemu_nvme_gpt.img", "//device/virtual/qemu/workstation:vbmeta.img", "//third_party/trusty:bl1.bin", "//third_party/trusty:cached_firmware"] + TRANSPLANT_ARCHIVE_DATA,
-    tags = ["requires-qemu", "local", "exclusive", "no-sandbox"],
+    tags = QEMU_GRAPHICS_TAGS + ["e2e-tier-extended"],
     timeout = "long",
 )
-architecture_test(scened_standalone = True, name = "boot_ui_secure_aarch64", architecture = "aarch64", test = ":boot_ui_secure_test", tags = ["requires-qemu", "local", "exclusive", "no-sandbox"], timeout = "long")
+architecture_test(scened_standalone = True, name = "boot_ui_secure_aarch64", architecture = "aarch64", test = ":boot_ui_secure_test", tags = QEMU_GRAPHICS_TAGS + ["e2e-tier-extended", "qemu-integrated"], timeout = "long")
 
 sh_test(
     name = "dioxus_smoke_ui_test",
@@ -105,11 +107,11 @@ sh_test(
         "BOOT_UI_KERNEL": "$(rootpath //device/virtual/qemu/workstation:x86_64_boot_image)",
     }),
     data = [":dioxus_probe", "boot_ui_test.py", "//testing/performance/scened:guest.py", "input_hotplug.py", "//device/virtual/qemu/workstation:bootfs.emulated.img", "//device/virtual/qemu/workstation:boot_handoff.emulated.bin", "//device/virtual/qemu/workstation:boot_evidence.emulated.bin", "//device/virtual/qemu/workstation:qemu_nvme_development_gpt.img"] + guest_select(["//kernel:kernel"], ["//device/virtual/qemu/workstation:x86_64_boot_image"]),
-    tags = ["requires-qemu", "local", "exclusive", "no-sandbox"],
+    tags = QEMU_GRAPHICS_TAGS + ["e2e-tier-extended"],
     timeout = "long",
 )
-architecture_test(name = "dioxus_smoke_aarch64", architecture = "aarch64", test = ":dioxus_smoke_ui_test", tags = ["requires-qemu", "local", "exclusive", "no-sandbox"], timeout = "long")
-architecture_test(name = "dioxus_smoke_x86_64", architecture = "x86_64", test = ":dioxus_smoke_ui_test", tags = ["requires-qemu", "local", "exclusive", "no-sandbox"], timeout = "long")
+architecture_test(name = "dioxus_smoke_aarch64", architecture = "aarch64", test = ":dioxus_smoke_ui_test", tags = QEMU_GRAPHICS_TAGS + ["e2e-tier-extended", "qemu-integrated"], timeout = "long")
+architecture_test(name = "dioxus_smoke_x86_64", architecture = "x86_64", test = ":dioxus_smoke_ui_test", tags = QEMU_GRAPHICS_TAGS + ["e2e-tier-extended", "qemu-integrated"], timeout = "long")
 
 test_suite(
     name = "all_architectures",
@@ -119,6 +121,15 @@ test_suite(
 test_suite(name = "aarch64", tests = [":boot_ui_aarch64", ":boot_ui_secure_aarch64", ":boot_ui_1080_aarch64", ":dioxus_smoke_aarch64", ":input_aarch64", ":input_hotplug_transport", "//testing/e2e/qemu/venus_linux:host", "//testing/e2e/qemu/venus_linux:guest_aarch64"])
 test_suite(name = "x86_64", tests = [":boot_ui_x86_64", ":boot_ui_1080_x86_64", ":dioxus_smoke_x86_64", ":input_x86_64", ":input_hotplug_transport"])
 test_suite(name = "x86_64_development", tests = [":x86_64"])
+test_suite(name = "presubmit_aarch64", tests = [], tags = ["e2e-tier-presubmit"])
+test_suite(name = "presubmit_x86_64", tests = [], tags = ["e2e-tier-presubmit"])
+test_suite(name = "presubmit_x86_64_development", tests = [], tags = ["e2e-tier-presubmit"])
+test_suite(name = "extended_aarch64", tests = [":aarch64"], tags = ["e2e-tier-extended"])
+test_suite(name = "extended_x86_64", tests = [":x86_64"], tags = ["e2e-tier-extended"])
+test_suite(name = "extended_x86_64_development", tests = [":x86_64_development"], tags = ["e2e-tier-extended"])
+test_suite(name = "focused_aarch64", tests = [], tags = ["e2e-tier-focused"])
+test_suite(name = "focused_x86_64", tests = [], tags = ["e2e-tier-focused"])
+test_suite(name = "focused_x86_64_development", tests = [], tags = ["e2e-tier-focused"])
 filegroup(name = "declared_tests", testonly = True, srcs = [":all_architectures"])
 
 sh_test(
@@ -146,12 +157,12 @@ sh_test(
         "BOOT_UI_KERNEL": "$(rootpath //device/virtual/qemu/input_test:x86_64_boot_image)",
     }.items() + TRANSPLANT_ARCHIVE_ENV.items())),
     data = [":transplant_probe", "boot_ui_test.py", "//testing/performance/scened:guest.py", "input_hotplug.py", "//device/virtual/qemu/input_test:bootfs.emulated.img", "//device/virtual/qemu/input_test:boot_handoff.emulated.bin", "//device/virtual/qemu/input_test:boot_evidence.emulated.bin", "//device/virtual/qemu/input_test:qemu_nvme_development_gpt.img"] + guest_select(["//kernel:kernel"], ["//device/virtual/qemu/input_test:x86_64_boot_image"]) + TRANSPLANT_ARCHIVE_DATA,
-    tags = ["requires-qemu", "local", "exclusive", "no-sandbox"],
+    tags = QEMU_GRAPHICS_TAGS + ["e2e-tier-extended"],
     timeout = "long",
 )
 
-architecture_test(scened_standalone = True, name="input_aarch64",architecture="aarch64",test=":input_ui_test",tags=["requires-qemu","local","exclusive","no-sandbox"],timeout="long")
-architecture_test(scened_standalone = True, name="input_x86_64",architecture="x86_64",test=":input_ui_test",tags=["requires-qemu","local","exclusive","no-sandbox"],timeout="long")
+architecture_test(scened_standalone = True, name="input_aarch64",architecture="aarch64",test=":input_ui_test",tags=QEMU_GRAPHICS_TAGS + ["e2e-tier-extended", "qemu-integrated"],timeout="long")
+architecture_test(scened_standalone = True, name="input_x86_64",architecture="x86_64",test=":input_ui_test",tags=QEMU_GRAPHICS_TAGS + ["e2e-tier-extended", "qemu-integrated"],timeout="long")
 
 sh_test(
     name = "boot_ui_1080_test",
@@ -180,12 +191,12 @@ sh_test(
         "BOOT_UI_KERNEL": "$(rootpath //device/virtual/qemu/workstation:x86_64_boot_image)",
     }.items() + TRANSPLANT_ARCHIVE_ENV.items())),
     data = [":transplant_probe", "boot_ui_test.py", "//testing/performance/scened:guest.py", "input_hotplug.py", "//device/virtual/qemu/workstation:bootfs.emulated.img", "//device/virtual/qemu/workstation:boot_handoff.emulated.bin", "//device/virtual/qemu/workstation:boot_evidence.emulated.bin", "//device/virtual/qemu/workstation:qemu_nvme_development_gpt.img"] + guest_select(["//kernel:kernel"], ["//device/virtual/qemu/workstation:x86_64_boot_image"]) + TRANSPLANT_ARCHIVE_DATA,
-    tags = ["requires-qemu", "local", "exclusive", "no-sandbox"],
+    tags = QEMU_GRAPHICS_TAGS + ["e2e-tier-extended"],
     timeout = "long",
 )
 
-architecture_test(scened_standalone = True, name="boot_ui_1080_aarch64", architecture="aarch64", test=":boot_ui_1080_test", tags=["requires-qemu", "local", "exclusive", "no-sandbox"], timeout="long")
-architecture_test(scened_standalone = True, name="boot_ui_1080_x86_64", architecture="x86_64", test=":boot_ui_1080_test", tags=["requires-qemu", "local", "exclusive", "no-sandbox"], timeout="long")
+architecture_test(scened_standalone = True, name="boot_ui_1080_aarch64", architecture="aarch64", test=":boot_ui_1080_test", tags=QEMU_GRAPHICS_TAGS + ["e2e-tier-extended", "qemu-integrated"], timeout="long")
+architecture_test(scened_standalone = True, name="boot_ui_1080_x86_64", architecture="x86_64", test=":boot_ui_1080_test", tags=QEMU_GRAPHICS_TAGS + ["e2e-tier-extended", "qemu-integrated"], timeout="long")
 
 exports_files(["input_hotplug.py"])
 
@@ -193,7 +204,7 @@ sh_test(
     name = "input_hotplug_transport",
     srcs = ["input_hotplug_test.sh"],
     data = ["input_hotplug_test.py", "input_hotplug.py"],
-    tags = ["requires-qemu", "local", "exclusive", "no-sandbox"],
+    tags = QEMU_GRAPHICS_TAGS + ["e2e-tier-extended"],
     timeout = "short",
 )
 
@@ -230,9 +241,9 @@ sh_test(
         "BOOT_UI_KERNEL": "$(rootpath //device/virtual/qemu/input_test:x86_64_boot_image)",
     }.items() + TRANSPLANT_ARCHIVE_ENV.items())),
     data = [":transplant_probe", "boot_ui_test.py", "//testing/performance/scened:guest.py", "input_hotplug.py", "//device/virtual/qemu/input_test:bootfs.emulated.img", "//device/virtual/qemu/input_test:boot_handoff.emulated.bin", "//device/virtual/qemu/input_test:boot_evidence.emulated.bin", "//device/virtual/qemu/input_test:qemu_nvme_development_gpt.img"] + guest_select(["//kernel:kernel"], ["//device/virtual/qemu/input_test:x86_64_boot_image"]) + TRANSPLANT_ARCHIVE_DATA,
-    tags = ["requires-qemu", "local", "exclusive", "no-sandbox"],
+    tags = QEMU_GRAPHICS_TAGS + ["e2e-tier-performance"],
     timeout = "eternal",
 )
 
-architecture_test(scened_standalone = True, name="performance_aarch64",architecture="aarch64",test=":performance_ui_test",tags=["requires-qemu","local","exclusive","no-sandbox"],timeout="eternal")
-architecture_test(scened_standalone = True, name="performance_x86_64",architecture="x86_64",test=":performance_ui_test",tags=["requires-qemu","local","exclusive","no-sandbox"],timeout="eternal")
+architecture_test(scened_standalone = True, name="performance_aarch64",architecture="aarch64",test=":performance_ui_test",tags=QEMU_GRAPHICS_TAGS + ["e2e-tier-performance", "qemu-integrated"],timeout="eternal")
+architecture_test(scened_standalone = True, name="performance_x86_64",architecture="x86_64",test=":performance_ui_test",tags=QEMU_GRAPHICS_TAGS + ["e2e-tier-performance", "qemu-integrated"],timeout="eternal")

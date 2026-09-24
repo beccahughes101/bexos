@@ -21,15 +21,18 @@ pub struct Proxy {
 
 impl Proxy {
     pub fn start(workdir: &Path, backend: PathBuf) -> Result<Self, String> {
-        let boot_socket = workdir.join("bootrpmb-relay.sock");
-        let runtime_socket = workdir.join("rpmb0-relay.sock");
+        let boot_socket = workdir.join("br.sock");
+        let runtime_socket = workdir.join("rr.sock");
         for path in [&boot_socket, &runtime_socket] {
             super::remove_stale_socket(path)?;
         }
-        let boot =
-            UnixListener::bind(&boot_socket).map_err(|e| format!("bind boot RPMB relay: {e}"))?;
-        let runtime = UnixListener::bind(&runtime_socket)
-            .map_err(|e| format!("bind runtime RPMB relay: {e}"))?;
+        // Darwin's sockaddr_un path is shorter than Bazel's sandboxed
+        // TEST_TMPDIR. Bind a relative name while the process is still
+        // single-threaded; the socket inode still lives in the owned workdir.
+        let boot = bind_in(workdir, "br.sock")
+            .map_err(|e| format!("bind boot RPMB relay {}: {e}", boot_socket.display()))?;
+        let runtime = bind_in(workdir, "rr.sock")
+            .map_err(|e| format!("bind runtime RPMB relay {}: {e}", runtime_socket.display()))?;
         boot.set_nonblocking(true).map_err(|e| e.to_string())?;
         runtime.set_nonblocking(true).map_err(|e| e.to_string())?;
         let stop = Arc::new(AtomicBool::new(false));
@@ -64,6 +67,10 @@ impl Proxy {
     }
 }
 
+fn bind_in(workdir: &Path, name: &str) -> std::io::Result<UnixListener> {
+    super::with_socket_cwd(workdir, || UnixListener::bind(name))
+}
+
 impl Drop for Proxy {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
@@ -89,13 +96,13 @@ fn accept(listener: &UnixListener, stop: &AtomicBool, name: &str) -> Result<Unix
     }
 }
 
-fn connect(path: &Path, stop: &AtomicBool) -> Result<UnixStream, String> {
+pub(crate) fn connect(path: &Path, stop: &AtomicBool) -> Result<UnixStream, String> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if stop.load(Ordering::Acquire) {
             return Err("RPMB backend connection canceled".into());
         }
-        match UnixStream::connect(path) {
+        match super::connect_unix(path) {
             Ok(stream) => return Ok(stream),
             Err(error) if Instant::now() < deadline => {
                 let _ = error;
@@ -106,7 +113,11 @@ fn connect(path: &Path, stop: &AtomicBool) -> Result<UnixStream, String> {
     }
 }
 
-fn bridge(frontend: UnixStream, backend: UnixStream, stop: &AtomicBool) -> Result<(), String> {
+pub(crate) fn bridge(
+    frontend: UnixStream,
+    backend: UnixStream,
+    stop: &AtomicBool,
+) -> Result<(), String> {
     configure_read_polling(&frontend, "frontend")?;
     configure_read_polling(&backend, "backend")?;
     let mut frontend_reader = frontend
@@ -195,4 +206,26 @@ fn write_all_polling(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relative_bind_survives_long_test_tmpdir() {
+        let directory = std::env::temp_dir().join(format!(
+            "bexos-arm-rpmb-{}-{}",
+            std::process::id(),
+            "x".repeat(100)
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let listener = bind_in(&directory, "r.sock").unwrap();
+        assert!(directory.join("r.sock").exists());
+        let stream = super::super::connect_unix(&directory.join("r.sock")).unwrap();
+        drop(stream);
+        drop(listener);
+        std::fs::remove_file(directory.join("r.sock")).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
 }

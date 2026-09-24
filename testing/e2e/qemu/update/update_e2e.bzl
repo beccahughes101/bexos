@@ -2,7 +2,7 @@ load("//build/platforms:architecture.bzl", "guest_select")
 load("//testing/e2e/qemu:qemu_e2e.bzl", "qemu_e2e_test", "qemu_development_e2e_test")
 load("//build/rules:app_archive.bzl", "app_archive")
 
-def rpmb_service_update_test(name, boot_data, package, generation, archive, manifest, timeout_manifest, executable):
+def rpmb_service_update_test(name, boot_data, package, generation, archive, manifest, timeout_manifest, executable, tier):
     faults = []
     for mode in ["reject", "incompatible", "failure", "timeout"]:
         target = name + "_" + mode
@@ -14,6 +14,7 @@ def rpmb_service_update_test(name, boot_data, package, generation, archive, mani
         )
         faults.append(":" + target)
     service_update_test(
+        tier = tier,
         name = name,
         boot_data = boot_data,
         package = package,
@@ -33,6 +34,7 @@ def update_e2e_test(
         name,
         boot_data,
         scenario_args,
+        tier,
         data = [],
         timeout = "eternal",
         x86_scenario_args = None,
@@ -49,6 +51,7 @@ def update_e2e_test(
     if secure_firmware != None:
         architecture_args["secure_firmware"] = secure_firmware
     test_rule(
+        tier = tier,
         name = name,
         src = "debugd_updated_e2e_test.rs",
         extra_srcs = ["firmware_staging.rs", "firmware_activation.rs"],
@@ -65,6 +68,7 @@ def update_e2e_test(
             "//lib/debug_wire",
             "//lib/crypto",
             "//lib/secure_firmware",
+            "//lib/trace",
             "//lib/update:update_host",
             "//testing/e2e",
             "//tools/qemu:qemu_test",
@@ -80,6 +84,7 @@ def service_update_test(
         package,
         generation,
         archive,
+        tier,
         flags = [],
         data = [],
         prerequisites = [],
@@ -179,6 +184,7 @@ def service_update_test(
         stored_flags.append("--development")
     scenario_args = ["service", package, str(generation), "$(rootpath " + archive + ")"] + prelude_args + prerequisite_args + stored_flags
     update_e2e_test(
+        tier = tier,
         name = name,
         boot_data = test_boot_data,
         scenario_args = scenario_args,
@@ -193,11 +199,12 @@ def _replace_all(value, replacements):
     return value
 
 
-def development_service_tests(name, boot_data, services):
+def development_service_tests(name, boot_data, services, presubmit_packages = []):
     tests = []
     for entry in services:
         target = name + "_" + entry["package"].split(".")[-1]
         service_update_test(
+            tier = "presubmit" if entry["package"] in presubmit_packages else "extended",
             name = target,
             boot_data = boot_data,
             development = True,

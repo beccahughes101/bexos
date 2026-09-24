@@ -49,6 +49,7 @@ genrule(
 )
 PREFERENCES_BOOT_DATA = dict(QEMU_BOOT_DATA, disk = ":test_disk")
 qemu_e2e_test(
+    tier = "extended",
     name = "preferences_e2e_test",
     src = "preferences_e2e_test.rs",
     crate_name = "preferences_e2e_test",

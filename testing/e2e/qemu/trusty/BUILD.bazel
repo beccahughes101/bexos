@@ -4,6 +4,7 @@ load("//testing/e2e/qemu:qemu_e2e.bzl", "QEMU_BOOT_DATA", "qemu_e2e_test")
 package(default_visibility = ["//visibility:public"])
 
 qemu_e2e_test(
+    tier = "extended",
     name = "trusty_security_stack_e2e_test",
     src = "trusty_security_stack_e2e_test.rs",
     crate_name = "trusty_security_stack_e2e_test",
@@ -29,6 +30,7 @@ qemu_e2e_test(
 )
 
 qemu_e2e_test(
+    tier = "extended",
     name = "authmgr_acceptance_e2e_test",
     trusty_variant = "acceptance",
     src = "authmgr_acceptance_e2e_test.rs",

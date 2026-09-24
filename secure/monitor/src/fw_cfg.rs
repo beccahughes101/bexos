@@ -110,7 +110,7 @@ unsafe fn lookup(name: &[u8], capacity: usize) -> Result<(u16, usize), FileError
 /// fails closed; the caller must halt rather than allow a pending DMA to outlive
 /// the bootstrap storage.
 pub unsafe fn read_dma(name: &[u8], output: &mut [u8]) -> Option<usize> {
-    if output.is_empty() || output.len() > 128 * 1024 * 1024 {
+    if output.is_empty() || output.len() > crate::boot_verify::BOOTFS_MAX_BYTES {
         return None;
     }
     unsafe {

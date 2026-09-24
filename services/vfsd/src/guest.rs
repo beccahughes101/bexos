@@ -754,9 +754,10 @@ fn get_system_data_directory(
 
 fn get_user_home_directory(store: &Option<PackageStore>, uid: u64) -> Result<Channel, FsStatus> {
     let root = user_root(store, uid)?;
-    Memory::duplicate(root.0, 1 | 2 | 4 | 32)
-        .map(Channel)
-        .map_err(|_| FsStatus::Io)
+    // Filesystem RPC replies are intentionally untagged. A duplicated client
+    // handle would let independent services consume each other's responses.
+    // Open `.` to allocate an independently owned endpoint at the same inode.
+    fs::open(root, ".", 1 | 2 | 4 | 32)
 }
 
 fn get_shared_vault_directory(

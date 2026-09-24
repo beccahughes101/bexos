@@ -7,10 +7,12 @@ userspace_binary(name = "probe", srcs = ["probe.rs"], crate_name = "fault_probe"
 app_manifest(name = "manifest", src = "package.prototxt")
 app_archive(name = "archive", manifest = ":manifest", entries = {"bin/fault_probe": ":probe"}, compression = "zstd")
 qemu_e2e_test(
+    tier = "extended",
     name = "faults_test", src = "faults_e2e_test.rs", crate_name = "faults_test",
     deps = ["//testing/e2e", "//tools/qemu:qemu_test"], extra_data = [":archive"], extra_args = ["$(rootpath :archive)"],
 )
 qemu_development_e2e_test(
+    tier = "extended",
     name = "faults_development_test", src = "faults_e2e_test.rs", crate_name = "faults_development_test",
     deps = ["//testing/e2e", "//tools/qemu:qemu_test"], extra_data = [":archive"], extra_args = ["$(rootpath :archive)"],
 )

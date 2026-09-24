@@ -24,6 +24,7 @@ fn ensure(runtime: &mut Runtime, uid: u64) -> Result<(), Status> {
     }
     let (watch, remote) = Channel::pair().map_err(|_| Status::Io)?;
     let result = (|| {
+        bexos_userspace::log(&format!("localed: resolving preferences uid={uid}\n"));
         let (bytes, handles) = encode(&LocalePreferencesWatchRequest {
             uid,
             listener: HandleRef { raw: remote.0 },
@@ -38,10 +39,30 @@ fn ensure(runtime: &mut Runtime, uid: u64) -> Result<(), Status> {
             let _ = Memory::close(remote.0);
             return Err(Status::Unavailable);
         }
-        let message = runtime
-            .preferences
-            .recv_with_timeout(10)
-            .map_err(|_| Status::Unavailable)?;
+        let message = match runtime.preferences.recv_with_timeout(1) {
+            Ok(message) => message,
+            Err(kernel_fidl::Status::ErrTimedOut) => {
+                // The encrypted user store may need appd to finish the launch
+                // that is currently waiting on this reply. Break that cycle
+                // with safe defaults, retain the watch, and consume the
+                // authoritative snapshot asynchronously below.
+                runtime.users.insert(
+                    uid,
+                    User {
+                        settings: Settings::default(),
+                        generation: 0,
+                        watch: watch.0,
+                    },
+                );
+                runtime.pending_initial.push(uid);
+                bexos_userspace::log(&format!(
+                    "localed: preferences pending uid={uid}; using defaults\n"
+                ));
+                return Ok(());
+            }
+            Err(_) => return Err(Status::Unavailable),
+        };
+        bexos_userspace::log(&format!("localed: preferences response uid={uid}\n"));
         let q = LocalePreferencesWatchResponse::decode(&message.bytes, &[])
             .map_err(|_| Status::InvalidArgs)?;
         if q.status != Status::Ok {
@@ -246,6 +267,26 @@ fn error(client: &Client, ordinal: u64, status: Status) {
     });
 }
 pub fn poll_preferences(runtime: &mut Runtime) {
+    if let Some(uid) = runtime.pending_initial.first().copied() {
+        match runtime.preferences.try_recv() {
+            Ok(message) => {
+                runtime.pending_initial.remove(0);
+                if let Ok(response) = LocalePreferencesWatchResponse::decode(&message.bytes, &[])
+                    && response.status == Status::Ok
+                    && let Ok(settings) = Settings::from_wire(&response.snapshot.settings)
+                {
+                    let _ = runtime.update(uid, response.snapshot.generation, settings);
+                    bexos_userspace::log(&format!(
+                        "localed: asynchronous preferences ready uid={uid}\n"
+                    ));
+                }
+            }
+            Err(kernel_fidl::Status::ErrTimedOut) => {}
+            Err(_) => {
+                runtime.pending_initial.remove(0);
+            }
+        }
+    }
     let watches = runtime
         .users
         .iter()

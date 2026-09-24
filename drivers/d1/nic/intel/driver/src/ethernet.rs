@@ -6,8 +6,8 @@ use bexos_migration::{
     Error,
     codec::{Decoder, Encoder},
 };
-use bexos_userspace::{Channel, Memory};
 use bexos_userspace::live_migration::{Resource, Source};
+use bexos_userspace::{Channel, Memory};
 use ethernet_fidl::{
     DeviceFeatures, DeviceGetFifoResponse, DeviceGetInfoResponse, DeviceRegisterBufferRequest,
     DeviceRegisterBufferResponse, DeviceStartResponse, DeviceStopResponse,
@@ -124,12 +124,7 @@ impl EthernetRuntime {
         }
     }
 
-    fn register_buffer(
-        &mut self,
-        iommu: u64,
-        handle: u64,
-        size: u32,
-    ) -> Result<u32, Status> {
+    fn register_buffer(&mut self, iommu: u64, handle: u64, size: u32) -> Result<u32, Status> {
         if size == 0 || self.buffers.len() >= MAX_BUFFERS {
             return Err(if size == 0 {
                 Status::ErrInvalidArgs
@@ -438,8 +433,12 @@ pub(super) fn poll_packets(state: &mut Runtime, source: &mut Source) {
             Err(Status::ErrShouldWait)
         } else {
             match entry.opcode {
-                FrameOpcode::TxSend => submit_tx(ethernet, state.controller.as_mut().unwrap(), fifo, entry),
-                FrameOpcode::RxSupply => submit_rx(ethernet, state.controller.as_mut().unwrap(), fifo, entry),
+                FrameOpcode::TxSend => {
+                    submit_tx(ethernet, state.controller.as_mut().unwrap(), fifo, entry)
+                }
+                FrameOpcode::RxSupply => {
+                    submit_rx(ethernet, state.controller.as_mut().unwrap(), fifo, entry)
+                }
                 _ => Err(Status::ErrInvalidArgs),
             }
         };
@@ -669,7 +668,9 @@ fn decode_frame(reader: &mut Decoder<'_>) -> Result<FrameEntry, Error> {
 }
 
 fn page_round(value: u64) -> Option<u64> {
-    value.checked_add(PAGE_SIZE - 1).map(|value| value & !(PAGE_SIZE - 1))
+    value
+        .checked_add(PAGE_SIZE - 1)
+        .map(|value| value & !(PAGE_SIZE - 1))
 }
 
 fn map_kernel_status(status: kernel_fidl::Status) -> Status {

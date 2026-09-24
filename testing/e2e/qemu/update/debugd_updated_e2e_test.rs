@@ -1,6 +1,9 @@
 use bexos_crypto::blake3_256;
 use bexos_debug_client::{DebugClient, DebugClientError, DebugTransport};
-use bexos_e2e::{BEXFS_MARKERS, DebugSession, E2eDevice, NVME_MARKERS, boot_markers};
+use bexos_e2e::{
+    BEXFS_MARKERS, DebugSession, E2eContext, E2eDevice, NVME_MARKERS, VIRTIO_NET_MARKERS,
+    boot_markers,
+};
 use bexos_qemu_test::{QemuArtifacts, QemuDevice};
 use bexos_update::{ArtifactKind, build_signed_manifest};
 mod firmware_activation;
@@ -66,6 +69,7 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
+    let context = E2eContext::from_env("update");
     eprintln!("e2e: update harness start");
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     let (artifacts, extra) = QemuArtifacts::from_env_or_args(&args)?;
@@ -92,9 +96,12 @@ fn run() -> Result<(), String> {
         }
     }
     eprintln!("e2e: booting debug session");
-    let mut session = boot_debug_session(artifacts)?;
+    let mut session = context.run_phase("boot", || boot_debug_session(artifacts))?;
     eprintln!("e2e: debug session ready");
-    let outcome = match scenario {
+    if std::env::var("BEXOS_E2E_TIER").as_deref() == Ok("presubmit") {
+        context.run_phase("platform-smoke", || verify_platform_smoke(&mut session))?;
+    }
+    let outcome = context.run_phase("scenario", || match scenario {
         Scenario::AppPackage { archive } => run_app_package_update(&mut session, &archive),
         Scenario::KernelPlatform { update_kernel } => {
             run_kernel_platform_update(&mut session, &update_kernel)
@@ -118,7 +125,7 @@ fn run() -> Result<(), String> {
         Scenario::TeeImage => run_tee_image_update(&mut session),
         Scenario::FirmwareStaging { bundle } => firmware_staging::run(&mut session, &bundle),
         Scenario::FirmwareActivation { .. } => unreachable!(),
-    };
+    });
     outcome.map_err(|error| {
         format!(
             "{error}\n{}",
@@ -221,6 +228,7 @@ fn boot_debug_session(
     let mut markers = boot_markers();
     markers.extend_from_slice(NVME_MARKERS);
     markers.extend_from_slice(BEXFS_MARKERS);
+    markers.extend_from_slice(VIRTIO_NET_MARKERS);
     markers.push(b"teed: service ready");
     markers.push(b"appd: app lifecycle registry ready for debugd");
     markers.push(b"debugd: tee proxy connected");
@@ -229,6 +237,34 @@ fn boot_debug_session(
     session.assert_debugd_ready()?;
     session.client.clear_received_trace();
     Ok(session)
+}
+
+fn verify_platform_smoke<T: DebugTransport>(session: &mut DebugSession<T>) -> Result<(), String> {
+    let apps = session
+        .client
+        .list_apps()
+        .map_err(|error| format!("presubmit app registry: {error:?}"))?;
+    for package in [
+        "bexos.platform.storage_verify",
+        "bexos.service.netstackd",
+        "bexos.service.timed",
+    ] {
+        let app = apps
+            .iter()
+            .find(|app| app.package_id == package)
+            .ok_or_else(|| format!("presubmit registry missing {package}"))?;
+        if app.state != "Running" || !app.protected {
+            return Err(format!("presubmit app had unexpected state: {app:?}"));
+        }
+    }
+    let mut trace = session.traced_test("presubmit", bexos_trace::CATEGORY_DEBUG_SERVICE)?;
+    trace
+        .session()
+        .client
+        .health_check()
+        .map_err(|error| format!("presubmit traced health: {error:?}"))?;
+    let analysis = trace.finish()?;
+    analysis.assert_event_present("debugd:health_check")
 }
 
 fn run_app_package_update<T: DebugTransport>(

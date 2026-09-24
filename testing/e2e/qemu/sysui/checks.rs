@@ -3,14 +3,7 @@ use bexos_debug_client::{DebugClient, DebugTransport};
 use bexos_debug_wire::PreferencesRequest;
 use std::time::{Duration, Instant};
 fn cold_timeout() -> Duration {
-    // Integrated x86 firmware and normal userspace execute through TCG.
-    Duration::from_secs(
-        if std::env::var("BEXOS_QEMU_ARCH").as_deref() == Ok("x86_64") {
-            3600
-        } else {
-            360
-        },
-    )
+    Duration::from_secs(360)
 }
 pub fn screen(
     c: &mut DebugClient<impl DebugTransport>,
@@ -42,15 +35,41 @@ fn screen_wait(
     timeout: Duration,
 ) -> Result<Vec<u8>, String> {
     let deadline = Instant::now() + timeout;
+    let stall_timeout = Duration::from_secs(120);
+    let mut progressed_at = Instant::now();
+    let mut generation = 0;
+    let mut previous_pixel = None;
     loop {
         let image = q.screenshot(name)?;
-        if crate::qmp::pixel(&image, x, y) == Some(color) {
+        let current_pixel = crate::qmp::pixel(&image, x, y);
+        if current_pixel == Some(color) {
             return Ok(image);
+        }
+        let trace = c.received_trace();
+        let current_generation = [
+            b"user operation complete".as_slice(),
+            b"localed: preferences pending",
+            b"appd: loading user permissions",
+            b"appd: process ready package=bexos.app.userui",
+            b"wasm_runner: native UI first frame submitted",
+        ]
+        .iter()
+        .filter(|marker| trace.windows(marker.len()).any(|window| window == **marker))
+        .count();
+        if current_generation != generation || previous_pixel != current_pixel {
+            generation = current_generation;
+            previous_pixel = current_pixel;
+            progressed_at = Instant::now();
         }
         if Instant::now() >= deadline {
             return Err(format!(
                 "{name}: pixel {x},{y} expected {color:?}, got {:?}",
-                crate::qmp::pixel(&image, x, y)
+                current_pixel
+            ));
+        }
+        if progressed_at.elapsed() >= stall_timeout {
+            return Err(format!(
+                "{name}: stalled for {stall_timeout:?} at progress generation {generation}; pixel {x},{y} expected {color:?}, got {current_pixel:?}"
             ));
         }
         c.drain_for(Duration::from_millis(500))
@@ -79,7 +98,9 @@ pub fn login(
     q.type_text("testpass")?;
     q.key("ret")?;
     user(c, uid, true)?;
-    cold_screen(c, q, "desktop", 10, 10, [27, 48, 68])?;
+    // The desktop and secure screen deliberately share the main background.
+    // The bottom taskbar is a desktop-only rendered state transition.
+    cold_screen(c, q, "desktop", 400, 580, [18, 25, 38])?;
     Ok(())
 }
 pub fn logout(
@@ -131,7 +152,8 @@ pub fn user(
         if c.get_user(uid).map_err(|e| format!("user {e:?}"))?.unlocked == unlocked {
             return Ok(());
         }
-        std::thread::sleep(Duration::from_millis(250));
+        c.drain_for(Duration::from_millis(250))
+            .map_err(|e| format!("user wait {e:?}"))?;
     }
     Err(format!("UID {uid} did not reach unlocked={unlocked}"))
 }
@@ -186,7 +208,8 @@ fn process_wait(
         if p.is_some() == present {
             return Ok(p.map_or(0, |p| p.pid));
         }
-        std::thread::sleep(Duration::from_millis(250));
+        c.drain_for(Duration::from_millis(250))
+            .map_err(|e| format!("process wait {e:?}"))?;
     }
     Err(format!("package {package} did not reach present={present}"))
 }

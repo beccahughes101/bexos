@@ -36,6 +36,10 @@ pub(crate) fn configure_boot(
     if let Some(directory) = firmware {
         let (boot_socket, runtime_socket) =
             rpmb_sockets.expect("secure ARM QEMU requires RPMB relay sockets");
+        let boot_socket = boot_socket.file_name().unwrap_or(boot_socket.as_os_str());
+        let runtime_socket = runtime_socket
+            .file_name()
+            .unwrap_or(runtime_socket.as_os_str());
         command
             .current_dir(directory)
             .arg("-bios")
@@ -45,10 +49,16 @@ pub(crate) fn configure_boot(
             // Distinct relay sockets keep both guest frontends connected while
             // the host owner serializes their authenticated backend access.
             .arg("-chardev")
-            .arg(format!("socket,id=bootrpmb,path={}", boot_socket.display()))
+            .arg(format!(
+                "socket,id=bootrpmb,path={}",
+                Path::new(boot_socket).display()
+            ))
             .args(["-device", "pci-serial,addr=7,chardev=bootrpmb"])
             .arg("-chardev")
-            .arg(format!("socket,id=rpmb0,path={}", runtime_socket.display()))
+            .arg(format!(
+                "socket,id=rpmb0,path={}",
+                Path::new(runtime_socket).display()
+            ))
             .args([
                 "-device",
                 "virtio-serial-pci,id=rpmbbus,disable-legacy=on,disable-modern=off,romfile=",

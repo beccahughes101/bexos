@@ -3,9 +3,9 @@
 ENTRY(_start)
 SECTIONS {
   .resident.payload 0x04200000 (NOLOAD) : { KEEP(*(.resident.payload)) }
-  ASSERT(. <= 0x10400000, "permanent boot snapshots overlap firmware workspace")
-  .resident.firmware 0x10400000 (NOLOAD) : { KEEP(*(.resident.firmware)) }
-  ASSERT(. <= 0x14800000, "bounded firmware workspace overflow")
+  ASSERT(. <= 0x12400000, "permanent boot snapshots overlap firmware workspace")
+  .resident.firmware 0x12400000 (NOLOAD) : { KEEP(*(.resident.firmware)) }
+  ASSERT(. <= 0x16800000, "bounded firmware workspace overflow")
   .boot 0x18200000 : { KEEP(*(.text.boot)) }
   .text : ALIGN(4096) { *(.text .text.*) }
   .rodata : ALIGN(4096) { *(.rodata .rodata.*) }

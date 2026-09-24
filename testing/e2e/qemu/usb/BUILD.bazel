@@ -15,6 +15,7 @@ USB_QEMU_ARGS = [
 ]
 
 qemu_e2e_test(
+    tier = "extended",
     name = "usb_host_smoke_test",
     src = "usb_host_smoke_test.rs",
     crate_name = "usb_host_smoke_test",

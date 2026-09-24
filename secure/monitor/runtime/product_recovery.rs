@@ -53,9 +53,12 @@ unsafe fn restart_selected(
 }
 
 pub unsafe fn select(vmcb: &mut Vmcb, regs: &mut Registers, platform: &mut Platform<1>) -> Monitor {
+    crate::log("monitor-runtime: firmware selection identify disk\n");
     let mut disk = required(Disk::identify(unsafe { Native::acquire() }));
+    crate::log("monitor-runtime: firmware selection disk ready\n");
     let scratch = unsafe { crate::replacement::boot_workspace() };
     let mut monitor = unsafe { Monitor::initialize() };
+    crate::log("monitor-runtime: firmware selection connect rollback service\n");
     let mut avb = required(Avb::connect(unsafe {
         crate::transport::Boot::cold(|| crate::secure_step(vmcb, regs, platform))
     }));
@@ -65,11 +68,14 @@ pub unsafe fn select(vmcb: &mut Vmcb, regs: &mut Registers, platform: &mut Platf
     ];
     required(avb.close());
     drop(avb);
+    crate::log("monitor-runtime: firmware selection rollback floors ready\n");
     let mut owner =
         unsafe { crate::transport::Boot::cold(|| crate::secure_step(vmcb, regs, platform)) };
+    crate::log("monitor-runtime: firmware selection prepare protected state\n");
     let decision = required(recovery::prepare_boot(
         &mut owner, &mut disk, ROOT, floors, scratch,
     ));
+    crate::log("monitor-runtime: firmware selection protected state ready\n");
     let mut selected = [
         decision.selected(Component::Trusty),
         decision.selected(Component::Hypervisor),

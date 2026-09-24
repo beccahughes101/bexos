@@ -1229,6 +1229,10 @@ fn import_preinstalled_package_manifests(
             &manifest.permissions,
             0,
         );
+        log(&format!(
+            "appd: boot disk package imported package={}\n",
+            manifest.package_name
+        ));
     }
     Ok(installed_keys.into_iter().collect())
 }

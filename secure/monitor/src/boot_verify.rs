@@ -4,6 +4,8 @@ use bexos_avb::{verify_partition, verify_vbmeta};
 use bexos_bootfs_parser::Bootfs;
 use sha2::{Digest, Sha256};
 
+pub const BOOTFS_MAX_BYTES: usize = 160 * 1024 * 1024;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
     Metadata,
@@ -33,7 +35,7 @@ pub fn verify(
         || kernel.is_empty()
         || kernel.len() > 64 * 1024 * 1024
         || bootfs.is_empty()
-        || bootfs.len() > 128 * 1024 * 1024
+        || bootfs.len() > BOOTFS_MAX_BYTES
     {
         return Err(Error::Bounds);
     }

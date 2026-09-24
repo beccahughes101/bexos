@@ -24,6 +24,8 @@ pub struct Runtime {
     pub clients: Vec<Client>,
     pub users: BTreeMap<u64, User>,
     pub listeners: Vec<Listener>,
+    /// Preference-watch replies that may arrive after startup used defaults.
+    pub pending_initial: Vec<u64>,
 }
 impl Default for Runtime {
     fn default() -> Self {
@@ -37,6 +39,7 @@ impl Default for Runtime {
             clients: Vec::new(),
             users: BTreeMap::new(),
             listeners: Vec::new(),
+            pending_initial: Vec::new(),
         }
     }
 }

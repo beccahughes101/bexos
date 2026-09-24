@@ -1,5 +1,45 @@
 # Testing Status
 
+## E2E harness redesign (2026-09-24)
+
+The QEMU matrix now has required `presubmit`, `extended`, `focused`, or
+`performance` classification, resource-aware four-CPU/2-GiB scheduling, and
+per-instance state under `TEST_TMPDIR`. Pull requests select one consolidated
+presubmit scenario for AArch64 integrated, x86 integrated, and x86 development;
+`main` and manual workflows add platform, UI, update, and security shards. The
+full architecture suites remain available. Fixed-port package-registry coverage
+is the only maintained QEMU fixture that remains globally exclusive.
+
+The harness derives its deadline from `TEST_TIMEOUT`, reserves 30 seconds for
+cleanup, records named phases, and enforces a 120-second named-progress stall
+watchdog. Failure artifacts include phase timing, serial/debug/QMP tails, staged
+state, screenshots where available, and child status. Update prefix chains no
+longer duplicate maintained boots, and SysUI coverage is split into one-boot
+smoke, window/input/transplant, focused migration/recovery, and two-boot
+preferences scenarios.
+
+Current local Apple Silicon results are deliberately partial:
+
+- `//testing/e2e/qemu:presubmit_aarch64` passed uncached without retry in
+  443.9 seconds. Its measured phases were 0.6 seconds staging, 80.5 seconds
+  boot, 0.1 seconds debugd readiness, 30.1 seconds SysUI readiness,
+  231.8 seconds provisioning/login, 40.5 seconds window smoke, and 58.7 seconds
+  platform/registry/transplant coverage.
+- x86 integrated now passes secure firmware selection, both Trusty instances,
+  RPMB ownership transfer, secure kernel entry, and normal-world service
+  startup. The prior unsupported virtio `chardev-change` race was replaced by
+  a fixed runtime socket relay. On this ARM host, however, cross-architecture
+  x86 TCG was still launching storage services at the 600-second hard boot
+  deadline, so no x86 presubmit pass or under-ten-minute claim is recorded.
+- Ten consecutive uncached passes per profile and three full-matrix passes have
+  not been completed. Those acceptance results must be recorded from the x86
+  Linux CI runners before treating the reliability target as met.
+
+Focused host validation currently passes for the QEMU harness, appd, localed,
+prefsd, BexFS/vfsd, secure-monitor layouts and IOAPIC behavior, and matrix
+coverage. No retry or flaky annotation was added, and failed/expired runs reap
+their owned QEMU and RPMB children.
+
 ## RFC 0070 Phase 2 Starnix port (2026-09-23)
 
 The pinned Starnix import, BexOS Zircon compatibility facade, versioned runner
@@ -60,7 +100,6 @@ bazel run -c opt --config=x86_64 //boot/efi:refresh_firmware
 Both commands passed. The refresh regenerated the local, gitignored
 `boot/efi/standard_firmware.bin`; this prerequisite result is not a Starnix
 guest-execution result.
-
 ## RFC 0070 Phase 1 restricted execution (2026-09-23)
 
 RFC 0070 Phase 1 adds the AArch64/x86_64 restricted-execution ABI, kernel trap

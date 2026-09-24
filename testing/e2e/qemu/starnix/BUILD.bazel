@@ -61,6 +61,7 @@ app_archive(
 )
 
 qemu_e2e_test(
+    tier = "extended",
     name = "starnix_test",
     src = "starnix_e2e_test.rs",
     crate_name = "starnix_e2e_test",

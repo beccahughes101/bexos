@@ -44,21 +44,28 @@ job also runs `bazel run //testing/e2e/qemu:check_matrix` and
 `//tools/ci:workflow_test` validates workflow syntax and script parsing with a
 checksum-pinned, Bazel-managed actionlint executable.
 
-Four independent E2E jobs execute these maintained suite labels:
+Pull requests run three independent presubmit profile jobs:
 
 ```sh
-bazel test --config=e2e --nocache_test_results --test_env=BEXOS_QEMU_LIVE_LOG=1 //testing/e2e/qemu:aarch64
-bazel test --config=e2e --nocache_test_results --test_env=BEXOS_QEMU_LIVE_LOG=1 //testing/e2e/qemu:x86_64
-bazel test --config=e2e --nocache_test_results --test_env=BEXOS_QEMU_LIVE_LOG=1 //testing/e2e/qemu:x86_64_development
-bazel test --config=e2e --nocache_test_results --test_env=BEXOS_QEMU_LIVE_LOG=1 //testing/e2e/qemu:firmware_acceptance
+bazel test --config=e2e --nocache_test_results //testing/e2e/qemu:presubmit_aarch64
+bazel test --config=e2e --nocache_test_results //testing/e2e/qemu:presubmit_x86_64
+bazel test --config=e2e --nocache_test_results //testing/e2e/qemu:presubmit_x86_64_development
 ```
 
-`--config=e2e` selects optimized guests and keeps going after failures. Existing
-test deadlines and exclusive execution are preserved. Performance suites remain
-opt-in; no functional scenarios receive new exclusions, retries, or tolerated
-failures. The top-level inventory includes the existing Dioxus smoke,
-preferences, and SysUI boot/migration/recovery scenarios on both guest
-architectures. Existing runtime failures make CI fail.
+Pushes to `main` and manual dispatches additionally run the `platform`, `ui`,
+`update`, and `security` extended shards for each profile, plus
+`//testing/e2e/qemu:firmware_acceptance`. For example,
+`//testing/e2e/qemu:extended_aarch64_update` selects the AArch64 update shard.
+The full local labels `:aarch64`, `:x86_64`, and `:x86_64_development` remain
+the union of presubmit and extended behavior. Focused diagnostic labels are
+runnable but excluded from maintained matrices; `:performance` remains opt-in.
+
+Every QEMU target has exactly one `presubmit`, `extended`, `focused`, or
+`performance` tier. No tier uses automatic retries or tolerated failures.
+Integrated update coverage uses one complete ordered service-replacement chain;
+its prefix labels are focused-only. SysUI has separate one-boot smoke,
+window/input/transplant, migration, and recovery scenarios, plus a two-boot
+preferences/persistence scenario.
 
 ## Runner setup and resources
 
@@ -70,8 +77,12 @@ compilers, Rust, and code generators remain managed by Bazel.
 The setup script is restricted to disposable GitHub-hosted Linux runners. It
 reclaims unused .NET, Android, and Haskell SDK directories before fetching the
 large build dependencies. Jobs log disk availability and tool versions, limit
-Bazel to two concurrent actions and 65% of RAM, and limit local test concurrency
-to one. Build, firmware, and E2E jobs have a 360-minute limit. A new run cancels
+Bazel to two concurrent actions and 65% of RAM, and retain one local test at a
+time on each hosted runner. Locally each QEMU test declares four CPUs and 2 GiB
+through Bazel resource tags, so Bazel can schedule independent VMs according to
+configured `--local_resources`; only genuine global fixtures such as the
+package registry's fixed port remain `exclusive`. Build, firmware, and E2E jobs
+have a 360-minute limit. A new run cancels
 an older run for the same PR or branch; an individual matrix failure does not
 cancel sibling jobs.
 
@@ -85,8 +96,11 @@ credentials, and the workflow token has only `contents: read` permission.
 Each job attempts guest-process cleanup and diagnostic upload even after a
 failure. Normal test harness cleanup remains primary; the runner cleanup step
 terminates remaining QEMU/RPMB helpers without stopping Bazel. Diagnostics
-contain command logs, available Bazel `test.log`/`test.xml` files, and undeclared
-test outputs from every Bazel configuration, retained for seven days. Firmware
+contain command logs, Bazel execution profiles, available Bazel
+`test.log`/`test.xml` files, and undeclared test outputs from every Bazel
+configuration, retained for seven days. E2E undeclared outputs include named
+phase timings and, on failures, serial/debug/QMP tails and screenshots when the
+scenario provides them. Firmware
 transport artifacts expire after one day. A setup or compilation failure can legitimately produce no test logs;
 the diagnostic inventory states that explicitly.
 

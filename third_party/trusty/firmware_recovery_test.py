@@ -3,7 +3,7 @@ import os
 import shutil
 
 SLOT_BYTES = 65 * 1024 * 1024
-DISK_BYTES = 4096 + 4 * SLOT_BYTES
+DISK_BYTES = (4096 + 4 * SLOT_BYTES + 16 * 1024 - 1) & ~(16 * 1024 - 1)
 
 
 def create_disk(path):

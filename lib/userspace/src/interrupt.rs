@@ -2,8 +2,8 @@ use crate::ipc::{check, kernel_call};
 use kernel_fidl::{
     HandleRef, InlineVectorStruct1, Signals, Status, SystemPrivilegedAcknowledgeInterruptRequest,
     SystemPrivilegedAcknowledgeInterruptResponse, SystemPrivilegedMaskInterruptRequest,
-    SystemPrivilegedMaskInterruptResponse, TASK_CONTROL_PUBLIC_METHODS,
-    TaskControlWaitManyRequest, TaskControlWaitManyResponse,
+    SystemPrivilegedMaskInterruptResponse, TASK_CONTROL_PUBLIC_METHODS, TaskControlWaitManyRequest,
+    TaskControlWaitManyResponse,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

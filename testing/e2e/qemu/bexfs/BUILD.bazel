@@ -39,6 +39,7 @@ app_archive(
 )
 
 qemu_e2e_test(
+    tier = "focused",
     name = "debugd_app_registry_e2e_test",
     src = "debugd_app_registry_e2e_test.rs",
     crate_name = "debugd_app_registry_e2e_test",
@@ -54,6 +55,7 @@ qemu_e2e_test(
 )
 
 qemu_e2e_test(
+    tier = "focused",
     name = "debugd_trace_e2e_test",
     src = "debugd_trace_e2e_test.rs",
     crate_name = "debugd_trace_e2e_test",
@@ -67,6 +69,7 @@ qemu_e2e_test(
 )
 
 qemu_e2e_test(
+    tier = "extended",
     name = "bexfs_sys_state_e2e_test",
     src = "bexfs_sys_state_e2e_test.rs",
     crate_name = "bexfs_sys_state_e2e_test",
@@ -80,6 +83,7 @@ qemu_e2e_test(
 )
 
 qemu_e2e_test(
+    tier = "extended",
     name = "user_storage_isolation_e2e_test",
     src = "user_storage_isolation_e2e_test.rs",
     crate_name = "user_storage_isolation_e2e_test",
@@ -120,6 +124,7 @@ app_archive(
     compression = "zstd",
 )
 qemu_e2e_test(
+    tier = "extended",
     name = "debugd_shell_e2e_test",
     src = "debugd_shell_e2e_test.rs",
     crate_name = "debugd_shell_e2e_test",
@@ -140,6 +145,7 @@ rust_test(
 
 
 qemu_e2e_test(
+    tier = "extended",
     name = "brush_shell_e2e_test",
     src = "brush_shell_e2e_test.rs",
     crate_name = "brush_shell_e2e_test",
@@ -147,6 +153,7 @@ qemu_e2e_test(
 )
 
 qemu_e2e_test(
+    tier = "extended",
     name = "brush_workstation_shell_e2e_test",
     src = "brush_shell_e2e_test.rs",
     crate_name = "brush_workstation_shell_e2e_test",
@@ -157,6 +164,7 @@ qemu_e2e_test(
 )
 
 qemu_development_e2e_test(
+    tier = "focused",
     name = "debugd_app_registry_development_test",
     src = "debugd_app_registry_e2e_test.rs",
     crate_name = "debugd_app_registry_development_test",
@@ -166,6 +174,7 @@ qemu_development_e2e_test(
 )
 
 qemu_development_e2e_test(
+    tier = "focused",
     name = "debugd_trace_development_test",
     src = "debugd_trace_e2e_test.rs",
     crate_name = "debugd_trace_development_test",
@@ -175,6 +184,7 @@ qemu_development_e2e_test(
 )
 
 qemu_development_e2e_test(
+    tier = "extended",
     name = "bexfs_sys_state_development_test",
     src = "bexfs_sys_state_e2e_test.rs",
     crate_name = "bexfs_sys_state_development_test",

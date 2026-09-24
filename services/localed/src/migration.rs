@@ -24,7 +24,7 @@ impl State for Runtime {
     }
     fn encode_record(&self, key: u64) -> Result<Option<Vec<u8>>, Error> {
         let mut w = Encoder::new();
-        w.word(1);
+        w.word(2);
         if key == 0 {
             for v in [
                 self.control.0,
@@ -51,6 +51,10 @@ impl State for Runtime {
                 w.word(l.channel);
                 w.word(l.uid);
                 w.word(l.generation);
+            }
+            w.word(self.pending_initial.len() as u64);
+            for uid in &self.pending_initial {
+                w.word(*uid);
             }
         } else {
             let Some(u) = self.users.get(&(key - 1)) else {
@@ -79,7 +83,8 @@ impl State for Runtime {
             return Err(Error::InvalidData);
         };
         let mut r = Decoder::new(bytes);
-        if r.word()? != 1 {
+        let version = r.word()?;
+        if !matches!(version, 1 | 2) {
             return Err(Error::UnsupportedVersion);
         }
         if key == 0 {
@@ -114,6 +119,12 @@ impl State for Runtime {
                     generation: r.word()?,
                 });
             }
+            self.pending_initial.clear();
+            if version >= 2 {
+                for _ in 0..r.count(256)? {
+                    self.pending_initial.push(r.word()?);
+                }
+            }
         } else {
             let watch = r.word()?;
             let snapshot =
@@ -140,6 +151,15 @@ impl State for Runtime {
             || self.data_len == 0
             || self.data_len > 64 * 1024 * 1024
             || self.users.len() > 256
+            || self.pending_initial.len() > 256
+        {
+            return Err(Error::InvalidData);
+        }
+        let mut pending = std::collections::BTreeSet::new();
+        if self
+            .pending_initial
+            .iter()
+            .any(|uid| !self.users.contains_key(uid) || !pending.insert(*uid))
         {
             return Err(Error::InvalidData);
         }
@@ -234,6 +254,7 @@ mod tests {
             channel: 6,
             generation: 2,
         });
+        r.pending_initial.push(7);
         let mut next = Runtime::empty();
         for key in r.keys() {
             let b = r.encode_record(key).unwrap().unwrap();
@@ -242,6 +263,7 @@ mod tests {
         next.validate().unwrap();
         assert_eq!(next.users, r.users);
         assert_eq!(next.listeners, r.listeners);
+        assert_eq!(next.pending_initial, r.pending_initial);
         assert_eq!(next.data, r.data);
         assert_eq!(next.resources().len(), 6);
     }

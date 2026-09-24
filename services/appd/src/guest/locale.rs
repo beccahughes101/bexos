@@ -29,18 +29,22 @@ pub fn prepare(
     if package != "bexos.service.localed" && provider.is_none() {
         return Ok(Pending(None));
     }
-    let record = registry
-        .record("bexos.locale.preferences")
-        .map_err(|e| format!("locale preferences package {e:?}"))?;
-    let root = vfs::get_package_directory(vfsd, &record.archive_id())
-        .map_err(|e| format!("locale preferences root {e:?}"))?;
-    let registration = (|| {
-        let connection = preferences::connect(services)?;
-        preferences::register(connection.0, record, root, legacy)
-    })();
-    let _ = fs::close(root);
-    registration.map_err(|e| format!("locale preferences registration {e:?}"))?;
     if package == "bexos.service.localed" {
+        // Register the locale schema exactly once as part of bringing up its
+        // authoritative provider. Re-registering it synchronously for every
+        // application launch contends with per-user preference loads and can
+        // leave appd waiting on prefsd before it can even contact localed.
+        let record = registry
+            .record("bexos.locale.preferences")
+            .map_err(|e| format!("locale preferences package {e:?}"))?;
+        let root = vfs::get_package_directory(vfsd, &record.archive_id())
+            .map_err(|e| format!("locale preferences root {e:?}"))?;
+        let registration = (|| {
+            let connection = preferences::connect(services)?;
+            preferences::register(connection.0, record, root, legacy)
+        })();
+        let _ = fs::close(root);
+        registration.map_err(|e| format!("locale preferences registration {e:?}"))?;
         return Ok(Pending(None));
     }
     let provider = provider.unwrap();

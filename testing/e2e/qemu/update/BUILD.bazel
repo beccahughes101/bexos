@@ -67,6 +67,7 @@ TEED_UPDATE = {
 }
 
 service_update_test(
+    tier = "focused",
     name = "pci_update_e2e_test",
     boot_data = BOOT_DATA,
     prelude_app = SERVICE_PRELUDE_APP,
@@ -77,6 +78,7 @@ service_update_test(
 )
 
 service_update_test(
+    tier = "focused",
     name = "uart_update_e2e_test",
     boot_data = BOOT_DATA,
     prelude_app = SERVICE_PRELUDE_APP,
@@ -90,6 +92,7 @@ service_update_test(
 )
 
 service_update_test(
+    tier = "extended",
     name = "nvme_update_e2e_test",
     boot_data = BOOT_DATA,
     prelude_app = SERVICE_PRELUDE_APP,
@@ -98,13 +101,10 @@ service_update_test(
     generation = NVME_UPDATE["generation"],
     archive = NVME_UPDATE["archive"],
     flags = ["--nvme-dma-markers"],
-    prerequisites = [
-        PCI_UPDATE,
-        UART_UPDATE,
-    ],
 )
 
 service_update_test(
+    tier = "focused",
     name = "bexfs_update_e2e_test",
     boot_data = BOOT_DATA,
     prelude_app = SERVICE_PRELUDE_APP,
@@ -120,6 +120,7 @@ service_update_test(
 )
 
 service_update_test(
+    tier = "focused",
     name = "archivefs_update_e2e_test",
     boot_data = BOOT_DATA,
     prelude_app = SERVICE_PRELUDE_APP,
@@ -136,6 +137,7 @@ service_update_test(
 )
 
 service_update_test(
+    tier = "focused",
     name = "vfsd_update_e2e_test",
     boot_data = BOOT_DATA,
     prelude_app = SERVICE_PRELUDE_APP,
@@ -153,6 +155,7 @@ service_update_test(
 )
 
 service_update_test(
+    tier = "focused",
     name = "debugd_update_e2e_test",
     boot_data = BOOT_DATA,
     prelude_app = SERVICE_PRELUDE_APP,
@@ -173,6 +176,7 @@ service_update_test(
 
 # Exercise debugd's retained upload state independently of the storage-driver chain.
 service_update_test(
+    tier = "extended",
     name = "debugd_state_update_e2e_test",
     boot_data = BOOT_DATA,
     prelude_app = SERVICE_PRELUDE_APP,
@@ -184,6 +188,7 @@ service_update_test(
 )
 
 service_update_test(
+    tier = "extended",
     name = "updated_update_e2e_test",
     boot_data = BOOT_DATA,
     prelude_app = SERVICE_PRELUDE_APP,
@@ -204,18 +209,10 @@ service_update_test(
         ":failure_archive",
         ":timeout_archive",
     ],
-    prerequisites = [
-        PCI_UPDATE,
-        UART_UPDATE,
-        NVME_UPDATE,
-        BEXFS_UPDATE,
-        ARCHIVEFS_UPDATE,
-        VFSD_UPDATE,
-        DEBUGD_UPDATE,
-    ],
 )
 
 service_update_test(
+    tier = "focused",
     name = "teed_update_e2e_test",
     boot_data = BOOT_DATA,
     prelude_app = SERVICE_PRELUDE_APP,
@@ -236,6 +233,7 @@ service_update_test(
 )
 
 service_update_test(
+    tier = "focused",
     name = "appd_update_e2e_test",
     boot_data = BOOT_DATA,
     prelude_app = SERVICE_PRELUDE_APP,
@@ -246,6 +244,7 @@ service_update_test(
 )
 
 service_update_test(
+    tier = "extended",
     name = "update_e2e_test",
     boot_data = BOOT_DATA,
     prelude_app = SERVICE_PRELUDE_APP,
@@ -267,6 +266,7 @@ service_update_test(
 )
 
 update_e2e_test(
+    tier = "extended",
     name = "app_package_update_e2e_test",
     boot_data = BOOT_DATA,
     scenario_args = [
@@ -278,6 +278,7 @@ update_e2e_test(
 
 [
     update_e2e_test(
+        tier = "extended",
         name = "firmware_" + mode + "_e2e_test",
         boot_data = BOOT_DATA,
         scenario_args = ["firmware_" + mode] + ["$(rootpath //boot/efi:cached/" + part + ")" for part in [
@@ -297,6 +298,7 @@ update_e2e_test(
 # owner, Trusty, and RPMB bundle; the x86 transition selects the matching EFI
 # bundle and candidate set.
 update_e2e_test(
+    tier = "extended",
     name = "firmware_live_acceptance_e2e_test",
     boot_data = dict(BOOT_DATA,
         rpmbd = "//third_party/trusty:acceptance_cached/rpmb_dev",
@@ -343,6 +345,7 @@ update_e2e_test(
 
 [
     update_e2e_test(
+        tier = "extended",
         name = "firmware_" + mode + "_arm_e2e_test",
         boot_data = BOOT_DATA,
         scenario_args = ["firmware_" + mode] + ["$(rootpath //third_party/trusty:" + part + ".fw)" for part in [
@@ -364,6 +367,7 @@ update_e2e_test(
 ]
 
 update_e2e_test(
+    tier = "extended",
     name = "firmware_staging_e2e_test",
     boot_data = BOOT_DATA,
     scenario_args = ["firmware_staging", "$(rootpath //boot/efi:cached/trusty.replacement.fw)"],
@@ -372,12 +376,14 @@ update_e2e_test(
 )
 
 update_e2e_test(
+    tier = "extended",
     name = "tee_image_update_e2e_test",
     boot_data = BOOT_DATA,
     scenario_args = ["tee_image"],
 )
 
 update_e2e_test(
+    tier = "extended",
     name = "kernel_platform_update_e2e_test",
     boot_data = BOOT_DATA,
     scenario_args = [
@@ -487,6 +493,7 @@ app_manifest(
 )
 
 rpmb_service_update_test(
+    tier = "extended",
     name = "rpmb_console_update_e2e_test",
     boot_data = BOOT_DATA,
     package = "bexos.driver.serial.virtio_console",
@@ -498,6 +505,7 @@ rpmb_service_update_test(
 )
 
 rpmb_service_update_test(
+    tier = "extended",
     name = "rpmb_teed_update_e2e_test",
     boot_data = BOOT_DATA,
     package = "bexos.service.teed",
@@ -510,6 +518,7 @@ rpmb_service_update_test(
 
 
 qemu_development_e2e_test(
+    tier = "extended",
     name = "kernel_platform_development_test",
     src = "debugd_updated_e2e_test.rs",
     extra_srcs = ["firmware_staging.rs", "firmware_activation.rs"],
@@ -518,7 +527,7 @@ qemu_development_e2e_test(
     extra_args = ["kernel_platform", "$(rootpath //kernel:update_kernel)"],
     deps = [
         "//idl:tee_manager_fidl_rust", "//idl:update_manager_fidl_rust", "//host/debug_client",
-        "//lib/debug_wire", "//lib/crypto",
+        "//lib/debug_wire", "//lib/crypto", "//lib/trace",
             "//lib/secure_firmware", "//lib/update:update_host", "//testing/e2e", "//tools/qemu:qemu_test",
     ],
 )
@@ -528,6 +537,7 @@ qemu_development_e2e_test(
 development_service_tests(
     name = "services_development_test",
     boot_data = QEMU_DEVELOPMENT_BOOT_DATA,
+    presubmit_packages = ["bexos.platform.appd"],
     services = [
         PCI_UPDATE, NVME_UPDATE, BEXFS_UPDATE, ARCHIVEFS_UPDATE, VFSD_UPDATE,
         DEBUGD_UPDATE, UPDATE_ENGINE_UPDATE,
