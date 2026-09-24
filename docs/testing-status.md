@@ -102,6 +102,33 @@ Until both guest tests emit the exact `hello starnix` output, report exit zero,
 retain looping state across runner replacement, and leave debugd/kernel healthy,
 Phase 2 is not recorded as accepted.
 
+## RFC 0070 Phase 3 static single-task expansion (2026-09-24)
+
+The tree now includes the Phase 3 mounted VFS, package/data root selector,
+native command-stream terminal path, expanded AArch64/x86_64 syscall tables,
+memory manager, signal delivery, appd signal routing with restricted kicks, and
+expanded heart-transplant state. The current scope remains one static Linux
+task; the exact exclusions are recorded in `docs/rfcs/0070/CURRENT.md`.
+
+Focused host validation passed:
+
+```sh
+bazel test //lib/starnix_abi:tests \
+  //third_party/starnix:starnix_core_tests \
+  //third_party/starnix:starnix_kernel_tests \
+  //services/starnix_runner:tests \
+  //services/appd:appd_tests //services/appd:shell_policy_tests
+bazel build //services/starnix_runner:starnix_runner_elf \
+  //services/starnix_runner:replacement_elf
+bazel build --config=x86_64 //services/starnix_runner:starnix_runner_elf \
+  //services/starnix_runner:replacement_elf
+bazel run @rules_rust//:rustfmt
+```
+
+Per request, no e2e source was changed and no e2e test was run. These results
+therefore do not claim guest LTP conformance or dual-architecture guest
+acceptance.
+
 ## x86 integrated-firmware prerequisite (2026-09-23)
 
 This prerequisite is separate from RFC 0070. The integrated bundle validator

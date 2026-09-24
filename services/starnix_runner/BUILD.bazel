@@ -21,6 +21,8 @@ rust_library(
         "//lib/migration",
         "//lib/starnix_abi",
         "//lib/userspace",
+        "//idl:fs_fidl_rust",
+        "//idl:kernel_fidl_rust",
         "//third_party/starnix:starnix_kernel",
     ],
 )

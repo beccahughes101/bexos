@@ -2,10 +2,12 @@
 
 ## Status
 
-Phase 1 is implemented. The complete Phase 2 implementation is present in the
-tree and its host builds pass; Phase 2 is not marked accepted until the new
-AArch64 and x86_64 QEMU tests both complete successfully. Phases 3–4 remain
-proposed. The complete future design is retained in [README.md](README.md).
+Phases 1–3 are implemented in the tree for the static, single-Linux-task
+runtime described below. Phase 2 and Phase 3 are not marked guest-accepted:
+the required AArch64 and x86_64 QEMU executions have not both completed
+successfully, and this Phase 3 change was explicitly validated without e2e
+runs. Phase 4 remains proposed. The complete future design, including features
+outside the current single-task boundary, is retained in [README.md](README.md).
 
 ## Upstream import and Bazel targets
 
@@ -20,9 +22,10 @@ corresponding vendored upstream paths with BexOS platform gates:
 - `//third_party/starnix:starnix_core`
 - `//third_party/starnix:starnix_kernel`
 
-The Phase 2 configuration intentionally replaces Fuchsia component hosting,
-storage, logging, and kernel-object services. It does not claim that the
-source-visible Phase 3 modules are enabled.
+The BexOS configuration replaces Fuchsia component hosting, storage, logging,
+and kernel-object services. Phase 3 is implemented by small BexOS-specific VFS,
+memory, signal, ABI-layout, and syscall-dispatch modules around the pinned
+upstream boundary rather than enabling Fuchsia platform services.
 
 ## Compatibility surface
 
@@ -48,9 +51,12 @@ W^X validation in the kernel memory service.
 ## Public runner contract
 
 `bexos.app.NixRunnerOptions` has stable fields `path = 1`, repeated
-`arguments = 2`, and repeated `{ name, value } environment = 3`. A manifest
-selects it with `runner: "nix"`. Options and appd-to-runner launch records are
-bounded and versioned by `//lib/starnix_abi`.
+`arguments = 2`, repeated `{ name, value } environment = 3`, and
+`rootfs = 4`. The rootfs selects either the package or data startup directory
+and an optional root-bounded subpath; omission remains backward-compatible and
+selects the package root. A manifest selects it with `runner: "nix"`. Options,
+appd-to-runner launch records, and signal-control messages are bounded and
+versioned by `//lib/starnix_abi`.
 
 `RunnerPolicy.allow_starnix_runner = 7` defaults to false. Maintained QEMU
 product prototxts enable it. Other products, including Android policy, keep
@@ -67,15 +73,34 @@ and process handles.
 The trusted `//services/starnix_runner` runtime creates one Starnix task, maps
 a matching-architecture ELF64 static `ET_EXEC` or static PIE image, builds the
 Linux argc/argv/environment/`AT_NULL` stack, binds restricted state, and
-dispatches the imported Phase 2 syscall boundary. Supported syscalls are:
+dispatches architecture-specific AArch64 or x86_64 Linux syscall tables.
+`PT_INTERP` remains rejected.
 
-- `write` to stdout or stderr;
-- `exit`;
-- `exit_group`.
+The Phase 3 syscall slice includes:
 
-Unknown syscall numbers return Linux `ENOSYS`; bad descriptors and pointers
-return `EBADF` and `EFAULT`. `PT_INTERP` is rejected. The bootstrap namespace is
-in memory and contains only launch metadata required by the single task.
+- descriptor I/O (`read`, `write`, vectored and positioned I/O, seek, dup,
+  close/range, flags, sync, and terminal ioctls);
+- pathname and metadata operations (`open/openat/openat2`, stat variants,
+  directory enumeration, access, cwd/chdir, mkdir, unlink/rmdir, and truncate);
+- anonymous and file-copy mappings, `munmap`, `mprotect`, `msync`, `madvise`,
+  `brk`, futex wait/wake, and x86_64 FS/GS base control;
+- signal actions and masks, queued delivery, alternate stacks, sigreturn,
+  `kill`/`tgkill`, appd-delivered process-control signals, clocks, sleep/yield,
+  identity, uname, limits, and random bytes.
+
+Unknown syscall numbers return `ENOSYS`. Recognized operations outside the
+current boundary return deterministic Linux errors, normally `ENOTSUP`.
+Pointer and transfer lengths are checked against mapped guest ranges and
+bounded allocations.
+
+The mounted VFS uses the selected `/pkg` or `/data` startup directory as `/`,
+prevents `..` from escaping it, and overlays the other explicitly supplied
+startup namespace directories. Package/dependency mounts are read-only; data,
+tmp, and writable BexFS directories retain their granted rights. `/dev/null`
+and `/dev/zero` are synthetic. Command launches use the three native startup
+sockets for stdin/stdout/stderr, allowing the shell/terminal frontend (and its
+scened presentation) to own interactive I/O; service launches use the native
+console log path.
 
 The normal and replacement runner ELFs, signed archives, runtime digest, and
 AArch64/x86_64 static Linux fixtures are all Bazel-built. The acceptance
@@ -84,51 +109,56 @@ fixture must emit exactly `hello starnix\n` and exit zero.
 ## Heart transplant
 
 A migratable `nix` service checkpoints its architecture, upstream revision,
-ABI version, bounded options, restricted register image, mapping descriptors,
-mapping VMOs, and migration endpoint. The candidate rejects a revision, ABI,
-architecture, or launch-option mismatch, adopts mappings at identical virtual
-addresses, restores registers, binds a new restricted state object, and resumes
-after kernel cutover. Appd issues a restricted kick whenever it waits for a
-Starnix source response, so a guest spinning without syscalls reaches the
-non-returning vector safe point within the migration deadline.
+ABI version, bounded options, restricted register image, current split mapping
+descriptors and VMO offsets, signal actions/masks/pending set/alternate stack,
+active signal frames, terminal and directory cursor state, cwd, reopenable file
+descriptor metadata, mapping VMOs, and migration endpoint. The candidate
+rejects a revision, ABI, architecture, or launch-option mismatch, adopts
+mappings at identical virtual addresses, restores the runtime state, binds a
+new restricted state object, and resumes after kernel cutover. Appd issues a
+restricted kick whenever migration or process-control signal delivery needs a
+safe point, so a guest spinning without syscalls reaches the non-returning
+vector within the deadline.
 
 `//testing/e2e/qemu/starnix` contains a static hello fixture and a looping
 fixture whose register state, writable guest memory, process identity, and
 output sequence are checked across replacement.
 
-## Validation record
+## Phase 3 validation record
 
-The following builds have passed for the default AArch64 configuration and for
-`--config=x86_64` where noted:
+The focused host unit suites and runner builds pass. No command under
+`//testing/e2e` was changed or run for this phase:
 
 ```sh
+bazel test //lib/starnix_abi:tests \
+  //third_party/starnix:starnix_core_tests \
+  //third_party/starnix:starnix_kernel_tests \
+  //services/starnix_runner:tests \
+  //services/appd:appd_tests //services/appd:shell_policy_tests
 bazel build //lib/starnix_abi //lib/compat/zircon \
   //third_party/starnix:starnix_core \
   //third_party/starnix:starnix_kernel \
   //services/starnix_runner:starnix_runner_elf \
-  //services/starnix_runner:replacement_elf \
-  //testing/e2e/qemu/starnix:archive
+  //services/starnix_runner:replacement_elf
 
 bazel build --config=x86_64 //lib/starnix_abi //lib/compat/zircon \
   //third_party/starnix:starnix_core \
   //third_party/starnix:starnix_kernel \
   //services/starnix_runner:starnix_runner_elf \
-  //services/starnix_runner:replacement_elf \
-  //testing/e2e/qemu/starnix:archive
+  //services/starnix_runner:replacement_elf
+bazel run @rules_rust//:rustfmt
 ```
 
-Unit-test, rustfmt, and QEMU attempt results are recorded in
-[testing status](../../testing-status.md). The requested final validation
-stopped before dual-architecture guest acceptance: the first AArch64 attempt
-reached appd and failed the `nix` launch, the x86_64 prerequisite was repaired,
-and the diagnostic guest rerun was then skipped at the requester's direction.
-A successful build is not evidence of Linux guest execution.
+Detailed host results and the older Phase 2 QEMU attempt are recorded in
+[testing status](../../testing-status.md). A successful host build or unit test
+is not evidence of Linux guest execution or LTP guest conformance.
 
-## Explicit Phase 3–4 gaps
+## Explicit remaining gaps
 
-Persistent root filesystems, general VFS/POSIX coverage, dynamic binaries and
-`PT_INTERP`, fork/clone and multiple Linux tasks or threads, general sockets
-and networking, Android, OCI ingestion, container lifecycle, namespaces,
-cgroups, Alpine/Python/Redis, Docker/Podman/Kubernetes, and direct hardware
-access are unimplemented. These remain future design and are not deleted from
-the RFC.
+The current Phase 3 acceptance boundary is a static ELF and one Linux task.
+Dynamic binaries and `PT_INTERP`, fork/clone and multiple Linux tasks or
+threads, rename/link/symlink, pipes and polling, complete `/proc` and `/sys`,
+the full LTP corpus, networking, Android, OCI ingestion, container lifecycle,
+namespaces, cgroups, Alpine/Python/Redis, Docker/Podman/Kubernetes, and direct
+hardware access are unimplemented. They remain future design and are not
+deleted from the RFC. Phase 4 owns OCI and networking.

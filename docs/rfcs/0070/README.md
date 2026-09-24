@@ -350,6 +350,15 @@ Running arbitrary Linux binaries introduces potential security risks. BexOS enfo
 * Hook terminal I/O to native console and `scened` text buffers.
 * Validate core POSIX functionality against the Linux Test Project (LTP) test suite (focusing on filesystem, memory, and signals).
 
+The repository now contains the Phase 3 static, single-task implementation:
+mounted package/data roots over the startup namespace, BexFS-backed writable
+directories, native console/socket terminal I/O, and bounded filesystem,
+memory, futex, clock, and signal syscall groups with host-side focused tests.
+Guest LTP and dual-architecture guest acceptance have not been run for this
+change. Dynamic ELF loading, task/thread creation, complete pseudo filesystems,
+and the broader subsystem designs above remain future work; see
+[CURRENT.md](CURRENT.md) for the exact implemented surface.
+
 ### Phase 4: OCI Runtime & Networking
 
 * Connect `starnix_runner` to `pkgd` via `libpkg_client` to resolve and unpack multi-layer OCI images.

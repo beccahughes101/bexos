@@ -83,7 +83,7 @@ impl Launch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Environment;
+    use crate::{Environment, NixRootFilesystem, NixRootSource};
     use alloc::{string::ToString, vec};
 
     fn launch() -> Launch {
@@ -95,6 +95,7 @@ mod tests {
                     name: "LANG".to_string(),
                     value: "C".to_string(),
                 }],
+                rootfs: NixRootFilesystem::default(),
             },
             image_len: 4096,
             service: true,
@@ -135,5 +136,19 @@ mod tests {
         let mut wrong = encoded;
         wrong[0] ^= 1;
         assert_eq!(Launch::decode(&wrong), Err(Error::InvalidEncoding));
+    }
+
+    #[test]
+    fn data_rootfs_round_trips_without_changing_legacy_defaults() {
+        let mut value = launch();
+        value.options.rootfs = NixRootFilesystem {
+            source: NixRootSource::Data,
+            subpath: "/linux-root".to_string(),
+        };
+        assert_eq!(Launch::decode(&value.encode().unwrap()).unwrap(), value);
+        assert_eq!(
+            NixRunnerOptions::default().rootfs,
+            NixRootFilesystem::default()
+        );
     }
 }

@@ -1,6 +1,8 @@
 //! Authenticated command launch and retained process-control endpoints.
 use super::*;
+use crate::KernelOps;
 use crate::command_state::{ControlledProcess, LIMIT};
+use bexos_starnix_abi::Control;
 use bexos_userspace::command::CommandOptions;
 use opener_fidl::*;
 
@@ -41,11 +43,46 @@ fn set_suspended(process: u64, value: bool) -> bool {
         .is_ok_and(|r| r.status == kernel_fidl::Status::Ok)
     }
 }
-fn signal(process: u64, signal: u32) -> bool {
+fn signal(
+    launches: &[state::LaunchRecord],
+    registry: &MemoryAppRegistry,
+    kernel: &mut KernelFidlOps<KernelTransport, KernelTransport, KernelTransport>,
+    process: u64,
+    signal: u32,
+) -> bool {
+    let launch = launches
+        .iter()
+        .find(|launch| launch.process_handle == process);
+    let is_nix = launch.is_some_and(|launch| {
+        registry
+            .record(&launch.package)
+            .ok()
+            .and_then(|record| Manifest::decode(&record.manifest_bytes).ok())
+            .and_then(|manifest| {
+                manifest
+                    .processes
+                    .into_iter()
+                    .find(|candidate| candidate.name == launch.process)
+            })
+            .is_some_and(|candidate| candidate.runner == "nix")
+    });
+    let deliver =
+        |kernel: &mut KernelFidlOps<KernelTransport, KernelTransport, KernelTransport>| {
+            let Some(launch) = launch else { return false };
+            Channel(launch.manager)
+                .send(&Control::Signal(signal).encode(), &[])
+                .is_ok()
+                && kernel
+                    .kick_restricted_thread(KernelHandle {
+                        raw: launch.thread_handle,
+                    })
+                    .is_ok()
+        };
     match signal {
-        18 => set_suspended(process, false),
-        19 | 20 => set_suspended(process, true),
-        2 | 9 | 15 => bexos_userspace::ipc::kernel_call::<
+        18 => set_suspended(process, false) && (!is_nix || deliver(kernel)),
+        19 => set_suspended(process, true),
+        20 if !is_nix => set_suspended(process, true),
+        9 => bexos_userspace::ipc::kernel_call::<
             _,
             kernel_fidl::SystemPrivilegedTerminateProcessResponse,
         >(
@@ -58,6 +95,25 @@ fn signal(process: u64, signal: u32) -> bool {
             },
         )
         .is_ok_and(|r| r.status == kernel_fidl::Status::Ok),
+        1..=64 => {
+            if !is_nix {
+                return matches!(signal, 2 | 15)
+                    && bexos_userspace::ipc::kernel_call::<
+                        _,
+                        kernel_fidl::SystemPrivilegedTerminateProcessResponse,
+                    >(
+                        4,
+                        "TerminateProcess",
+                        kernel_fidl::SYSTEM_PRIVILEGED_BEXOS_SYSTEM_PRIVILEGED_METHODS,
+                        &kernel_fidl::SystemPrivilegedTerminateProcessRequest {
+                            process_handle: kernel_fidl::HandleRef { raw: process },
+                            exit_code: 128 + signal as i32,
+                        },
+                    )
+                    .is_ok_and(|r| r.status == kernel_fidl::Status::Ok);
+            }
+            deliver(kernel)
+        }
         _ => false,
     }
 }
@@ -92,6 +148,8 @@ pub(super) fn poll(
         let _ = Memory::close(h);
     }
     let mut reaped = Vec::new();
+    let launches = &state.launches;
+    let registry = &state.registry;
     state.commands.processes.retain_mut(|p| {
         let status = control_status(p.process)
             .ok()
@@ -138,7 +196,7 @@ pub(super) fn poll(
                         3 => {
                             let status = ProcessControlSendSignalRequest::decode(bytes, &[])
                                 .ok()
-                                .filter(|q| signal(p.process, q.signal))
+                                .filter(|q| signal(launches, registry, kernel, p.process, q.signal))
                                 .map_or(invalid, |_| ok);
                             opener_reply(p.channel, &ProcessControlSendSignalResponse { status });
                         }
@@ -331,7 +389,15 @@ fn dispatch(
                                     s.status == kernel_fidl::Status::Ok
                                         && s.process_id == q.process_id
                                 })
-                                .map(|_| signal(l.process_handle, q.signal))
+                                .map(|_| {
+                                    signal(
+                                        &state.launches,
+                                        &state.registry,
+                                        kernel,
+                                        l.process_handle,
+                                        q.signal,
+                                    )
+                                })
                         })
                 });
             opener_reply(

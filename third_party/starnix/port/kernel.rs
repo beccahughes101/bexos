@@ -7,7 +7,11 @@ use bexos_elf::{
     load::{ElfLoadError, LoadPlan},
 };
 
-pub use starnix_core::{Architecture, EBADF, EFAULT, ENOSYS, Syscall, Task, error};
+pub use starnix_core::{
+    Architecture, EACCES, EAGAIN, EBADF, EBUSY, EEXIST, EFAULT, EINTR, EINVAL, EIO, EISDIR, ELOOP,
+    EMFILE, ENOENT, ENOMEM, ENOSPC, ENOSYS, ENOTDIR, ENOTEMPTY, ENOTSUP, EPERM, ERANGE, EROFS,
+    ESPIPE, EXDEV, Syscall, Task, error,
+};
 
 pub const PAGE_SIZE: u64 = 4096;
 pub const GUEST_STACK_SIZE: u64 = 256 * 1024;

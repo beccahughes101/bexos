@@ -344,6 +344,17 @@ message NixRunnerOptions {
     string value = 2;
   }
   repeated Environment environment = 3;
+  message RootFilesystem {
+    enum Source {
+      PACKAGE = 0;
+      DATA = 1;
+    }
+    Source source = 1;
+    // Root-bounded subpath within the selected startup directory. The empty
+    // value and "/" both select that directory's root.
+    string subpath = 2;
+  }
+  RootFilesystem rootfs = 4;
 }
 
 message ExposedService {
