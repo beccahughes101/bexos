@@ -33,6 +33,7 @@ message RunnerPolicy {
   bool allow_native_elf_runner = 4;
   repeated NativeRunnerGrant native_elf_runner_allowlist = 5;
   repeated RealtimeSchedulingGrant realtime_scheduling_allowlist = 6;
+  bool allow_starnix_runner = 7;
 }
 
 enum RunnerTier {

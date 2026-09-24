@@ -1567,7 +1567,7 @@ async fn serve_lifecycle(mut state: state::AppdState, teed: Option<Channel>) -> 
             log(&alloc::format!("appd: {last_update}\n"));
         }
         if let Some(task) = pending.as_mut() {
-            match task.poll(&mut state, &mut source) {
+            match task.poll(&mut state, &mut source, &mut kernel) {
                 Ok(true) => {
                     last_update = task.completion_message();
                     source.changed(0);
@@ -4397,6 +4397,7 @@ fn process_executable_path(process: &crate::manifest::Process) -> Option<&str> {
     match &process.runner_options {
         Some(crate::ProcessRunnerOptions::Elf(options)) => Some(&options.path),
         Some(crate::ProcessRunnerOptions::Wasm(options)) => Some(&options.path),
+        Some(crate::ProcessRunnerOptions::Nix(options)) => Some(&options.path),
         _ => None,
     }
 }
@@ -5314,11 +5315,11 @@ fn launch_application(
             return lifecycle::AppLifecycleStatus::AccessDenied;
         }
     };
-    let wasm = matches!(
+    let sandboxed = matches!(
         process.runner_options,
-        Some(crate::ProcessRunnerOptions::Wasm(_))
+        Some(crate::ProcessRunnerOptions::Wasm(_) | crate::ProcessRunnerOptions::Nix(_))
     );
-    let signer = if wasm {
+    let signer = if sandboxed {
         match &record.verified_signer {
             Some(signer) => signer.root_anchor_id.as_str(),
             None => {
@@ -5332,7 +5333,7 @@ fn launch_application(
     } else {
         "bexos_official_platform_v1"
     };
-    let trust_tier = if wasm {
+    let trust_tier = if sandboxed {
         PackageTrustTier::StandardConsumer
     } else {
         PackageTrustTier::PlatformCore
@@ -5402,7 +5403,7 @@ fn launch_application(
         }
     };
     let mut launch_migration = match launch_migration::LaunchMigration::new(
-        process.service && (wasm || uid == SYSTEM_UID),
+        process.service && (sandboxed || uid == SYSTEM_UID),
     ) {
         Ok(migration) => migration,
         Err(_) => {

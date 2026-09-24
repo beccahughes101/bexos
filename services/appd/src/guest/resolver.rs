@@ -395,6 +395,7 @@ fn executable_path(process: &crate::manifest::Process) -> Option<&str> {
     match &process.runner_options {
         Some(ProcessRunnerOptions::Elf(o)) => Some(&o.path),
         Some(ProcessRunnerOptions::Wasm(o)) => Some(&o.path),
+        Some(ProcessRunnerOptions::Nix(o)) => Some(&o.path),
         _ => None,
     }
 }

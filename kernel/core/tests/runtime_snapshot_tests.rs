@@ -25,8 +25,7 @@ fn runtime_interrupts_are_shared_one_shot_and_snapshot_safe() {
 
     assert_eq!(rt.deliver_interrupt(16, 1), InterruptDelivery::Signaled);
     assert_ne!(
-        rt.object_signals(first).unwrap()
-            & bexos_kernel_core::kernel_services::SIGNAL_READABLE,
+        rt.object_signals(first).unwrap() & bexos_kernel_core::kernel_services::SIGNAL_READABLE,
         0
     );
     assert_eq!(rt.acknowledge_interrupt(first).unwrap(), (16, true));
@@ -41,10 +40,7 @@ fn runtime_interrupts_are_shared_one_shot_and_snapshot_safe() {
             & bexos_kernel_core::kernel_services::SIGNAL_READABLE,
         0
     );
-    assert_eq!(
-        restored.deliver_interrupt(16, 3),
-        InterruptDelivery::Masked
-    );
+    assert_eq!(restored.deliver_interrupt(16, 3), InterruptDelivery::Masked);
     assert_eq!(restored.acknowledge_interrupt(first).unwrap(), (16, true));
     assert_eq!(restored.acknowledge_interrupt(second).unwrap(), (16, false));
 }
@@ -1164,6 +1160,9 @@ fn handover_preserves_queued_handles_dma_and_transfers_appd_authority() {
     let dma = rt.create_vmo(4096, 2).unwrap();
     rt.map(Some(old_space), dma, 0, 4096, 0xb100_0000, 6)
         .unwrap();
+    let executable = rt.create_vmo(4096, 0).unwrap();
+    rt.map(Some(old_space), executable, 0, 4096, 0xb200_0000, 10)
+        .unwrap();
     let (pa, pin) = rt.pin(dma).unwrap();
     rt.begin_handover(0, target, 1, 0, Default::default())
         .unwrap();
@@ -1173,6 +1172,12 @@ fn handover_preserves_queued_handles_dma_and_transfers_appd_authority() {
     // candidate so the new appd can supervise its next replacement.
     rt.preserve_handle(target).unwrap();
     rt.preserve_mapping(dma, 0, 0xb100_0000, 4096, 6).unwrap();
+    assert_eq!(
+        rt.preserve_mapping(executable, 0, 0xb200_0000, 4096, 14),
+        Err(Status::ErrAccessDenied)
+    );
+    rt.preserve_mapping(executable, 0, 0xb200_0000, 4096, 10)
+        .unwrap();
     rt.preserve_pin(pin).unwrap();
     rt.handover_bulk(1).unwrap();
     rt.current = 1;
@@ -1219,6 +1224,12 @@ fn handover_preserves_queued_handles_dma_and_transfers_appd_authority() {
     );
     assert_eq!(rt.pins[pin as usize - 1], Some((2, id)));
     assert_eq!(rt.processes[2].mappings[0].vmo, id);
+    assert!(
+        rt.processes[2]
+            .mappings
+            .iter()
+            .any(|mapping| mapping.va == 0xb200_0000 && mapping.rights == 10)
+    );
     rt.unpin(pin).unwrap();
     // Authority, DMA mappings, and dead process tombstones also survive a kernel update.
     let bytes = encode(&rt);

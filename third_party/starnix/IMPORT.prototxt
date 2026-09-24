@@ -1,0 +1,18 @@
+upstream_url: "https://fuchsia.googlesource.com/fuchsia"
+revision: "cb5f36aee5510be9565392194f341d0409381db6"
+license_file: "LICENSE"
+imported_path: "src/starnix/kernel"
+imported_path: "src/starnix/lib"
+imported_path: "src/starnix/hello_starnix"
+crate_root {
+  name: "starnix_core"
+  upstream_path: "src/starnix/kernel/core/lib.rs"
+  preserved_root: "src/kernel/core/fuchsia_lib.rs"
+  bexos_root: "src/kernel/core/lib.rs"
+}
+crate_root {
+  name: "starnix_kernel"
+  upstream_path: "src/starnix/kernel/main.rs"
+  preserved_root: "src/kernel/fuchsia_main.rs"
+  bexos_root: "src/kernel/main.rs"
+}

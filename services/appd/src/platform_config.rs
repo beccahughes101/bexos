@@ -56,6 +56,7 @@ pub struct RunnerPolicy {
     pub allow_native_elf_runner: bool,
     pub native_elf_runner_allowlist: Vec<NativeRunnerGrant>,
     pub realtime_scheduling_allowlist: Vec<RealtimeSchedulingGrant>,
+    pub allow_starnix_runner: bool,
 }
 
 impl Default for RunnerPolicy {
@@ -67,6 +68,7 @@ impl Default for RunnerPolicy {
             allow_native_elf_runner: false,
             native_elf_runner_allowlist: Vec::new(),
             realtime_scheduling_allowlist: Vec::new(),
+            allow_starnix_runner: false,
         }
     }
 }
@@ -270,6 +272,7 @@ impl RunnerPolicy {
         match runner.trim().to_ascii_lowercase().as_str() {
             "wasm" | "web" => RunnerPolicyDecision::Allow,
             "elf" => self.evaluate_elf(identity),
+            "nix" if self.allow_starnix_runner => RunnerPolicyDecision::Allow,
             "android" | "nix" => {
                 if self.allow_microvm_runner {
                     RunnerPolicyDecision::RouteToMicrovm
@@ -409,6 +412,7 @@ fn decode_runner_policy(bytes: &[u8]) -> Result<RunnerPolicy, ManifestError> {
             6 => policy
                 .realtime_scheduling_allowlist
                 .push(decode_realtime_scheduling_grant(field.bytes()?)?),
+            7 => policy.allow_starnix_runner = field.varint()? != 0,
             _ => {}
         }
     }

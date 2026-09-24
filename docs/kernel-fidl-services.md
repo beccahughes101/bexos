@@ -117,6 +117,11 @@ x86_64. A successful `Enter` replaces the syscall return frame; raw guest
 are pending for inactive threads and send a reschedule interrupt to active
 remote-CPU targets. Versioned full and incremental kernel snapshots include
 the binding, contexts, TLS, VMO reference, active state, and pending kick.
+RFC-0070 Phase 2 consumes this protocol from the trusted Starnix runner. Appd
+uses `Kick` while a `nix` transplant is waiting so a syscall-free Linux guest
+returns to the userspace vector safe point before the bounded cutover. Linux
+syscalls remain userspace translation events and are never dispatched through
+the native BexOS syscall table.
 
 `KernelDebugControl.ListProcesses` exposes bounded process debug records for
 `debugd` and host tests. In the bare-metal syscall table it is protocol id `6`;

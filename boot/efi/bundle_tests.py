@@ -29,12 +29,19 @@ def loader(payload):
 def fixture():
     root = b'R' * 520
     trusty = elf(b'Trusty')
-    monitor = elf(trusty + root)
+    # Product Trusty is an external payload.  The authenticated loader embeds
+    # the resident monitor and root, but not the Trusty bytes themselves.
+    monitor = elf(b'resident monitor' + root)
+    rollback_monitor = elf(b'rollback monitor' + root)
     files = {name: b'fixture-' + name.encode() for name in bundle.NAMES}
     files.update({'loader.efi': loader(monitor), 'monitor.elf': monitor,
-                  'rollback_loader.efi': loader(elf(trusty + root + b'rollback fixture')),
+                  'rollback_loader.efi': loader(rollback_monitor),
                   'trusty.elf': trusty, 'boot_root.avbpubkey': root})
     candidates = [('trusty', 'trusty.candidate.elf', 'trusty.replacement.fw'),
+                  ('trusty', 'trusty.successor.elf', 'trusty.successor.fw'),
+                  ('trusty', 'trusty.incompatible.elf', 'trusty.incompatible.fw'),
+                  ('trusty', 'trusty.fault.elf', 'trusty.fault.fw'),
+                  ('trusty', 'trusty.hang.elf', 'trusty.hang.fw'),
                   ('hypervisor', 'monitor.policy.elf', 'hypervisor.replacement.fw'),
                   ('hypervisor', 'monitor.fault.elf', 'hypervisor.fault.fw'),
                   ('hypervisor', 'monitor.hang.elf', 'hypervisor.hang.fw'),
@@ -50,7 +57,10 @@ def fixture():
 
 class BundleTests(unittest.TestCase):
     def test_complete_matching_closure_and_manifest_contract(self):
-        bundle.validate(fixture())
+        files = fixture()
+        self.assertNotIn(files['trusty.elf'], files['loader.efi'])
+        self.assertNotIn(files['trusty.elf'], files['monitor.elf'])
+        bundle.validate(files)
         self.assertIn('monitor_abi_version: 1\n', bundle.header('standard'))
         self.assertIn('monitor_architecture_id: 2\n', bundle.header('acceptance'))
         with self.assertRaises(ValueError):

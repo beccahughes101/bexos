@@ -336,6 +336,16 @@ message WasmRunnerOptions {
   repeated ComponentImport component_imports = 5;
 }
 
+message NixRunnerOptions {
+  string path = 1;
+  repeated string arguments = 2;
+  message Environment {
+    string name = 1;
+    string value = 2;
+  }
+  repeated Environment environment = 3;
+}
+
 message ExposedService {
   string name = 1;
   string protocol = 2;

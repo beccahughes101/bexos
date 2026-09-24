@@ -66,6 +66,17 @@ impl Memory {
         Ok(r.vmo.raw)
     }
     pub fn map(h: u64, size: u64, rights: u32) -> Result<u64, Status> {
+        Self::map_at(h, 0, size, 0, rights)
+    }
+    /// Maps a VMO range at an exact address, or lets the kernel choose when
+    /// `target_vaddr` is zero.
+    pub fn map_at(
+        h: u64,
+        vmo_offset: u64,
+        size: u64,
+        target_vaddr: u64,
+        rights: u32,
+    ) -> Result<u64, Status> {
         let size = bexos_boot::page_round(size).ok_or(Status::ErrInvalidArgs)?;
         let r: VirtualMemoryMapResponse = kernel_call(
             2,
@@ -73,9 +84,9 @@ impl Memory {
             VIRTUAL_MEMORY_PUBLIC_METHODS,
             &VirtualMemoryMapRequest {
                 vmo: HandleRef { raw: h },
-                vmo_offset: 0,
+                vmo_offset,
                 size_bytes: size,
-                target_vaddr: 0,
+                target_vaddr,
                 requested_rights: Rights(rights),
             },
         )?;

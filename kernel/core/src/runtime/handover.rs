@@ -197,8 +197,9 @@ impl<B: Backend> Runtime<B> {
             return Err(Status::ErrInvalidHandle);
         };
         if cap.rights & (MAP | rights) != MAP | rights
-            || rights & !(READ | WRITE) != 0
+            || rights & !(READ | WRITE | EXECUTE) != 0
             || rights & READ == 0
+            || rights & (WRITE | EXECUTE) == WRITE | EXECUTE
         {
             return Err(Status::ErrAccessDenied);
         }

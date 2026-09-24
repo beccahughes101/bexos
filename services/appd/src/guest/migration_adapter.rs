@@ -4,6 +4,7 @@ use crate::{ProcessRunnerOptions, manifest::Process};
 pub enum MigrationAdapterKind {
     Elf,
     Wasm,
+    Nix,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -20,6 +21,10 @@ pub fn prepare(process: &Process) -> Result<MigrationLaunchDescriptor<'_>, &'sta
         }),
         Some(ProcessRunnerOptions::Wasm(options)) => Ok(MigrationLaunchDescriptor {
             kind: MigrationAdapterKind::Wasm,
+            executable_path: &options.path,
+        }),
+        Some(ProcessRunnerOptions::Nix(options)) => Ok(MigrationLaunchDescriptor {
+            kind: MigrationAdapterKind::Nix,
             executable_path: &options.path,
         }),
         Some(_) => Err("migration runner adapter missing"),

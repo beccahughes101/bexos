@@ -214,6 +214,11 @@ pub trait KernelOps {
     ) -> Result<(), KernelError> {
         Ok(())
     }
+
+    fn kick_restricted_thread(&mut self, thread: KernelHandle) -> Result<(), KernelError> {
+        let _ = thread;
+        Err(KernelError::InvalidArgs)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -292,6 +297,9 @@ pub enum KernelOperation {
     TerminateProcess {
         process: KernelHandle,
         exit_code: i32,
+    },
+    KickRestrictedThread {
+        thread: KernelHandle,
     },
 }
 
@@ -585,6 +593,9 @@ impl KernelOps for FakeKernelOps {
         arg_handle: Option<KernelHandle>,
     ) -> Result<KernelHandle, KernelError> {
         self.checkpoint()?;
+        if let Some(handle) = arg_handle {
+            self.live_handles.remove(&handle.raw);
+        }
         self.operations.push(KernelOperation::StartThreadInProcess {
             process,
             vm_space,
@@ -604,6 +615,13 @@ impl KernelOps for FakeKernelOps {
         self.checkpoint()?;
         self.operations
             .push(KernelOperation::TerminateProcess { process, exit_code });
+        Ok(())
+    }
+
+    fn kick_restricted_thread(&mut self, thread: KernelHandle) -> Result<(), KernelError> {
+        self.checkpoint()?;
+        self.operations
+            .push(KernelOperation::KickRestrictedThread { thread });
         Ok(())
     }
 }
@@ -627,6 +645,10 @@ impl<C, V, S> KernelFidlOps<C, V, S> {
 impl<C: FidlTransport, V: FidlTransport, S: FidlTransport> KernelOps for KernelFidlOps<C, V, S> {
     fn supports_shared_library_vmos(&self) -> bool {
         true
+    }
+
+    fn kick_restricted_thread(&mut self, thread: KernelHandle) -> Result<(), KernelError> {
+        bexos_userspace::restricted::kick(thread.raw).map_err(|_| KernelError::InvalidArgs)
     }
 
     fn open_resource_group(&mut self, name: &str) -> Result<CreatedResourceGroup, KernelError> {

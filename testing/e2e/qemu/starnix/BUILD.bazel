@@ -1,0 +1,77 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest")
+load("//build/platforms:architecture.bzl", "guest_platform")
+load("//testing/e2e/qemu:architecture_test.bzl", "qemu_suites")
+load("//testing/e2e/qemu:qemu_e2e.bzl", "qemu_e2e_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+LINUX_RUST_FLAGS = [
+    "-C",
+    "panic=abort",
+    "-C",
+    "relocation-model=static",
+    "-C",
+    "code-model=large",
+    "-C",
+    "linker=rust-lld",
+    "-C",
+    "default-linker-libraries=no",
+    "-C",
+    "link-arg=-nostdlib",
+    "-C",
+    "link-arg=--strip-debug",
+    "-C",
+    "link-arg=-z",
+    "-C",
+    "link-arg=max-page-size=4096",
+]
+
+rust_binary(
+    name = "hello_linux",
+    srcs = ["hello.rs"],
+    crate_name = "starnix_hello_linux",
+    edition = "2024",
+    platform = guest_platform("userspace_freestanding"),
+    linker_script = ":linux.ld",
+    rustc_flags = LINUX_RUST_FLAGS,
+)
+
+rust_binary(
+    name = "looping_linux",
+    srcs = ["looping.rs"],
+    crate_name = "starnix_looping_linux",
+    edition = "2024",
+    platform = guest_platform("userspace_freestanding"),
+    linker_script = ":linux.ld",
+    rustc_flags = LINUX_RUST_FLAGS,
+)
+
+app_manifest(name = "manifest", src = "package.prototxt")
+
+app_archive(
+    name = "archive",
+    manifest = ":manifest",
+    entries = {
+        "bin/hello": ":hello_linux",
+        "bin/looping": ":looping_linux",
+    },
+    compression = "zstd",
+)
+
+qemu_e2e_test(
+    name = "starnix_test",
+    src = "starnix_e2e_test.rs",
+    crate_name = "starnix_e2e_test",
+    deps = [
+        "//host/debug_client",
+        "//lib/update:update_host",
+        "//testing/e2e",
+        "//tools/qemu:qemu_test",
+    ],
+    extra_data = [":archive"],
+    extra_args = ["$(rootpath :archive)"],
+)
+
+qemu_suites()

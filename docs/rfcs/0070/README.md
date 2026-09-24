@@ -12,7 +12,7 @@
 This RFC specifies the architecture for executing unmodified Linux application binaries and standard OCI Linux container bundles on BexOS without running virtual machines or native Linux kernels. It defines:
 
 1. **D0 Microkernel Restricted Execution Mode:** Syscall-transport primitives (`zx_restricted_bind_state`, `zx_restricted_enter`, `zx_restricted_kick`) allowing threads to execute arbitrary Ring 3 / EL0 code while trapping hardware `syscall`/`svc` instructions back into an unprivileged userspace translation runner.
-2. **Porting Strategy for Fuchsia Starnix:** Forking and retargeting the pure-Rust Starnix subsystem into the BexOS Bazel monorepo, backed by a microkernel compatibility shim (`libs/compat/zircon`).
+2. **Porting Strategy for Fuchsia Starnix:** Forking and retargeting the pure-Rust Starnix subsystem into the BexOS Bazel monorepo, backed by a microkernel compatibility shim (`lib/compat/zircon`).
 3. **Subsystem Resource Mapping:** Translating Linux filesystem semantics, task trees, signals, memory management (`mmap`, `brk`), and synchronization primitives onto BexOS microkernel capabilities (`VMO`, `VMAR`, Futexes).
 4. **OCI Container Lifecycle Pipeline:** Integrating `pkgd` to pull and unpack OCI rootfs layers into persistent `bexfs` storage, mapping Linux namespaces/cgroups onto microkernel Job hierarchies, and providing network connectivity via `bexos.net.SocketProvider` and `vswitchd`.
 

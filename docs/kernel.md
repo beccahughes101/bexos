@@ -125,7 +125,8 @@ The kernel remains responsible for:
 Longer-term policy is deliberately kept in appd where practical.
 ## Restricted execution
 
-RFC-0070 Phase 1 adds per-thread restricted execution on AArch64 and x86_64.
+RFC-0070 Phase 1 adds per-thread restricted execution on AArch64 and x86_64;
+Phase 2 uses it for the trusted single-task Starnix runner.
 Normal host and restricted guest contexts, guest SIMD/FPU state, architecture
 TLS, the retained one-page state VMO, callback vector, active state, and pending
 kick are kernel-owned thread state and are included in full and incremental
@@ -134,3 +135,7 @@ dispatched as BexOS native syscalls. Unresolved user exceptions are reflected;
 timer/device interrupts and resolvable lazy anonymous writes stay in the
 kernel. See [RFC-0070 current state](rfcs/0070/CURRENT.md) for the ABI and the
 explicit non-Linux scope.
+The runner maps validated static Linux ELF segments with the normal
+`VirtualMemory.MapInVmSpace` exact-address path and resumes transplant
+candidates from versioned userspace mapping/register records. No Linux syscall
+implementation or Linux object is added to the kernel.

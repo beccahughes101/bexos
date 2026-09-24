@@ -1,5 +1,66 @@
 # Testing Status
 
+## RFC 0070 Phase 2 Starnix port (2026-09-23)
+
+The pinned Starnix import, BexOS Zircon compatibility facade, versioned runner
+ABI, appd `nix` launch path, trusted runner and replacement, exact-address
+Linux ELF mapping, restricted syscall dispatch, transplant records/kicks, and
+static AArch64/x86_64 fixtures are implemented in the tree.
+
+Focused AArch64 and x86_64 builds have passed for `starnix_core`,
+`starnix_kernel`, `lib/starnix_abi`, `lib/compat/zircon`, both runner ELFs, and
+the fixture archive. The appd library and host-side QEMU test executable also
+build. These are build results, not guest-execution results.
+
+The focused unit suite passed all ten targets:
+
+```sh
+bazel test //lib/starnix_abi:tests //lib/compat/zircon:tests \
+  //third_party/starnix:starnix_core_tests \
+  //third_party/starnix:starnix_kernel_tests \
+  //services/starnix_runner:tests //lib/elf:elf_tests \
+  //services/appd:appd_tests //kernel/core:core_tests \
+  //:heart_transplant_coverage_test \
+  //testing/e2e/qemu:matrix_coverage_test
+bazel run @rules_rust//:rustfmt
+```
+
+The runner, replacement, archives, fixtures, imported roots, compatibility
+libraries, and appd passed the default AArch64 and `--config=x86_64` builds.
+
+The dual-architecture QEMU command was attempted. AArch64 booted, passed the
+debugd health, process-list, and version checks, installed the fixture package,
+then returned `AppLifecycleStatus::LaunchFailed` (`-22`) while launching the
+`hello` `nix` process. It did not emit `hello starnix`, so guest execution is
+not claimed. The x86_64 half initially stopped at the integrated-firmware trust
+gate before QEMU. The separate firmware prerequisite below was fixed and its
+signed bundle refreshed successfully. A trace-enabled AArch64 diagnostic rerun
+was then stopped at the requester's direction after 316 seconds; Bazel recorded
+the test as skipped. The x86_64 guest test was not rerun.
+
+Until both guest tests emit the exact `hello starnix` output, report exit zero,
+retain looping state across runner replacement, and leave debugd/kernel healthy,
+Phase 2 is not recorded as accepted.
+
+## x86 integrated-firmware prerequisite (2026-09-23)
+
+This prerequisite is separate from RFC 0070. The integrated bundle validator
+still required product Trusty bytes to be embedded byte-for-byte in
+`loader.efi`, although the maintained resident-nucleus product intentionally
+uses the external-payload path. Validation now requires the signed loader to
+embed the exact resident monitor and AVB root, while Trusty remains a distinct
+bundle member authenticated by that monitor. The synthetic regression fixture
+also covers the complete Trusty successor/incompatible/fault/hang inventory.
+
+```sh
+bazel test //boot/efi:bundle_tests
+bazel run -c opt --config=x86_64 //boot/efi:refresh_firmware
+```
+
+Both commands passed. The refresh regenerated the local, gitignored
+`boot/efi/standard_firmware.bin`; this prerequisite result is not a Starnix
+guest-execution result.
+
 ## RFC 0070 Phase 1 restricted execution (2026-09-23)
 
 RFC 0070 Phase 1 adds the AArch64/x86_64 restricted-execution ABI, kernel trap

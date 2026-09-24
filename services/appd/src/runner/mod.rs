@@ -3,6 +3,7 @@ use alloc::string::String;
 use alloc::string::ToString;
 mod elf;
 mod kernel;
+mod nix;
 mod policy;
 mod wasm;
 
@@ -88,6 +89,7 @@ pub enum LaunchError {
     UnsupportedRunner(String),
     MissingRunnerOptions,
     InvalidWasmOptions,
+    InvalidNixOptions,
     LibraryPackageNotLaunchable,
     RunnerPolicyDenied,
     ProcessNameTooLong,
@@ -153,6 +155,20 @@ pub trait PackageImageResolver {
     /// Authenticated platform image, never resolved from the caller's package.
     fn resolve_wasm_runtime(&self) -> Result<PackageImage<'_>, PackageImageError> {
         self.resolve_executable(bexos_wasm_abi::RUNNER_PACKAGE, bexos_wasm_abi::RUNNER_PATH)
+    }
+
+    /// Digest of the authenticated platform Starnix runtime selected by this
+    /// resolver. Migration resolvers may select the separately built candidate.
+    fn starnix_runtime_digest(&self) -> [u8; 32] {
+        *include_bytes!(env!("BEXOS_STARNIX_RUNNER_DIGEST"))
+    }
+
+    fn resolve_starnix_runtime(&self) -> Result<PackageImage<'_>, PackageImageError> {
+        Ok(PackageImage {
+            bytes: include_bytes!(env!("BEXOS_STARNIX_RUNNER")),
+            vmo: KernelHandle::none(),
+            vmo_offset: 0,
+        })
     }
 
     fn resolve_executable<'a>(
@@ -225,6 +241,7 @@ impl RunnerRegistry {
         match RunnerKind::parse(&request.process.runner) {
             RunnerKind::Elf => self.elf.launch(request, kernel, resolver),
             RunnerKind::Wasm => wasm::launch(&self.elf, request, kernel, resolver),
+            RunnerKind::Nix => nix::launch(&self.elf, request, kernel, resolver),
             RunnerKind::Unknown(value) => Err(LaunchError::UnsupportedRunner(value)),
             other => Err(LaunchError::UnsupportedRunner(format!("{other:?}"))),
         }

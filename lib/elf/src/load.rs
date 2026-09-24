@@ -77,6 +77,16 @@ impl LoadPlan {
     }
 
     pub fn parse(bytes: &[u8], machine: Machine) -> Result<Self, ElfLoadError> {
+        Self::parse_with_bias(bytes, machine, PIE_LOAD_BIAS)
+    }
+
+    /// Parses an ELF image using the supplied load bias for `ET_DYN` images.
+    /// `ET_EXEC` virtual addresses are never rebased.
+    pub fn parse_with_bias(
+        bytes: &[u8],
+        machine: Machine,
+        pie_load_bias: u64,
+    ) -> Result<Self, ElfLoadError> {
         if bytes.len() < ELF64_HEADER_SIZE {
             return Err(ElfLoadError::TooSmall);
         }
@@ -121,7 +131,7 @@ impl LoadPlan {
             return Err(ElfLoadError::ProgramHeadersOutOfBounds);
         }
 
-        let load_bias = if elf_type == ET_DYN { PIE_LOAD_BIAS } else { 0 };
+        let load_bias = if elf_type == ET_DYN { pie_load_bias } else { 0 };
         let mut segments = Vec::new();
         let mut tls = None;
         let mut has_executable_segment = false;

@@ -31,6 +31,7 @@ pub fn executable(process: &crate::Process) -> Option<&str> {
     let path = match (&*process.runner, &process.runner_options) {
         ("wasm", Some(ProcessRunnerOptions::Wasm(options))) => &options.path,
         ("elf", Some(ProcessRunnerOptions::Elf(options))) => &options.path,
+        ("nix", Some(ProcessRunnerOptions::Nix(options))) => &options.path,
         _ => return None,
     };
     (path.starts_with("/pkg/")

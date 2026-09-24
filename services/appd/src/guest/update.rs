@@ -46,10 +46,12 @@ pub struct Update {
     markers: [u64; 3],
     source_markers: [u64; 3],
     freeze_preferences: bool,
+    restricted_kick_thread: Option<u64>,
 }
 
 struct BundleImage {
     runtime: Option<super::resolver::RuntimeImage>,
+    starnix_runtime: Option<&'static [u8]>,
     package: String,
     path: String,
     bytes: Vec<u8>,
@@ -81,6 +83,23 @@ impl PackageImageResolver for BundleImage {
             .as_ref()
             .map(super::resolver::RuntimeImage::image)
             .ok_or(PackageImageError::NotFound)
+    }
+    fn starnix_runtime_digest(&self) -> [u8; 32] {
+        if self.starnix_runtime.is_some() {
+            *include_bytes!(env!("BEXOS_STARNIX_REPLACEMENT_DIGEST"))
+        } else {
+            *include_bytes!(env!("BEXOS_STARNIX_RUNNER_DIGEST"))
+        }
+    }
+    fn resolve_starnix_runtime(&self) -> Result<PackageImage<'_>, PackageImageError> {
+        let bytes = self
+            .starnix_runtime
+            .unwrap_or(include_bytes!(env!("BEXOS_STARNIX_RUNNER")));
+        Ok(PackageImage {
+            bytes,
+            vmo: KernelHandle::none(),
+            vmo_offset: 0,
+        })
     }
     fn resolve_executable<'a>(
         &'a self,
@@ -381,6 +400,11 @@ pub fn begin(
         return Err("replacement must preserve the selected shell role and entrypoint".into());
     }
     let adapter = super::migration_adapter::prepare(process)?;
+    let restricted_kick_thread = matches!(
+        adapter.kind,
+        super::migration_adapter::MigrationAdapterKind::Nix
+    )
+    .then_some(old.thread_handle);
     let entry = archive
         .find(
             adapter
@@ -483,6 +507,11 @@ pub fn begin(
         runtime: replacement_runtime.or_else(|| {
             super::resolver::default_runtime_image(state.vfsd, &state.registry, &manifest)
         }),
+        starnix_runtime: matches!(
+            adapter.kind,
+            super::migration_adapter::MigrationAdapterKind::Nix
+        )
+        .then_some(include_bytes!(env!("BEXOS_STARNIX_REPLACEMENT")) as &'static [u8]),
         package: target.to_string(),
         path: adapter.executable_path.to_string(),
         handle: Memory::from_bytes(&elf).map_err(|_| "executable VMO")?,
@@ -602,6 +631,7 @@ pub fn begin(
         markers: [0; 3],
         source_markers,
         freeze_preferences,
+        restricted_kick_thread,
     })
 }
 
@@ -642,6 +672,7 @@ impl Update {
         &mut self,
         state: &mut AppdState,
         source: &mut bexos_userspace::live_migration::Source,
+        kernel: &mut impl KernelOps,
     ) -> Result<bool, String> {
         // Drain already available protocol progress before scanning all normal
         // service endpoints again. In a self replacement, the source endpoint
@@ -649,7 +680,7 @@ impl Update {
         // Stop immediately on a pending receive and bound the work per turn.
         for _ in 0..8 {
             let before = (self.step, self.waiting);
-            if self.poll_step(state)? {
+            if self.poll_step(state, kernel)? {
                 return Ok(true);
             }
             if before == (self.step, self.waiting) {
@@ -669,7 +700,11 @@ impl Update {
             self.delta_records,
         )
     }
-    fn poll_step(&mut self, state: &mut AppdState) -> Result<bool, String> {
+    fn poll_step(
+        &mut self,
+        state: &mut AppdState,
+        kernel: &mut impl KernelOps,
+    ) -> Result<bool, String> {
         if now_ms().saturating_sub(self.started) >= self.preparation_ms as u64 {
             return Err(self.preparation_timeout());
         }
@@ -695,6 +730,13 @@ impl Update {
                     "migration rejected status=-8"
                 }
                 .into());
+            }
+            if old {
+                if let Some(thread) = self.restricted_kick_thread {
+                    kernel
+                        .kick_restricted_thread(KernelHandle { raw: thread })
+                        .map_err(|_| "Starnix restricted kick failed")?;
+                }
             }
             self.waiting = true;
             return Ok(false);

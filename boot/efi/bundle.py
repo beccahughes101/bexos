@@ -42,13 +42,15 @@ def validate(files):
             raise ValueError(f'{name}: wrong firmware architecture or ELF type')
     for name in ('loader.efi', 'rollback_loader.efi'):
         signed_loader(files[name])
-        if (files['trusty.elf'] not in files[name]
-                or files['boot_root.avbpubkey'] not in files[name]):
+        if files['boot_root.avbpubkey'] not in files[name]:
             raise ValueError(f'{name}: firmware trust inputs differ')
     if files['loader.efi'] == files['rollback_loader.efi']:
         raise ValueError('rollback fixture must be distinct from product firmware')
+    # Product monitors use the external-payload path: Trusty is shipped as a
+    # distinct bundle member and authenticated by the resident monitor rather
+    # than copied byte-for-byte into loader.efi.  The loader must still embed
+    # the exact monitor and that monitor must embed the selected AVB root.
     if (files['monitor.elf'] not in files['loader.efi']
-            or files['trusty.elf'] not in files['monitor.elf']
             or len(files['boot_root.avbpubkey']) != 520
             or files['boot_root.avbpubkey'] not in files['monitor.elf']):
         raise ValueError('firmware payload closure mismatch')

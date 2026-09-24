@@ -10,6 +10,7 @@ runner_policy {
   realtime_scheduling_allowlist { package_id: "bexos.service.scened" expected_signer: "bexos_official_platform_v1" }
   default_tier: TIER_1_WASM
   allow_microvm_runner: true
+  allow_starnix_runner: true
 
   microvm_constraints {
     max_vram_allocation_mb: 1024

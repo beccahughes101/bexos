@@ -114,3 +114,13 @@ def wasm_runner_options(name, src):
         cmd = "PROTOBUF_SRC=; for proto in $(locations @protobuf//:well_known_type_protos); do case $$proto in */google/protobuf/any.proto) PROTOBUF_SRC=$${proto%/google/protobuf/any.proto};; esac; done; $(location @protobuf//:protoc) --proto_path=. --proto_path=$$PROTOBUF_SRC --encode=bexos.app.WasmRunnerOptions idl/bexos/app/manifest.proto < $(location " + src + ") > $@",
         tools = ["@protobuf//:protoc"],
     )
+
+def nix_runner_options(name, src):
+    """Encode authored Starnix child options using the manifest schema."""
+    native.genrule(
+        name = name,
+        srcs = [src, "//idl:app_manifest_proto_src", "@protobuf//:well_known_type_protos"],
+        outs = [name + ".pb"],
+        cmd = "PROTOBUF_SRC=; for proto in $(locations @protobuf//:well_known_type_protos); do case $$proto in */google/protobuf/any.proto) PROTOBUF_SRC=$${proto%/google/protobuf/any.proto};; esac; done; $(location @protobuf//:protoc) --proto_path=. --proto_path=$$PROTOBUF_SRC --encode=bexos.app.NixRunnerOptions idl/bexos/app/manifest.proto < $(location " + src + ") > $@",
+        tools = ["@protobuf//:protoc"],
+    )

@@ -1,0 +1,45 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["IMPORT.prototxt", "LICENSE", "UPSTREAM.md"])
+
+filegroup(
+    name = "upstream_starnix_core_sources",
+    srcs = glob(["src/kernel/core/**"]),
+)
+
+filegroup(
+    name = "upstream_starnix_kernel_sources",
+    srcs = glob([
+        "src/kernel/**",
+        "src/lib/**",
+    ]),
+)
+
+# These targets enter through the vendored upstream crate-root paths. The
+# adjacent fuchsia_* roots preserve the pinned source verbatim; the BexOS roots
+# select the Phase 2 platform boundary without generated source.
+rust_library(
+    name = "starnix_core",
+    srcs = glob(["src/kernel/core/**/*.rs"]) + ["port/core.rs"],
+    crate_root = "src/kernel/core/lib.rs",
+    crate_name = "starnix_core",
+    edition = "2024",
+)
+
+rust_library(
+    name = "starnix_kernel",
+    srcs = glob(["src/kernel/**/*.rs", "src/lib/**/*.rs"]) + ["port/kernel.rs"],
+    crate_root = "src/kernel/main.rs",
+    crate_name = "starnix_kernel",
+    edition = "2024",
+    deps = [
+        ":starnix_core",
+        "//lib/boot",
+        "//lib/elf",
+    ],
+)
+
+rust_test(name = "starnix_core_tests", crate = ":starnix_core")
+rust_test(name = "starnix_kernel_tests", crate = ":starnix_kernel")

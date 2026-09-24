@@ -350,6 +350,7 @@ pub const ELF_RUNNER_OPTIONS_TYPE_URL: &str = "type.googleapis.com/bexos.app.ELF
 pub enum ProcessRunnerOptions {
     Elf(ElfRunnerOptions),
     Wasm(bexos_wasm_abi::WasmRunnerOptions),
+    Nix(bexos_starnix_abi::NixRunnerOptions),
     Unknown(AnyRunnerOptions),
 }
 
@@ -494,6 +495,7 @@ pub enum ManifestError {
     InvalidPermissionRequirement,
     InvalidTrustedApp,
     InvalidWasmOptions,
+    InvalidRunnerOptions,
     InvalidCommand,
     InvalidLazyService,
     InvalidDriver,
@@ -1233,6 +1235,11 @@ fn decode_runner_options(bytes: &[u8]) -> Result<ProcessRunnerOptions, ManifestE
         return bexos_wasm_abi::WasmRunnerOptions::decode(&any.value)
             .map(ProcessRunnerOptions::Wasm)
             .map_err(|_| ManifestError::InvalidWasmOptions);
+    }
+    if any.type_url == bexos_starnix_abi::OPTIONS_TYPE_URL {
+        return bexos_starnix_abi::NixRunnerOptions::decode(&any.value)
+            .map(ProcessRunnerOptions::Nix)
+            .map_err(|_| ManifestError::InvalidRunnerOptions);
     }
     Ok(ProcessRunnerOptions::Unknown(any))
 }

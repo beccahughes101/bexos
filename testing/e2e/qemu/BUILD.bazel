@@ -13,6 +13,7 @@ E2E_PACKAGES = [
     "preferences",
     "pkg",
     "sysui",
+    "starnix",
     "trusty",
     "update",
     "usb",

@@ -1,0 +1,30 @@
+package_name: "bexos.platform.starnix_fixture"
+name: "Starnix Phase 2 acceptance fixtures"
+processes {
+  name: "hello"
+  runner: "nix"
+  lifecycle { update_strategy: RESTART }
+  runner_options {
+    [type.googleapis.com/bexos.app.NixRunnerOptions] {
+      path: "/pkg/bin/hello"
+      arguments: "hello"
+      environment { name: "LANG" value: "C" }
+    }
+  }
+}
+processes {
+  name: "looping"
+  runner: "nix"
+  service: true
+  lifecycle {
+    update_strategy: HEART_TRANSPLANT
+    migration_timeout_ms: 150
+    preparation_timeout_ms: 30000
+  }
+  runner_options {
+    [type.googleapis.com/bexos.app.NixRunnerOptions] {
+      path: "/pkg/bin/looping"
+      arguments: "looping"
+    }
+  }
+}

@@ -1,0 +1,79 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:optimized_artifact.bzl", "optimized_artifact")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "starnix_runner",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_name = "bexos_starnix_runner",
+    edition = "2024",
+    rustc_flags = select({
+        "//build/platforms:is_bexos_userspace": ["--cfg=bexos_guest"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        "//lib/bexos_libc",
+        "//lib/boot",
+        "//lib/compat/zircon",
+        "//lib/migration",
+        "//lib/starnix_abi",
+        "//lib/userspace",
+        "//third_party/starnix:starnix_kernel",
+    ],
+)
+
+std_service_binary(
+    name = "binary",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_starnix_runner_elf",
+    deps = [":starnix_runner"],
+)
+
+optimized_artifact(name = "starnix_runner_elf", src = ":binary")
+
+std_service_binary(
+    name = "replacement_binary",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_starnix_runner_replacement",
+    rustc_flags = ["--cfg=starnix_runner_replacement"],
+    deps = [":starnix_runner"],
+)
+
+optimized_artifact(name = "replacement_elf", src = ":replacement_binary")
+
+genrule(
+    name = "runtime_digest",
+    srcs = [":starnix_runner_elf"],
+    outs = ["runtime.sha256"],
+    cmd = "$(execpath //tools/wasm:digest) $(location :starnix_runner_elf) $@",
+    tools = ["//tools/wasm:digest"],
+)
+
+genrule(
+    name = "replacement_runtime_digest",
+    srcs = [":replacement_elf"],
+    outs = ["replacement_runtime.sha256"],
+    cmd = "$(execpath //tools/wasm:digest) $(location :replacement_elf) $@",
+    tools = ["//tools/wasm:digest"],
+)
+
+app_manifest(name = "package_manifest", src = "package/starnix_runner.prototxt")
+
+app_archive(
+    name = "starnix_runner_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/starnix_runner": ":starnix_runner_elf"},
+    compression = "zstd",
+)
+
+app_archive(
+    name = "replacement_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/starnix_runner": ":replacement_elf"},
+    compression = "zstd",
+)
+
+rust_test(name = "tests", crate = ":starnix_runner")

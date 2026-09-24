@@ -5,6 +5,7 @@ mod hardware_resource_tests;
 mod launch_permission_tests;
 mod lazy_tests;
 mod migration_count_tests;
+mod nix_tests;
 mod wasm_tests;
 
 use app_debug_fidl::{AppDebugControlListProcessesRequest, AppDebugControlPublicServer};
@@ -3345,6 +3346,24 @@ fn platform_runner_policy_denies_consumer_elf_and_routes_microvm() {
     );
     assert_eq!(
         config.runner_policy.evaluate_runner("wasm", consumer),
+        RunnerPolicyDecision::Allow
+    );
+}
+
+#[test]
+fn platform_runner_policy_decodes_starnix_opt_in() {
+    let runner_policy = message(&[varint_field(7, 1)]);
+    let config =
+        PlatformConfig::decode(&message(&[message_field(2, &runner_policy)])).expect("config");
+    let consumer = PackageIdentity {
+        package_id: "com.example.linux",
+        signer: "third_party",
+        trust_tier: PackageTrustTier::StandardConsumer,
+        is_driver: false,
+    };
+    assert!(config.runner_policy.allow_starnix_runner);
+    assert_eq!(
+        config.runner_policy.evaluate_runner("nix", consumer),
         RunnerPolicyDecision::Allow
     );
 }
