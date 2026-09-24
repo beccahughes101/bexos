@@ -1,5 +1,5 @@
 """Explicit architecture-specific saved firmware, independent of BexOS boot."""
-def x86_firmware_bundle(name, firmware, boot, acceptance = False, variant = "standard"):
+def x86_firmware_bundle(name, firmware, boot, acceptance = False, variant = "standard", use_saved_image = False):
     if acceptance and variant == "standard":
         variant = "authmgr_acceptance"
     flags = ["--architecture", "x86_64"] + ([] if variant == "standard" else ["--variant", variant])
@@ -21,12 +21,10 @@ def x86_firmware_bundle(name, firmware, boot, acceptance = False, variant = "sta
     native.filegroup(name = name + "_saved_image", srcs = native.glob([name + "_image.bin"], allow_empty = True))
     native.genrule(
         name = name + "_cached_firmware",
-        # Product consumers must all extract the same saved bundle. Extracting
-        # a fresh build here made configuration transitions embed distinct
-        # timestamped Trusty images and invalidated the signed EFI closure.
-        # The explicit refresh target above is the only path from a build into
-        # the saved fixture.
-        srcs = [":" + name + "_saved_image"],
+        # EFI product consumers extract stable saved bundles. Replacement test
+        # fixtures are source-built because CI does not publish snapshots for
+        # every generation and fault variant.
+        srcs = [":" + name + ("_saved_image" if use_saved_image else "_built_image")],
         outs = ["cached_" + name + "/" + file for file in ["lk.bin", "lk.elf", "boot.elf", "rpmb_dev", "RPMB_DATA", "build.prototxt"]],
         tools = [":image_bundle_tool"],
         cmd = "$(location :image_bundle_tool) " + " ".join(flags) + " extract $(@D)/cached_" + name + " $(SRCS)",
