@@ -79,3 +79,4 @@ An RFC number does not indicate approval or implementation status.
 | [0068](0068/README.md) |  Multi network  | 2026-09-23 | [Implementation and gaps](0068/CURRENT.md) |
 | [0069](0069/README.md) |  SDK  | 2026-09-23 | [Implementation and gaps](0069/CURRENT.md) |
 | [0070](0070/README.md) |  Starnix  | 2026-09-23 | [Implementation and gaps](0070/CURRENT.md) |
+| [0071](0071/README.md) |  VPP  | 2026-09-24 | [Implementation and gaps](0071/CURRENT.md) |
