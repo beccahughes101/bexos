@@ -18,6 +18,19 @@ vector_entry %vector_number
 .set vector_number, vector_number + 1
 .endr
 .noaltmacro
+.global __x86_syscall_entry
+__x86_syscall_entry:
+swapgs
+mov qword ptr gs:[8], rsp
+mov rsp, qword ptr gs:[0]
+push 0x1b
+push qword ptr gs:[8]
+push r11
+push 0x23
+push rcx
+push 0
+push 129
+jmp __x86_save_context
 __x86_save_context:
 cld
 sub rsp, 824
@@ -53,6 +66,18 @@ mov [rsp + 216], rax
 mov [rsp + 224], rax
 mov [rsp + 232], rax
 mov [rsp + 240], rax
+mov rax, [rsp + 824]
+cmp rax, 129
+jne 4f
+mov ecx, 0xc0000102
+jmp 5f
+4:
+mov ecx, 0xc0000101
+5:
+rdmsr
+shl rdx, 32
+or rax, rdx
+mov [rsp + 120], rax
 mov rax, [rsp + 848]
 mov [rsp + 240], rax
 mov rax, [rsp + 864]
@@ -97,6 +122,19 @@ mov rdx, rax
 shr rdx, 32
 mov ecx, 0xc0000100
 wrmsr
+mov rax, [rsp + 120]
+mov rdx, rax
+shr rdx, 32
+mov rax, [rsp + 824]
+cmp rax, 129
+jne 4f
+mov ecx, 0xc0000102
+jmp 5f
+4:
+mov ecx, 0xc0000101
+5:
+mov rax, [rsp + 120]
+wrmsr
 fxrstor64 [rsp + 272]
 mov rdi, [rsp + 0]
 mov rsi, [rsp + 8]
@@ -113,6 +151,10 @@ mov rcx, [rsp + 88]
 mov rbx, [rsp + 96]
 mov rbp, [rsp + 104]
 mov r11, [rsp + 112]
+cmp qword ptr [rsp + 824], 129
+jne 4f
+swapgs
+4:
 add rsp, 840
 iretq
 .global x86_enter_context
@@ -125,6 +167,7 @@ mov rdi, rsp
 mov ecx, 102
 cld
 rep movsq
+mov qword ptr [rsp + 824], 0
 jmp __x86_restore_context
 .section .rodata,"a"
 .global __x86_vectors

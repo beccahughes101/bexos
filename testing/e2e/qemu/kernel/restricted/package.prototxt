@@ -1,0 +1,12 @@
+package_name: "bexos.platform.restricted_probe"
+name: "Restricted execution acceptance probe"
+processes {
+  name: "probe"
+  runner: "elf"
+  lifecycle { update_strategy: RESTART }
+  runner_options {
+    [type.googleapis.com/bexos.app.ELFRunnerOptions] {
+      path: "/pkg/bin/restricted_probe"
+    }
+  }
+}

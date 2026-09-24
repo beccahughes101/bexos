@@ -2119,3 +2119,123 @@ fn older_incremental_channel_record_preserves_its_endpoint_identity() {
     let cap = target.grant(0, bexos_kernel_core::runtime::Object::Channel(0, 0), 1);
     assert_eq!(target.channel_identity(cap).unwrap(), (1, 2));
 }
+
+fn restricted_state_bytes(pc: u64, sp: u64) -> Vec<u8> {
+    if bexos_kernel_core::runtime::Context::ARCHITECTURE == 2 {
+        let mut state = bexos_restricted_abi::X86_64StateV1::zeroed();
+        state.rip = pc;
+        state.rsp = sp;
+        state.rflags = u64::MAX;
+        state.fs_base = 0x1234_0000;
+        unsafe {
+            core::slice::from_raw_parts(
+                (&state as *const bexos_restricted_abi::X86_64StateV1).cast(),
+                core::mem::size_of_val(&state),
+            )
+            .to_vec()
+        }
+    } else {
+        let mut state = bexos_restricted_abi::Aarch64StateV1::zeroed();
+        state.pc = pc;
+        state.sp = sp;
+        state.pstate = u64::MAX;
+        state.tpidr_el0 = 0x1234_0000;
+        state.tpidrro_el0 = 0x5678_0000;
+        unsafe {
+            core::slice::from_raw_parts(
+                (&state as *const bexos_restricted_abi::Aarch64StateV1).cast(),
+                core::mem::size_of_val(&state),
+            )
+            .to_vec()
+        }
+    }
+}
+
+#[test]
+fn restricted_binding_reflects_exits_kicks_and_survives_snapshots() {
+    use bexos_kernel_core::{kernel_services::RIGHT_ADMIN, runtime::Object};
+    use bexos_restricted_abi::{Header, Reason, STATE_VMO_SIZE};
+
+    let mut rt = Runtime::new(MemoryBackend::new(0x5100_0000));
+    let (process, space) = rt.create_process("restricted", "restricted", 0).unwrap();
+    let text = rt.create_vmo(4096, 0).unwrap();
+    rt.map(Some(space), text, 0, 4096, 0x8000_0000, 10).unwrap();
+    let stack = rt.create_vmo(8192, 0).unwrap();
+    rt.map(Some(space), stack, 0, 8192, 0x8001_0000, 6).unwrap();
+    rt.start(process, space, 0x8000_0100, 0x8001_2000, 0)
+        .unwrap();
+
+    let state = rt.create_vmo(STATE_VMO_SIZE, 0).unwrap();
+    let state_va = rt
+        .map(Some(space), state, 0, STATE_VMO_SIZE, 0x8002_0000, 6)
+        .unwrap();
+    rt.copy_to_user(state_va, &restricted_state_bytes(0x8000_0200, 0x8001_1800))
+        .unwrap();
+
+    let read_only = rt.duplicate(state, 2).unwrap();
+    assert_eq!(
+        rt.restricted_bind_state(0, read_only),
+        Err(Status::ErrAccessDenied)
+    );
+    assert_eq!(
+        rt.restricted_bind_state(1, state),
+        Err(Status::ErrInvalidArgs)
+    );
+    rt.restricted_bind_state(0, state).unwrap();
+    assert_eq!(
+        rt.restricted_bind_state(0, state),
+        Err(Status::ErrAlreadyExists)
+    );
+
+    let host = rt.threads[0].context;
+    let mut guest = rt
+        .restricted_enter(0, 0x8000_0100, 0xfeed, host, 0x7777_0000)
+        .unwrap();
+    assert_eq!(guest.instruction_pointer, 0x8000_0200);
+    assert_eq!(guest.stack_pointer, 0x8001_1800);
+    assert_eq!(guest.thread_pointer(), 0x1234_0000);
+    assert_eq!(rt.restricted_unbind_state(0), Err(Status::ErrAlreadyExists));
+    guest.instruction_pointer += if bexos_kernel_core::runtime::Context::ARCHITECTURE == 2 {
+        2
+    } else {
+        4
+    };
+    let callback = rt
+        .restricted_exit_current(Reason::Syscall, 0x55, 0, guest)
+        .unwrap();
+    assert_eq!(callback.instruction_pointer, 0x8000_0100);
+
+    let mut reflected = vec![0; restricted_state_bytes(0, 0).len()];
+    rt.copy_from_user(state_va, &mut reflected).unwrap();
+    let header = unsafe { core::ptr::read_unaligned(reflected.as_ptr().cast::<Header>()) };
+    assert_eq!(header.reason, Reason::Syscall as u32);
+    assert_eq!(header.exception_code, 0x55);
+
+    let thread = rt.grant(0, Object::Thread(0), RIGHT_ADMIN);
+    assert_eq!(rt.restricted_kick(0, thread), Ok(1));
+    assert_eq!(rt.restricted_kick(0, thread), Ok(1));
+    let callback = rt
+        .restricted_enter(0, 0x8000_0100, 0xbeef, callback, 0x7777_0000)
+        .unwrap();
+    assert_eq!(callback.instruction_pointer, 0x8000_0100);
+    rt.copy_from_user(state_va, &mut reflected).unwrap();
+    let header = unsafe { core::ptr::read_unaligned(reflected.as_ptr().cast::<Header>()) };
+    assert_eq!(header.reason, Reason::Kick as u32);
+
+    let snapshot = encode(&rt);
+    let restored = Runtime::read_snapshot(rt.backend.clone(), &mut Reader::new(&snapshot)).unwrap();
+    assert!(restored.threads[0].restricted.is_some());
+
+    let mut target = Runtime::new(rt.backend.clone());
+    let mut cursor = rt.begin_live_snapshot(1024).unwrap();
+    while let Some(key) = cursor.next() {
+        copy_record(&mut rt, &mut target, key);
+    }
+    target.validate_live_snapshot().unwrap();
+    assert!(target.threads[0].restricted.is_some());
+
+    target.threads[0].restricted.as_mut().unwrap().state_vmo = usize::MAX;
+    assert!(target.validate_live_snapshot().is_err());
+    rt.restricted_unbind_state(0).unwrap();
+    assert!(rt.threads[0].restricted.is_none());
+}

@@ -1,0 +1,33 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "userspace_binary")
+load("//testing/e2e/qemu:architecture_test.bzl", "qemu_suites")
+load("//testing/e2e/qemu:qemu_e2e.bzl", "qemu_e2e_test")
+
+package(default_visibility = ["//visibility:public"])
+
+userspace_binary(
+    name = "probe",
+    srcs = ["probe.rs"],
+    crate_name = "restricted_probe",
+    deps = [],
+)
+
+app_manifest(name = "manifest", src = "package.prototxt")
+
+app_archive(
+    name = "archive",
+    manifest = ":manifest",
+    entries = {"bin/restricted_probe": ":probe"},
+    compression = "zstd",
+)
+
+qemu_e2e_test(
+    name = "restricted_test",
+    src = "restricted_e2e_test.rs",
+    crate_name = "restricted_e2e_test",
+    deps = ["//testing/e2e", "//tools/qemu:qemu_test"],
+    extra_data = [":archive"],
+    extra_args = ["$(rootpath :archive)"],
+)
+
+qemu_suites()

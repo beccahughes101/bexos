@@ -20,9 +20,16 @@ pub fn yield_now(frame: *mut Context) {
     crate::userspace::RUNTIME.with(|s| {
         if let Some(rt) = s.as_mut() {
             crate::memory::reclamation::maintain(rt);
+            rt.restricted_capture_readonly_thread_pointer(
+                crate::arch::CurrentArch::read_user_readonly_thread_pointer(),
+            );
+            rt.restricted_deliver_pending_kick(frame);
             let address_space =
                 rt.schedule_yield_at_on_cpu(0, crate::arch::CurrentArch::monotonic_ns(), frame);
             crate::arch::CurrentArch::switch_address_space(address_space);
+            if let Some(pointer) = rt.restricted_current_readonly_thread_pointer() {
+                crate::arch::CurrentArch::write_user_readonly_thread_pointer(pointer);
+            }
             crate::arch::CurrentArch::program_scheduler_deadline(rt.next_deadline_on_cpu(0));
         }
     });
@@ -43,6 +50,13 @@ pub fn timer_tick(frame: *mut Context) {
     crate::userspace::RUNTIME.with(|s| {
         if let Some(rt) = s.as_mut() {
             let cpu_id = crate::arch::CurrentArch::current_cpu_id() as u8;
+            if rt.restricted_is_active_on_cpu(cpu_id) {
+                let _ = rt.bind_current_cpu(cpu_id);
+                rt.restricted_capture_readonly_thread_pointer(
+                    crate::arch::CurrentArch::read_user_readonly_thread_pointer(),
+                );
+                rt.restricted_deliver_pending_kick(frame);
+            }
             let executing = rt.scheduler.current_on_cpu(cpu_id).map(|t| t.id);
             rt.scheduler.account_runtime(crate::arch::CurrentArch::monotonic_ns());
             let now = crate::migration::now_ms();
@@ -74,6 +88,9 @@ pub fn timer_tick(frame: *mut Context) {
             let address_space =
                 rt.schedule_at_on_cpu(cpu_id, crate::arch::CurrentArch::monotonic_ns(), frame);
             crate::arch::CurrentArch::switch_address_space(address_space);
+            if let Some(pointer) = rt.restricted_current_readonly_thread_pointer() {
+                crate::arch::CurrentArch::write_user_readonly_thread_pointer(pointer);
+            }
             crate::arch::CurrentArch::program_scheduler_deadline(rt.next_deadline_on_cpu(cpu_id));
         }
     });
@@ -94,6 +111,13 @@ pub fn reschedule_ipi(frame: *mut Context) {
     crate::userspace::RUNTIME.with(|s| {
         if let Some(rt) = s.as_mut() {
             let cpu_id = crate::arch::CurrentArch::current_cpu_id() as u8;
+            if rt.restricted_is_active_on_cpu(cpu_id) {
+                let _ = rt.bind_current_cpu(cpu_id);
+                rt.restricted_capture_readonly_thread_pointer(
+                    crate::arch::CurrentArch::read_user_readonly_thread_pointer(),
+                );
+                rt.restricted_deliver_pending_kick(frame);
+            }
             bexos_trace::trace_counter!(
                 bexos_trace::CATEGORY_KERNEL_SCHED,
                 "kernel:reschedule_cpu",
@@ -102,6 +126,9 @@ pub fn reschedule_ipi(frame: *mut Context) {
             let address_space =
                 rt.schedule_at_on_cpu(cpu_id, crate::arch::CurrentArch::monotonic_ns(), frame);
             crate::arch::CurrentArch::switch_address_space(address_space);
+            if let Some(pointer) = rt.restricted_current_readonly_thread_pointer() {
+                crate::arch::CurrentArch::write_user_readonly_thread_pointer(pointer);
+            }
             crate::arch::CurrentArch::program_scheduler_deadline(rt.next_deadline_on_cpu(cpu_id));
         }
     });

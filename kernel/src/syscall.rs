@@ -35,7 +35,7 @@ pub fn dispatch(frame: *mut Context, number: u32) {
         1 => crate::userspace::RUNTIME.with(|s| {
             let rt = s.as_mut().unwrap();
             let caller = rt.current_thread as u64 + 1;
-            let r = raw(rt, f.syscall_words());
+            let r = raw(rt, f.syscall_words(), *f);
             rt.scheduler.account_executing(
                 crate::arch::CurrentArch::current_cpu_id() as u8,
                 caller,
@@ -52,6 +52,9 @@ pub fn dispatch(frame: *mut Context, number: u32) {
                     f.syscall_words_mut()[1] = 0;
                     f.syscall_words_mut()[2] = 0;
                 }
+            }
+            if let Some(context) = rt.restricted_take_transition() {
+                *f = context;
             }
         }),
         2 => crate::sched::yield_now(frame),
@@ -188,7 +191,7 @@ pub fn dispatch(frame: *mut Context, number: u32) {
     });
     crate::transplant::live_step();
 }
-fn raw(rt: &mut Rt, r: &[u64; 10]) -> Result<(usize, usize), Status> {
+fn raw(rt: &mut Rt, r: &[u64; 10], host_context: Context) -> Result<(usize, usize), Status> {
     bexos_trace::trace_scope!(bexos_trace::CATEGORY_IPC_MESSAGES, "kernel:fidl_syscall");
     let (n, k, cap, hcap) = (r[3] as usize, r[5] as usize, r[7] as usize, r[9] as usize);
     if n > 65536 || cap > 65536 || k > 64 || hcap > 64 {
@@ -232,8 +235,8 @@ fn raw(rt: &mut Rt, r: &[u64; 10]) -> Result<(usize, usize), Status> {
     }
     let mut out = vec![0; cap];
     let mut oh = vec![HandleRef { raw: 0 }; hcap];
-    let e =
-        route(rt, r[0], r[1], &req, &hs, &mut out, &mut oh).map_err(|_| Status::ErrInvalidArgs)?;
+    let e = route(rt, r[0], r[1], &req, &hs, &mut out, &mut oh, host_context)
+        .map_err(|_| Status::ErrInvalidArgs)?;
     if let Err(status) = rt.copy_to_user(r[6], &out[..e.bytes]) {
         if r[0] == 9 {
             crate::log_line(&alloc::format!(
@@ -276,6 +279,7 @@ fn route(
     hs: &[HandleRef],
     out: &mut [u8],
     oh: &mut [HandleRef],
+    host_context: Context,
 ) -> Result<EncodeResult, FidlWireError> {
     if protocol == 7 {
         return crate::migration::dispatch(rt, ordinal, req, hs, out, oh);
@@ -661,6 +665,40 @@ fn route(
                 status,
                 data: &bytes
             })
+        }
+        (14, Some("BindState")) => {
+            let q = decode!(RestrictedBindStateRequest);
+            let r = rt.restricted_bind_state(q.options, q.state_vmo.raw);
+            reply!(RestrictedBindStateResponse { status: status(&r) })
+        }
+        (14, Some("UnbindState")) => {
+            let q = decode!(RestrictedUnbindStateRequest);
+            let r = rt.restricted_unbind_state(q.options);
+            reply!(RestrictedUnbindStateResponse { status: status(&r) })
+        }
+        (14, Some("Enter")) => {
+            let q = decode!(RestrictedEnterRequest);
+            let r = rt.restricted_enter(
+                q.options,
+                q.vector_entry,
+                q.context,
+                host_context,
+                crate::arch::CurrentArch::read_user_readonly_thread_pointer(),
+            );
+            if r.is_ok() {
+                if let Some(pointer) = rt.restricted_current_readonly_thread_pointer() {
+                    crate::arch::CurrentArch::write_user_readonly_thread_pointer(pointer);
+                }
+            }
+            reply!(RestrictedEnterResponse { status: status(&r) })
+        }
+        (14, Some("Kick")) => {
+            let q = decode!(RestrictedKickRequest);
+            let r = rt.restricted_kick(q.options, q.thread.raw);
+            if let Ok(mask) = r {
+                crate::arch::CurrentArch::request_reschedule(mask);
+            }
+            reply!(RestrictedKickResponse { status: status(&r) })
         }
         (8, Some("GetTime")) => {
             let q = decode!(ClockGetTimeRequest);

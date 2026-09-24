@@ -20,6 +20,7 @@ pub mod incremental;
 pub mod memory;
 mod process_control;
 mod reclamation;
+mod restricted;
 mod slots;
 pub mod snapshot;
 use incremental::{CHANNEL, HANDLE, META, PIN, PROCESS, PROFILE, SOCKET, THREAD, VMAR, VMO};
@@ -133,6 +134,21 @@ pub struct Thread {
     pub blocked_futex: Option<u64>,
     pub blocked_wait_many: bool,
     pub exit_code: i32,
+    pub restricted: Option<RestrictedBinding>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct RestrictedBinding {
+    pub state_vmo: usize,
+    pub host_context: Context,
+    pub guest_context: Context,
+    pub host_readonly_thread_pointer: u64,
+    pub guest_readonly_thread_pointer: u64,
+    pub vector_entry: u64,
+    pub vector_context: u64,
+    pub active: bool,
+    pub pending_kick: bool,
+    pub transition_pending: bool,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Interrupt {
@@ -1149,13 +1165,19 @@ impl<B: Backend> Runtime<B> {
         self.processes[id].exited = true;
         self.changed(PROCESS, id);
         for thread_id in 0..self.threads.len() {
-            let thread = &mut self.threads[thread_id];
-            if thread.process == id && !thread.exited {
-                thread.running = false;
-                thread.exited = true;
-                thread.blocked_futex = None;
-                thread.blocked_wait_many = false;
-                thread.exit_code = exit_code;
+            if self.threads[thread_id].process == id && !self.threads[thread_id].exited {
+                let restricted_vmo = {
+                    let thread = &mut self.threads[thread_id];
+                    thread.running = false;
+                    thread.exited = true;
+                    thread.blocked_futex = None;
+                    thread.blocked_wait_many = false;
+                    thread.exit_code = exit_code;
+                    thread.restricted.take().map(|binding| binding.state_vmo)
+                };
+                if let Some(vmo) = restricted_vmo {
+                    self.release_vmo(vmo);
+                }
                 let _ = self.scheduler.exit_task(thread_id as u64 + 1, exit_code);
                 self.changed(incremental::THREAD, thread_id);
             }
@@ -1368,6 +1390,7 @@ impl<B: Backend> Runtime<B> {
             blocked_futex: None,
             blocked_wait_many: false,
             exit_code: 0,
+            restricted: None,
         });
         let scheduler_id = id as u64 + 1;
         let mut task = SchedulerTask::new(
@@ -1544,10 +1567,16 @@ impl<B: Backend> Runtime<B> {
         {
             let _ = self.abort_handover();
         }
-        if let Some(thread) = self.threads.get_mut(self.current_thread) {
+        let restricted_vmo = if let Some(thread) = self.threads.get_mut(self.current_thread) {
             thread.running = false;
             thread.exited = true;
             thread.exit_code = exit_code;
+            thread.restricted.take().map(|binding| binding.state_vmo)
+        } else {
+            None
+        };
+        if let Some(vmo) = restricted_vmo {
+            self.release_vmo(vmo);
         }
         // Aborting a candidate can already remove it from the scheduler and
         // select a successor. Exit the caller by identity, never that successor.

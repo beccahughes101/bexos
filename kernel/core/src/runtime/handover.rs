@@ -469,10 +469,17 @@ impl<B: Backend> Runtime<B> {
         self.changed(PROCESS, id);
         for thread_id in 0..self.threads.len() {
             if self.threads[thread_id].process == id {
-                self.threads[thread_id].running = false;
-                self.threads[thread_id].exited = true;
-                self.threads[thread_id].blocked_futex = None;
-                self.threads[thread_id].blocked_wait_many = false;
+                let restricted_vmo = {
+                    let thread = &mut self.threads[thread_id];
+                    thread.running = false;
+                    thread.exited = true;
+                    thread.blocked_futex = None;
+                    thread.blocked_wait_many = false;
+                    thread.restricted.take().map(|binding| binding.state_vmo)
+                };
+                if let Some(vmo) = restricted_vmo {
+                    self.release_vmo(vmo);
+                }
                 // Retiring the address space must also remove every thread
                 // from scheduler ownership before its mappings are released.
                 let _ = self.scheduler.exit_task(thread_id as u64 + 1, 0);

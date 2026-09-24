@@ -4,7 +4,7 @@ exports_files(["aarch64.ld", "x86_64.ld"])
 rust_library(
     rustc_flags = select({"//build/platforms:is_bexos_userspace": ["--cfg=bexos_guest"], "//conditions:default": []}),
     name = "userspace", srcs = glob(["src/**/*.rs"]), crate_name = "bexos_userspace", edition = "2024",
-    deps = ["//idl:preferences_fidl_rust", "//lib/component_config", "//lib/elf", "//lib/allocator", "//lib/boot", "//lib/migration", "//lib/trace", "//idl:migration_fidl_rust", "//idl:kernel_fidl_rust", "//idl:bootstrap_fidl_rust", "//idl:block_fidl_rust", "//idl:fs_fidl_rust", "//idl:archive_fidl_rust", "//idl:vfs_manager_fidl_rust", "//idl:power_fidl_rust", "//idl:tee_manager_fidl_rust", "//idl:ethernet_fidl_rust", "//idl:net_fidl_rust", "//idl:trust_fidl_rust", "//idl:job_fidl_rust", "//idl:app_worker_fidl_rust", "//idl:app_service_directory_fidl_rust", "//idl:time_fidl_rust", "//idl:user_manager_fidl_rust", "//idl:hardware_manager_fidl_rust"],
+    deps = ["//idl:preferences_fidl_rust", "//lib/component_config", "//lib/elf", "//lib/allocator", "//lib/boot", "//lib/migration", "//lib/restricted_abi", "//lib/trace", "//idl:migration_fidl_rust", "//idl:kernel_fidl_rust", "//idl:bootstrap_fidl_rust", "//idl:block_fidl_rust", "//idl:fs_fidl_rust", "//idl:archive_fidl_rust", "//idl:vfs_manager_fidl_rust", "//idl:power_fidl_rust", "//idl:tee_manager_fidl_rust", "//idl:ethernet_fidl_rust", "//idl:net_fidl_rust", "//idl:trust_fidl_rust", "//idl:job_fidl_rust", "//idl:app_worker_fidl_rust", "//idl:app_service_directory_fidl_rust", "//idl:time_fidl_rust", "//idl:user_manager_fidl_rust", "//idl:hardware_manager_fidl_rust"],
 )
 
 rust_test(

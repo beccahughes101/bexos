@@ -7,8 +7,9 @@ use crate::transplant::{
     codec::{Reader, Result, Writer},
 };
 
-pub const VERSION: u64 = 20;
+pub const VERSION: u64 = 21;
 const INTERRUPT_VERSION: u64 = 20;
+const RESTRICTED_VERSION: u64 = 21;
 const CHANNEL_IDENTITY_VERSION: u64 = 19;
 const PRE_SLOT_VERSION: u64 = 18;
 const SHARED_DEVICE_VERSION: u64 = 17;
@@ -62,6 +63,48 @@ pub(super) fn read_context_legacy(r: &mut Reader<'_>) -> Result<Context> {
     c.fp_status = r.word()?;
     c.thread_pointer = r.word()?;
     Ok(c)
+}
+
+pub(super) fn write_restricted_binding(
+    w: &mut Writer<'_>,
+    binding: Option<RestrictedBinding>,
+) -> Result<()> {
+    w.word(binding.is_some() as u64)?;
+    if let Some(binding) = binding {
+        w.word(binding.state_vmo as u64)?;
+        write_context(w, &binding.host_context)?;
+        write_context(w, &binding.guest_context)?;
+        for value in [
+            binding.host_readonly_thread_pointer,
+            binding.guest_readonly_thread_pointer,
+            binding.vector_entry,
+            binding.vector_context,
+            binding.active as u64,
+            binding.pending_kick as u64,
+            binding.transition_pending as u64,
+        ] {
+            w.word(value)?;
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn read_restricted_binding(r: &mut Reader<'_>) -> Result<Option<RestrictedBinding>> {
+    if !r.flag()? {
+        return Ok(None);
+    }
+    Ok(Some(RestrictedBinding {
+        state_vmo: r.index()?,
+        host_context: read_context(r)?,
+        guest_context: read_context(r)?,
+        host_readonly_thread_pointer: r.word()?,
+        guest_readonly_thread_pointer: r.word()?,
+        vector_entry: r.word()?,
+        vector_context: r.word()?,
+        active: r.flag()?,
+        pending_kick: r.flag()?,
+        transition_pending: r.flag()?,
+    }))
 }
 
 pub fn write_profile(w: &mut Writer<'_>, profile: SchedulingProfile) -> Result<()> {
@@ -191,6 +234,7 @@ impl<B: Backend> Runtime<B> {
             w.word(thread.blocked_futex.unwrap_or(0))?;
             w.word(thread.blocked_wait_many as u64)?;
             w.word(thread.exit_code as u64)?;
+            write_restricted_binding(w, thread.restricted)?;
         }
         w.word(self.vmos.len() as u64)?;
         for v in &self.vmos {
@@ -328,6 +372,7 @@ impl<B: Backend> Runtime<B> {
         }
         let version = r.word()?;
         if version != VERSION
+            && version != INTERRUPT_VERSION
             && version != CHANNEL_IDENTITY_VERSION
             && version != PRE_SLOT_VERSION
             && version != SHARED_DEVICE_VERSION
@@ -477,6 +522,11 @@ impl<B: Backend> Runtime<B> {
                 },
                 blocked_wait_many: r.flag().unwrap_or(false),
                 exit_code: r.word()? as i32,
+                restricted: if version >= RESTRICTED_VERSION {
+                    read_restricted_binding(r)?
+                } else {
+                    None
+                },
             });
         }
         for _ in 0..r.count(262144)? {
@@ -789,6 +839,20 @@ impl<B: Backend> Runtime<B> {
                 || (!thread.exited && !thread.context.valid_user_stack())
             {
                 return Err(bad);
+            }
+            if let Some(binding) = thread.restricted {
+                let vmo = valid_vmo(binding.state_vmo)?;
+                if thread.exited
+                    || vmo.size != bexos_restricted_abi::STATE_VMO_SIZE
+                    || vmo.device
+                    || vmo.bootfs
+                    || binding.vector_entry >= bexos_boot::USER_END
+                    || binding.host_context.architecture != Context::ARCHITECTURE
+                    || binding.guest_context.architecture != Context::ARCHITECTURE
+                {
+                    return Err(bad);
+                }
+                refs[binding.state_vmo] += 1;
             }
         }
         for c in self.handles.iter().flatten() {

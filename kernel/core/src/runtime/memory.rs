@@ -322,6 +322,67 @@ impl<B: Backend> Runtime<B> {
         };
         Ok(id)
     }
+
+    pub(super) fn read_vmo_object(&self, id: usize, offset: u64, out: &mut [u8]) -> Result<()> {
+        let vmo = self
+            .vmos
+            .get(id)
+            .and_then(Option::as_ref)
+            .ok_or(Status::ErrInvalidHandle)?;
+        if vmo.device
+            || offset
+                .checked_add(out.len() as u64)
+                .is_none_or(|end| end > vmo.size)
+        {
+            return Err(Status::ErrAccessDenied);
+        }
+        let mut done = 0;
+        while done < out.len() {
+            let position = offset + done as u64;
+            let page_offset = position & !(PAGE - 1);
+            let within_page = (position & (PAGE - 1)) as usize;
+            let count = (out.len() - done).min(PAGE as usize - within_page);
+            let (physical, zero) = self
+                .vmo_page_phys_read_only(id, page_offset)
+                .ok_or(Status::ErrInvalidHandle)?;
+            if zero {
+                out[done..done + count].fill(0);
+            } else {
+                self.backend
+                    .read(physical + within_page as u64, &mut out[done..done + count]);
+            }
+            done += count;
+        }
+        Ok(())
+    }
+
+    pub(super) fn write_vmo_object(&mut self, id: usize, offset: u64, bytes: &[u8]) -> Result<()> {
+        let vmo = self
+            .vmos
+            .get(id)
+            .and_then(Option::as_ref)
+            .ok_or(Status::ErrInvalidHandle)?;
+        if vmo.device
+            || offset
+                .checked_add(bytes.len() as u64)
+                .is_none_or(|end| end > vmo.size)
+        {
+            return Err(Status::ErrAccessDenied);
+        }
+        let mut done = 0;
+        while done < bytes.len() {
+            let position = offset + done as u64;
+            let page_offset = position & !(PAGE - 1);
+            let within_page = (position & (PAGE - 1)) as usize;
+            let count = (bytes.len() - done).min(PAGE as usize - within_page);
+            let (physical, _) = self.vmo_page_phys(id, page_offset, true)?;
+            self.backend
+                .write(physical + within_page as u64, &bytes[done..done + count]);
+            done += count;
+        }
+        self.changed(VMO, id);
+        Ok(())
+    }
     pub fn insert_vmar(
         &mut self,
         owner: usize,

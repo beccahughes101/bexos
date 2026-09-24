@@ -14,6 +14,7 @@ pub fn syscall_method(protocol: u64, ordinal: u64) -> Option<&'static str> {
         9 => SECURE_MONITOR_PUBLIC_METHODS,
         8 => CLOCK_PUBLIC_METHODS,
         13 => RANDOM_PUBLIC_METHODS,
+        14 => RESTRICTED_PUBLIC_METHODS,
         11 => PROFILE_PROVIDER_PUBLIC_METHODS,
         _ => return None,
     };

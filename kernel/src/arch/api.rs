@@ -9,6 +9,9 @@ pub trait ArchAPI {
     fn initialize_interrupts(cpus: u32);
     fn initialize_secondary_interrupts();
     fn program_scheduler_deadline(deadline: Option<u64>);
+    fn request_reschedule(mask: u64);
+    fn read_user_readonly_thread_pointer() -> u64;
+    fn write_user_readonly_thread_pointer(value: u64);
     fn request_system_power_state(state: kernel_fidl::SystemPowerState) -> kernel_fidl::Status;
     fn initialize_mmu(root: u64);
     fn stage_replacement(

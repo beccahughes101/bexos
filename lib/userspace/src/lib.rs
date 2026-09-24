@@ -199,6 +199,7 @@ pub mod checkpoint;
 pub mod clock;
 pub mod config;
 pub mod random;
+pub mod restricted;
 
 #[cfg(test)]
 mod startup_compat_tests;

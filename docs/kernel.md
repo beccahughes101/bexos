@@ -123,3 +123,14 @@ The kernel remains responsible for:
 - acting as the authority for low-level handles, process creation, mappings, and migration handover.
 
 Longer-term policy is deliberately kept in appd where practical.
+## Restricted execution
+
+RFC-0070 Phase 1 adds per-thread restricted execution on AArch64 and x86_64.
+Normal host and restricted guest contexts, guest SIMD/FPU state, architecture
+TLS, the retained one-page state VMO, callback vector, active state, and pending
+kick are kernel-owned thread state and are included in full and incremental
+heart-transplant snapshots. Restricted `svc`/`syscall` instructions are never
+dispatched as BexOS native syscalls. Unresolved user exceptions are reflected;
+timer/device interrupts and resolvable lazy anonymous writes stay in the
+kernel. See [RFC-0070 current state](rfcs/0070/CURRENT.md) for the ABI and the
+explicit non-Linux scope.

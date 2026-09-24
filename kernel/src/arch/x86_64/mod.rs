@@ -40,6 +40,13 @@ impl super::ArchAPI for X86_64 {
     fn program_scheduler_deadline(deadline: Option<u64>) {
         interrupts::program_scheduler_deadline(deadline)
     }
+    fn request_reschedule(mask: u64) {
+        interrupts::request_reschedule(mask)
+    }
+    fn read_user_readonly_thread_pointer() -> u64 {
+        0
+    }
+    fn write_user_readonly_thread_pointer(_value: u64) {}
     fn request_system_power_state(state: kernel_fidl::SystemPowerState) -> kernel_fidl::Status {
         power::request_system_power_state(state)
     }

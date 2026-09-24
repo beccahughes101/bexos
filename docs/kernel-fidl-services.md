@@ -13,6 +13,7 @@ The library is split across files and compiled as one Bazel target:
 - `task.fidl`: `TaskControl`.
 - `system.fidl`: `SystemPrivileged`.
 - `debug.fidl`: `KernelDebugControl`.
+- `restricted.fidl`: `Restricted` bind, enter, unbind, and asynchronous kick.
 
 `types.fidl` also defines `SystemPowerState` for the privileged power handoff.
 
@@ -109,6 +110,14 @@ handle field. Kernel code treats raw handle `0` as `None`.
 The kernel binary keeps a global control plane and dispatches generated FIDL
 calls through `svc #1`.
 
+`Restricted` is raw syscall protocol ID `14`. Its one-page, retained state VMO
+and per-thread host/guest contexts implement RFC-0070 Phase 1 on AArch64 and
+x86_64. A successful `Enter` replaces the syscall return frame; raw guest
+`svc`/`syscall` traps return through the registered non-returning vector. Kicks
+are pending for inactive threads and send a reschedule interrupt to active
+remote-CPU targets. Versioned full and incremental kernel snapshots include
+the binding, contexts, TLS, VMO reference, active state, and pending kick.
+
 `KernelDebugControl.ListProcesses` exposes bounded process debug records for
 `debugd` and host tests. In the bare-metal syscall table it is protocol id `6`;
 QEMU `debugd` uses it to populate the first `bexctl ps` response.
@@ -120,7 +129,7 @@ single generated FIDL call:
 
 ```text
 x0  protocol id: 1 ChannelControl, 2 VirtualMemory, 3 TaskControl, 4 SystemPrivileged,
-                 5 ObjectControl, 6 KernelDebugControl, 8 Clock
+                 5 ObjectControl, 6 KernelDebugControl, 8 Clock, 14 Restricted
 x1  method ordinal
 x2  request bytes pointer
 x3  request bytes length

@@ -1,7 +1,7 @@
 # RFC-0070: Linux Binary Emulation Runtime (Starnix Port), Kernel Restricted Execution Mode, and OCI Container Hosting
 
 * **Author:** BexOS Systems Architecture & Compatibility Working Group
-* **Status:** Proposed
+* **Status:** Phase 1 implemented; Phases 2–4 remain proposed. See [current state](CURRENT.md).
 * **Target Subsystems:** `kernel` (D0), `sdk/fidl/bexos.kernel`, `starnix_runner`, `pkgd`, `netstack`, `bexfs`, `vswitchd`
 * **Applicability:** Unmodified Linux Binaries, Android Runtimes, OCI Containers (Docker/Podman/Kubernetes workloads)
 

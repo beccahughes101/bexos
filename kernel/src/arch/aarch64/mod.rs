@@ -37,6 +37,21 @@ impl super::ArchAPI for Aarch64 {
     fn program_scheduler_deadline(deadline: Option<u64>) {
         interrupts::program_scheduler_deadline(deadline)
     }
+    fn request_reschedule(mask: u64) {
+        interrupts::request_reschedule(mask)
+    }
+    fn read_user_readonly_thread_pointer() -> u64 {
+        let value;
+        unsafe {
+            asm!("mrs {value:x}, tpidrro_el0", value = out(reg) value, options(nomem, nostack))
+        };
+        value
+    }
+    fn write_user_readonly_thread_pointer(value: u64) {
+        unsafe {
+            asm!("msr tpidrro_el0, {value:x}", value = in(reg) value, options(nomem, nostack))
+        };
+    }
     fn request_system_power_state(state: kernel_fidl::SystemPowerState) -> kernel_fidl::Status {
         power::request_system_power_state(state)
     }

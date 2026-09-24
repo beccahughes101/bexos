@@ -1,0 +1,65 @@
+library bexos.kernel;
+
+type RestrictedReason = strict enum : uint32 {
+    SYSCALL = 1;
+    EXCEPTION = 2;
+    KICK = 3;
+};
+
+struct X86_64RestrictedRegisters {
+    rdi uint64;
+    rsi uint64;
+    rdx uint64;
+    rcx uint64;
+    r8 uint64;
+    r9 uint64;
+    rax uint64;
+    rbx uint64;
+    rbp uint64;
+    r10 uint64;
+    r11 uint64;
+    r12 uint64;
+    r13 uint64;
+    r14 uint64;
+    r15 uint64;
+    rip uint64;
+    rsp uint64;
+    rflags uint64;
+    fs_base uint64;
+    gs_base uint64;
+};
+
+struct Aarch64RestrictedRegisters {
+    x array<uint64, 31>;
+    sp uint64;
+    pc uint64;
+    pstate uint64;
+    tpidr_el0 uint64;
+    tpidrro_el0 uint64;
+};
+
+type ArchitectureRegisters = strict union {
+    1: x86_64 X86_64RestrictedRegisters;
+    2: aarch64 Aarch64RestrictedRegisters;
+};
+
+@transport("Syscall")
+protocol Restricted {
+    1: BindState(resource struct {
+        options uint32;
+        state_vmo handle:VMO;
+    }) -> (struct { status Status; });
+
+    2: UnbindState(struct { options uint32; }) -> (struct { status Status; });
+
+    3: Enter(struct {
+        options uint32;
+        vector_entry uint64;
+        context uint64;
+    }) -> (struct { status Status; });
+
+    4: Kick(resource struct {
+        thread handle:THREAD;
+        options uint32;
+    }) -> (struct { status Status; });
+};

@@ -1,5 +1,45 @@
 # Testing Status
 
+## RFC 0070 Phase 1 restricted execution (2026-09-23)
+
+RFC 0070 Phase 1 adds the AArch64/x86_64 restricted-execution ABI, kernel trap
+reflection, asynchronous kick handling, transplant snapshot state, userspace
+bindings, and a packaged QEMU probe. The following host validation passes on
+both guest architecture configurations:
+
+```sh
+bazel run @rules_rust//:rustfmt
+bazel test //lib/restricted_abi:tests //kernel/core:core_tests \
+  //kernel/core:architecture_tests //lib/userspace:userspace_tests \
+  //tools/fidlc:fidlc_tests //testing/e2e/qemu:matrix_coverage_test
+bazel test --config=x86_64 //lib/restricted_abi:tests \
+  //kernel/core:core_tests //kernel/core:architecture_tests
+bazel build //kernel:kernel //testing/e2e/qemu/kernel/restricted:probe \
+  //idl:kernel_fidl_rust //lib/userspace:userspace
+bazel build --config=x86_64 //kernel:kernel \
+  //testing/e2e/qemu/kernel/restricted:probe //idl:kernel_fidl_rust \
+  //lib/userspace:userspace
+```
+
+The required dual-architecture QEMU command was attempted:
+
+```sh
+bazel test --config=e2e \
+  //testing/e2e/qemu/kernel/restricted:restricted_test_aarch64 \
+  //testing/e2e/qemu/kernel/restricted:restricted_test_x86_64
+```
+
+Neither guest probe result is claimed. The AArch64 image builds and boots
+through the hardware drivers and wave-6 services, but the existing product boot
+then loses its storage channels (`ErrPeerClosed`), cannot launch `timed`, and
+terminates appd before the debugd package lifecycle API can install or launch
+the restricted probe. The x86_64 target does not reach QEMU because
+`//secure/monitor:external_nucleus_product` fails to compile: its existing
+firmware-call match does not handle `firmware::Call::Resolve`. An isolated
+rebuild reproduced the same non-exhaustive-match error. These product and
+secure-monitor blockers are outside RFC 0070's restricted-execution scope and
+were not changed as part of this phase.
+
 ## Trusty completion checkpoint (2026-09-09)
 
 The 2026-09-09 Trusty completion work is recorded in

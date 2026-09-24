@@ -47,6 +47,7 @@ bexos_fidl_rust(
         "bexos/kernel/task.fidl",
         "bexos/kernel/time.fidl",
         "bexos/kernel/random.fidl",
+        "bexos/kernel/restricted.fidl",
         "bexos/kernel/system.fidl",
         "bexos/kernel/debug.fidl",
         "bexos/kernel/tracing.fidl",

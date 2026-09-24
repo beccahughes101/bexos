@@ -88,7 +88,31 @@ pub fn handle_sync_exception(esr: u64, elr: u64, frame: *mut bexos_kernel_core::
             let _ = rt.bind_current_cpu(crate::arch::CurrentArch::current_cpu_id() as u8);
         }
     });
-    if (esr >> 26) & 63 == 0x15 {
+    let restricted = crate::userspace::RUNTIME.with(|s| {
+        s.as_ref()
+            .is_some_and(|runtime| runtime.restricted_is_active())
+    });
+    if restricted && (esr >> 26) & 63 == 0x15 {
+        let frame = unsafe { &mut *frame };
+        let readonly_tls = crate::arch::CurrentArch::read_user_readonly_thread_pointer();
+        if let Some(host) = crate::userspace::RUNTIME.with(|s| {
+            s.as_mut().and_then(|runtime| {
+                runtime.restricted_capture_readonly_thread_pointer(readonly_tls);
+                runtime
+                    .restricted_exit_current(bexos_restricted_abi::Reason::Syscall, esr, 0, *frame)
+                    .ok()
+            })
+        }) {
+            *frame = host;
+            if let Some(pointer) = crate::userspace::RUNTIME.with(|s| {
+                s.as_ref()
+                    .unwrap()
+                    .restricted_current_readonly_thread_pointer()
+            }) {
+                crate::arch::CurrentArch::write_user_readonly_thread_pointer(pointer);
+            }
+        }
+    } else if (esr >> 26) & 63 == 0x15 {
         crate::syscall::dispatch(frame, (esr & 0xffff) as u32);
     } else if is_lower_el_write_fault(esr)
         && crate::userspace::RUNTIME.with(|s| {
@@ -99,6 +123,31 @@ pub fn handle_sync_exception(esr: u64, elr: u64, frame: *mut bexos_kernel_core::
         })
     {
         return;
+    } else if restricted {
+        let frame = unsafe { &mut *frame };
+        let readonly_tls = crate::arch::CurrentArch::read_user_readonly_thread_pointer();
+        if let Some(host) = crate::userspace::RUNTIME.with(|s| {
+            s.as_mut().and_then(|runtime| {
+                runtime.restricted_capture_readonly_thread_pointer(readonly_tls);
+                runtime
+                    .restricted_exit_current(
+                        bexos_restricted_abi::Reason::Exception,
+                        esr,
+                        crate::arch::CurrentArch::fault_address(),
+                        *frame,
+                    )
+                    .ok()
+            })
+        }) {
+            *frame = host;
+            if let Some(pointer) = crate::userspace::RUNTIME.with(|s| {
+                s.as_ref()
+                    .unwrap()
+                    .restricted_current_readonly_thread_pointer()
+            }) {
+                crate::arch::CurrentArch::write_user_readonly_thread_pointer(pointer);
+            }
+        }
     } else {
         bexos_trace::trace_counter!(
             bexos_trace::CATEGORY_KERNEL_SCHED,

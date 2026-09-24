@@ -8,6 +8,7 @@ E2E_PACKAGES = [
     "jobs",
     "kernel",
     "kernel/faults",
+    "kernel/restricted",
     "nvme",
     "preferences",
     "pkg",

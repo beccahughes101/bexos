@@ -1,7 +1,7 @@
 //! Typed runtime records used by both bulk copying and coalesced final deltas.
 use super::snapshot::{
-    read_context, read_context_legacy, read_profile, read_runtime_message, write_context,
-    write_profile, write_runtime_message,
+    read_context, read_context_legacy, read_profile, read_restricted_binding, read_runtime_message,
+    write_context, write_profile, write_restricted_binding, write_runtime_message,
 };
 use super::*;
 use crate::cpu_features::AsidAllocator;
@@ -12,7 +12,8 @@ use crate::transplant::{
 use bexos_migration::dirty::DirtySet;
 
 const RECORD_MAGIC: u64 = u64::from_le_bytes(*b"BEXREC02");
-const RECORD_VERSION: u64 = 2;
+const RECORD_VERSION: u64 = 3;
+const PREVIOUS_RECORD_VERSION: u64 = 2;
 
 pub const META: u8 = 0;
 pub const PROCESS: u8 = 1;
@@ -267,6 +268,7 @@ impl<B: Backend> Runtime<B> {
                 w.word(thread.blocked_futex.unwrap_or(0))?;
                 w.word(thread.blocked_wait_many as u64)?;
                 w.word(thread.exit_code as u64)?;
+                write_restricted_binding(w, thread.restricted)?;
             }
             VMAR => {
                 let vmar = self.vmars.get(index).ok_or(bad)?;
@@ -324,16 +326,19 @@ impl<B: Backend> Runtime<B> {
         let mut r = Reader::new(bytes);
         let first = r.word()?;
         let legacy = first != RECORD_MAGIC;
-        let record = if legacy {
+        let (record, record_version) = if legacy {
             if Context::ARCHITECTURE != 1 {
                 return Err(bad);
             }
-            first
+            (first, 0)
         } else {
-            if r.word()? != RECORD_VERSION || r.word()? != Context::ARCHITECTURE {
+            let version = r.word()?;
+            if (version != RECORD_VERSION && version != PREVIOUS_RECORD_VERSION)
+                || r.word()? != Context::ARCHITECTURE
+            {
                 return Err(bad);
             }
-            r.word()?
+            (r.word()?, version)
         };
         let read_saved_context = |r: &mut Reader<'_>| {
             if legacy {
@@ -573,6 +578,11 @@ impl<B: Backend> Runtime<B> {
                     },
                     blocked_wait_many: r.flag().unwrap_or(false),
                     exit_code: r.word()? as i32,
+                    restricted: if record_version >= RECORD_VERSION {
+                        read_restricted_binding(&mut r)?
+                    } else {
+                        None
+                    },
                 };
                 put(&mut self.threads, index, thread, MAX_THREADS)?;
             }

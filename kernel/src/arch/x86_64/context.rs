@@ -44,16 +44,23 @@ static TABLES: [Slot; 64] = [const {
         idt: [Gate::EMPTY; 256],
     }))
 }; 64];
+struct SyscallSlot(UnsafeCell<[u64; 2]>);
+unsafe impl Sync for SyscallSlot {}
+static SYSCALL_SLOTS: [SyscallSlot; 64] = [const { SyscallSlot(UnsafeCell::new([0; 2])) }; 64];
 unsafe extern "C" {
     static __x86_vectors: [u64; 256];
     static __boot_stacks_bottom: u8;
     fn x86_enter_context(context: *const Context) -> !;
+    fn __x86_syscall_entry();
 }
 pub fn install_exception_vectors() {
     let cpu = cpu::current_cpu_id() as usize;
     let tables = unsafe { &mut *TABLES[cpu].0.get() };
     let base = tables.tss.as_ptr() as u64;
     let stack = core::ptr::addr_of!(__boot_stacks_bottom) as u64 + (cpu as u64 + 1) * 266240;
+    let syscall_slot = unsafe { &mut *SYSCALL_SLOTS[cpu].0.get() };
+    syscall_slot[0] = stack;
+    syscall_slot[1] = 0;
     tables.tss[4..12].copy_from_slice(&stack.to_le_bytes());
     let emergency = stack - 240 * 1024;
     tables.tss[36..44].copy_from_slice(&emergency.to_le_bytes());
@@ -89,6 +96,11 @@ pub fn install_exception_vectors() {
     };
     unsafe {
         asm!("lgdt [{gdt}]", "push 8", "lea rax, [rip + 2f]", "push rax", "retfq", "2:", "mov ax, 16", "mov ds, ax", "mov es, ax", "mov ss, ax", "mov ax, 40", "ltr ax", "lidt [{idt}]", gdt = in(reg) &gdt, idt = in(reg) &idt, out("rax") _);
+        io::wrmsr(0xc000_0102, syscall_slot.as_ptr() as u64);
+        io::wrmsr(0xc000_0081, (8u64 << 32) | (0x13u64 << 48));
+        io::wrmsr(0xc000_0082, __x86_syscall_entry as *const () as u64);
+        io::wrmsr(0xc000_0084, (1 << 8) | (1 << 9) | (1 << 10));
+        io::wrmsr(0xc000_0080, io::rdmsr(0xc000_0080) | 1);
     }
 }
 pub unsafe fn enter_context(context: *const Context) -> ! {
@@ -110,7 +122,39 @@ pub extern "C" fn x86_handle_trap(frame: *mut TrapFrame, vector: u64, error: u64
     let frame = frame.cast::<Context>();
     let context = unsafe { &mut *frame };
     assert!(context.matches_current_architecture());
-    if vector == 128 && is_userspace(context) {
+    let restricted = crate::userspace::RUNTIME.with(|s| {
+        s.as_ref()
+            .is_some_and(|runtime| runtime.restricted_is_active())
+    });
+    if vector == 129 && is_userspace(context) && restricted {
+        if let Some(host) = crate::userspace::RUNTIME.with(|s| {
+            s.as_mut().and_then(|runtime| {
+                runtime
+                    .restricted_exit_current(bexos_restricted_abi::Reason::Syscall, 0, 0, *context)
+                    .ok()
+            })
+        }) {
+            *context = host;
+        }
+    } else if vector == 128 && is_userspace(context) && restricted {
+        // INT instructions report the following RIP; exception reflection
+        // exposes the instruction that caused the exit.
+        context.instruction_pointer = context.instruction_pointer.saturating_sub(2);
+        if let Some(host) = crate::userspace::RUNTIME.with(|s| {
+            s.as_mut().and_then(|runtime| {
+                runtime
+                    .restricted_exit_current(
+                        bexos_restricted_abi::Reason::Exception,
+                        (vector << 32) | error,
+                        0,
+                        *context,
+                    )
+                    .ok()
+            })
+        }) {
+            *context = host;
+        }
+    } else if vector == 128 && is_userspace(context) {
         crate::syscall::dispatch(frame, TrapFrame::view(context).rax as u32);
     } else if vector >= 32 {
         super::interrupts::dispatch(frame, vector);
@@ -122,6 +166,25 @@ pub extern "C" fn x86_handle_trap(frame: *mut TrapFrame, vector: u64, error: u64
                 .is_some_and(|rt| rt.commit_user_write_fault(fault_address()).is_ok())
         })
     {
+    } else if vector == 129 && is_userspace(context) {
+        crate::log_line("guest fault: native syscall instruction outside restricted mode");
+        crate::userspace::RUNTIME.with(|s| s.as_mut().unwrap().exit_current());
+        crate::sched::timer_tick(frame);
+    } else if is_userspace(context) && restricted {
+        if let Some(host) = crate::userspace::RUNTIME.with(|s| {
+            s.as_mut().and_then(|runtime| {
+                runtime
+                    .restricted_exit_current(
+                        bexos_restricted_abi::Reason::Exception,
+                        (vector << 32) | error,
+                        (vector == 14).then(fault_address).unwrap_or(0),
+                        *context,
+                    )
+                    .ok()
+            })
+        }) {
+            *context = host;
+        }
     } else if is_userspace(context) {
         crate::log_line(&alloc::format!(
             "guest fault vector={vector} error={error:x} pc={:x} address={:x}",

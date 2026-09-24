@@ -77,6 +77,10 @@ The kernel FIDL library is assembled from:
 - `debug.fidl`: kernel process listing and platform update status/control.
 - `tracing.fidl`: privileged kernel trace producer attach/detach operations.
 - `migration.fidl`: kernel-authorized process migration and handover operations.
+- `restricted.fidl`: protocol-ID-14 restricted state binding, non-returning
+  entry, unbind, and thread kick operations. The generated transport uses the
+  fixed no-std state-page ABI in `//lib/restricted_abi`; it is a kernel
+  execution primitive and does not implement Linux syscalls.
 
 ## App FIDL Surface
 
