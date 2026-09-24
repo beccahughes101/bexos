@@ -262,7 +262,10 @@ sh_test(
         "$(location //tools/image:vbmeta)",
         "$(location :aarch64_generation2.avbpubkey)",
     ] + ["$(location :" + name + ".fw)" for name in ARM_REPLACEMENT_FIXTURES],
-    data = ["//tools/image:vbmeta"] + [":" + name + "_replacement" for name in ARM_REPLACEMENT_FIXTURES],
+    data = [
+        "//tools/image:vbmeta",
+        ":aarch64_generation2.avbpubkey",
+    ] + [":" + name + ".fw" for name in ARM_REPLACEMENT_FIXTURES],
     timeout = "eternal",
 )
 
