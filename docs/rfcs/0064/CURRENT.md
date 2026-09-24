@@ -111,10 +111,13 @@ target checks the complete blob, credential and job inventory, reopens storage
 and restores credentials before restarting idempotent reads. Failed adoption leaves the source able to reopen its databases.
 
 Appd queues configured driver and firmware mappings through package acquisition.
-Driver packages enter the existing binding and driver policy checks. Firmware
-currently uses process-free library archives; hardware-specific firmware
-activation still needs acceptance coverage. Caller disconnection cancels pending
-interactive app installation.
+Driver mappings may include bounded PCI BDF, vendor/device and class selectors;
+selection is exact BDF, then vendor/device, then class, with priority inside a
+tier. The waiting canonical identity is retained and the downloaded driver's
+manifest must match it before installation and rebind. Driver packages enter the
+existing binding and driver policy checks. Firmware currently uses process-free
+library archives; hardware-specific firmware activation still needs acceptance
+coverage. Caller disconnection cancels pending interactive app installation.
 
 Fontd queues configured remote misses only with `allow_network_fetch=true`;
 local matching retains priority. Known remote digests can use pkgd's cache.

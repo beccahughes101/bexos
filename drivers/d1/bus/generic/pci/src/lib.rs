@@ -1,7 +1,7 @@
 #![no_std]
 extern crate alloc;
-use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{format, string::String, vec};
 mod bridge;
 pub use bridge::{ECAM_SIZE, MAX_BUSES, RootPort};
 
@@ -46,6 +46,7 @@ pub struct DeviceProperty {
 pub struct DeviceNodeInfo {
     pub node_id: u64,
     pub bus: BusType,
+    pub topological_path: String,
     pub properties: Vec<DeviceProperty>,
     pub bars: Vec<BarAssignment>,
 }
@@ -141,6 +142,16 @@ impl RootBusConfig {
             mmio_limit: QEMU_VIRT_PCI_MMIO_LIMIT,
         }
     }
+
+    pub const fn new(mmio_base: u64, mmio_limit: u64) -> Result<Self, PciError> {
+        if mmio_base == 0 || mmio_base >= mmio_limit || mmio_base & 0xfff != 0 {
+            return Err(PciError::ConfigAccess);
+        }
+        Ok(Self {
+            mmio_base,
+            mmio_limit,
+        })
+    }
 }
 
 pub struct PciRootBus<C> {
@@ -175,6 +186,11 @@ impl<C: ConfigSpace> PciRootBus<C> {
     pub fn enumerate_bus0(&mut self) -> Result<Vec<DeviceNodeInfo>, PciError> {
         self.discover_bus0()?
             .into_iter()
+            // DeviceRegistry reserves zero as the absent-parent sentinel.  The
+            // root-complex function conventionally occupies 0000:00:00.0 and
+            // remains discoverable for bridge configuration, but is not a
+            // bindable child device.
+            .filter(|device| node_id(device.address) != 0)
             .map(|device| self.initialize_device(device))
             .collect()
     }
@@ -240,10 +256,17 @@ impl<C: ConfigSpace> PciRootBus<C> {
         let command = self.config.read16(address, REG_COMMAND)?;
         self.config.write16(address, REG_COMMAND, command & !6)?;
         let cursor = self.next_mmio_base;
-        match self.assign_memory_bars(device).and_then(|bars| {
-            self.enable_memory_bus_master(device)?;
-            Ok(device_node(device, bars))
-        }) {
+        match self
+            .assign_memory_bars(device)
+            .and_then(|bars| {
+                // Decoding the assigned BARs is safe before a driver binds, but
+                // DMA remains disabled until appd commits the binding through
+                // PciDeviceControl.
+                let command = command_with_memory_and_bus_master(command) & !(1 << 2);
+                self.config.write16(address, REG_COMMAND, command)?;
+                Ok(device_node(device, bars))
+            })
+        {
             Ok(node) => Ok(node),
             Err(error) => {
                 self.next_mmio_base = cursor;
@@ -347,13 +370,27 @@ impl<C: ConfigSpace> PciRootBus<C> {
         Ok(())
     }
 
-    fn enable_memory_bus_master(&mut self, device: PciDevice) -> Result<(), PciError> {
-        let command = self.config.read16(device.address, REG_COMMAND)?;
-        self.config.write16(
-            device.address,
-            REG_COMMAND,
-            command_with_memory_and_bus_master(command),
-        )
+    /// Bus mastering is committed only after appd has retained every recovery
+    /// endpoint and marked the node active.
+    pub fn set_bus_master(&mut self, address: PciAddress, enabled: bool) -> Result<(), PciError> {
+        let command = self.config.read16(address, REG_COMMAND)?;
+        let next = if enabled {
+            command_with_memory_and_bus_master(command)
+        } else {
+            command & !(1 << 2)
+        };
+        self.config.write16(address, REG_COMMAND, next)
+    }
+
+    pub fn reset_device(&mut self, address: PciAddress) -> Result<(), PciError> {
+        let command = self.config.read16(address, REG_COMMAND)?;
+        self.config.write16(address, REG_COMMAND, command & !0x7)
+    }
+
+    pub fn resume_device(&mut self, address: PciAddress) -> Result<(), PciError> {
+        let command = self.config.read16(address, REG_COMMAND)?;
+        self.config
+            .write16(address, REG_COMMAND, command | (1 << 1))
     }
 }
 
@@ -361,7 +398,15 @@ pub fn device_node(device: PciDevice, bars: Vec<BarAssignment>) -> DeviceNodeInf
     DeviceNodeInfo {
         node_id: node_id(device.address),
         bus: BusType::Pci,
+        topological_path: format!(
+            "pci/0000:{:02x}:{:02x}.{}",
+            device.address.bus, device.address.device, device.address.function
+        ),
         properties: vec![
+            DeviceProperty {
+                key: "pci.segment",
+                value: 0,
+            },
             DeviceProperty {
                 key: "pci.bus",
                 value: device.address.bus as u32,

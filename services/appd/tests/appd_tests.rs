@@ -934,6 +934,7 @@ fn manifest_decoder_reads_driver_info_and_bind_rules() {
             name: "nvme_d1_driver".to_string(),
             package_id: "bexos.driver.storage.nvme".to_string(),
             version: "1.2.0".to_string(),
+            ..Default::default()
         })
     );
     assert_eq!(manifest.bind_rules.len(), 1);
@@ -1434,6 +1435,7 @@ fn device_registry_wire_request_round_trips_nested_resource_handles() {
             bus: BusType::Pci,
             has_parent: false,
             parent_node_id: 0,
+            topological_path: "pci/0000:00:00.0",
             properties: WireVector::from_slice(&properties),
         },
         resources: WireVector::from_slice(&resources),
@@ -1481,6 +1483,11 @@ fn device_registry_wire_request_accepts_i2c_and_spi_bus_types() {
                 bus: wire_bus,
                 has_parent: false,
                 parent_node_id: 0,
+                topological_path: if wire_bus == WireBusType::I2c {
+                    "i2c/controller-701"
+                } else {
+                    "spi/controller-702"
+                },
                 properties: WireVector::from_slice(&properties),
             },
             resources: WireVector::from_slice(&resources),
@@ -1500,6 +1507,7 @@ fn device_registry_wire_request_accepts_i2c_and_spi_bus_types() {
                     node_id: decoded.info.node_id,
                     bus: expected_bus,
                     parent_node_id: None,
+                    topological_path: decoded.info.topological_path.to_string(),
                     properties: vec![DeviceProperty {
                         key: decoded.info.properties.get(0).unwrap().key.to_string(),
                         value: decoded.info.properties.get(0).unwrap().value,
@@ -1668,6 +1676,7 @@ fn driver_index_matches_i2c_and_spi_bind_rules() {
             node_id: 4097,
             bus: BusType::I2c,
             parent_node_id: Some(4096),
+            topological_path: "i2c/controller-4096/device-4097".to_string(),
             properties: vec![DeviceProperty {
                 key: "i2c.address".to_string(),
                 value: 0x48,
@@ -1685,6 +1694,7 @@ fn driver_index_matches_i2c_and_spi_bind_rules() {
             node_id: 8194,
             bus: BusType::Spi,
             parent_node_id: Some(8192),
+            topological_path: "spi/controller-8192/device-8194".to_string(),
             properties: vec![DeviceProperty {
                 key: "spi.chip_select".to_string(),
                 value: 1,
@@ -1732,6 +1742,7 @@ fn driver_index_returns_no_candidate_for_nonmatching_properties() {
             node_id: 9,
             bus: BusType::Usb,
             parent_node_id: None,
+            topological_path: "usb/device-9".to_string(),
             properties: vec![DeviceProperty {
                 key: "usb.vendor_id".to_string(),
                 value: 0x0bda,
@@ -1775,6 +1786,7 @@ fn device_registry_validates_topology_resources_and_authorization() {
                 node_id: 2,
                 bus: BusType::Pci,
                 parent_node_id: Some(1),
+                topological_path: "pci/1/2".to_string(),
                 properties: vec![
                     DeviceProperty {
                         key: "pci.vendor_id".to_string(),
@@ -1803,6 +1815,7 @@ fn device_registry_validates_topology_resources_and_authorization() {
                 node_id: 3,
                 bus: BusType::Pci,
                 parent_node_id: Some(1),
+                topological_path: "pci/1/3".to_string(),
                 properties: vec![DeviceProperty {
                     key: "pci.vendor_id".to_string(),
                     value: 1,
@@ -1862,8 +1875,10 @@ fn device_registry_unregisters_descendants_before_parent() {
     registry
         .register_device_node(child_device_node(2, 1))
         .expect("child node");
+    let mut grandchild = child_device_node(3, 2);
+    grandchild.info.topological_path = "pci/1/2/3".to_string();
     registry
-        .register_device_node(child_device_node(3, 2))
+        .register_device_node(grandchild)
         .expect("grandchild node");
 
     let removed = registry
@@ -4264,7 +4279,10 @@ fn launch_manifest() -> Manifest {
                 path: "/pkg/bin/camera_service".to_string(),
             })),
             wave: Some(1),
-            lifecycle: Default::default(),
+            lifecycle: bexos_appd::ProcessLifecycle {
+                update_strategy: bexos_appd::UpdateStrategy::HeartTransplant,
+                ..Default::default()
+            },
             resource_group: None,
             shell_role: Default::default(),
             handles: Vec::new(),
@@ -4476,6 +4494,7 @@ fn nvme_driver_manifest(package_name: &str, wave: u32, vendor_specific: bool) ->
             name: "nvme_driver".to_string(),
             package_id: package_name.to_string(),
             version: "1.0.0".to_string(),
+            ..Default::default()
         }),
         bind_rules: vec![BindRule {
             conditions: vec![BindCondition {
@@ -4519,7 +4538,10 @@ fn peripheral_driver_manifest(
                 path: "/pkg/bin/peripheral_driver".to_string(),
             })),
             wave: Some(3),
-            lifecycle: Default::default(),
+            lifecycle: bexos_appd::ProcessLifecycle {
+                update_strategy: bexos_appd::UpdateStrategy::HeartTransplant,
+                ..Default::default()
+            },
             resource_group: None,
             shell_role: Default::default(),
             handles: Vec::new(),
@@ -4532,6 +4554,7 @@ fn peripheral_driver_manifest(
             name: "peripheral_driver".to_string(),
             package_id: package_name.to_string(),
             version: "1.0.0".to_string(),
+            ..Default::default()
         }),
         bind_rules: vec![BindRule {
             conditions: vec![BindCondition {
@@ -4572,6 +4595,7 @@ fn nvme_device_node(node_id: u64) -> RegisteredDeviceNode {
             node_id,
             bus: BusType::Pci,
             parent_node_id: None,
+            topological_path: format!("pci/{node_id}"),
             properties: vec![
                 DeviceProperty {
                     key: "pci.vendor_id".to_string(),
@@ -4623,6 +4647,7 @@ fn child_device_node(node_id: u64, parent_node_id: u64) -> RegisteredDeviceNode 
             node_id,
             bus: BusType::Pci,
             parent_node_id: Some(parent_node_id),
+            topological_path: format!("pci/{parent_node_id}/{node_id}"),
             properties: vec![DeviceProperty {
                 key: "pci.vendor_id".to_string(),
                 value: node_id as u32,

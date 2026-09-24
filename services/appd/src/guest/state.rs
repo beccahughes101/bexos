@@ -47,6 +47,7 @@ pub const LAZY_STATE_KEY: u64 = 13;
 const MAX_MANAGED_RUNTIME_ENTRIES: usize = 48;
 const MAX_COMPONENT_CONFIG_RECORDS: usize = 256;
 const DEVICE_RECORD_MAGIC_V2: u64 = 0x4452_5632;
+const DEVICE_RECORD_MAGIC_V3: u64 = 0x4452_5633;
 
 #[derive(Clone)]
 pub struct ManagedService {
@@ -983,7 +984,7 @@ impl State for AppdState {
             }
             3 => {
                 let mut w = Encoder::new();
-                w.word(DEVICE_RECORD_MAGIC_V2);
+                w.word(DEVICE_RECORD_MAGIC_V3);
                 w.word(self.devices.nodes().len() as u64);
                 for node in self.devices.nodes() {
                     w.word(node.info.node_id);
@@ -1004,6 +1005,7 @@ impl State for AppdState {
                             w.word(0);
                         }
                     }
+                    w.text(&node.info.topological_path);
                     w.word(node.info.properties.len() as u64);
                     for property in &node.info.properties {
                         w.text(&property.key);
@@ -1278,7 +1280,9 @@ impl State for AppdState {
                 let mut r = Decoder::new(bytes);
                 let mut devices = crate::DeviceRegistry::new();
                 let first = r.word()?;
-                let (version, count) = if first == DEVICE_RECORD_MAGIC_V2 {
+                let (version, count) = if first == DEVICE_RECORD_MAGIC_V3 {
+                    (3, r.count(1024)?)
+                } else if first == DEVICE_RECORD_MAGIC_V2 {
                     (2, r.count(1024)?)
                 } else {
                     (1, usize::try_from(first).map_err(|_| Error::InvalidData)?)
@@ -1302,6 +1306,19 @@ impl State for AppdState {
                         }
                     } else {
                         None
+                    };
+                    let topological_path = if version >= 3 {
+                        r.text(256)?.to_string()
+                    } else if let Some(parent) = parent_node_id {
+                        let parent_path = devices
+                            .nodes()
+                            .iter()
+                            .find(|node| node.info.node_id == parent)
+                            .map(|node| node.info.topological_path.as_str())
+                            .ok_or(Error::InvalidData)?;
+                        alloc::format!("{parent_path}/legacy-{node_id}")
+                    } else {
+                        alloc::format!("legacy-{node_id}")
                     };
                     let mut properties = Vec::new();
                     for _ in 0..r.count(64)? {
@@ -1385,6 +1402,7 @@ impl State for AppdState {
                                 node_id,
                                 bus,
                                 parent_node_id,
+                                topological_path,
                                 properties,
                             },
                             resources,

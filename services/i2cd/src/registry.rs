@@ -14,12 +14,14 @@ pub fn register_controller(
     controller: &ControllerConfig,
 ) -> hardware_manager_fidl::Status {
     let properties = properties(&controller.properties);
+    let topological_path = alloc::format!("i2c/controller-{}", controller.node_id);
     let request = DeviceRegistryRegisterDeviceNodeRequest {
         info: DeviceNodeInfo {
             node_id: controller.node_id,
             bus: hardware_bus(controller.bus),
             has_parent: false,
             parent_node_id: 0,
+            topological_path: &topological_path,
             properties: WireVector::from_slice(&properties),
         },
         resources: WireVector::from_slice(&[]),
@@ -34,6 +36,10 @@ pub fn register_peripheral(
     endpoint: u64,
 ) -> hardware_manager_fidl::Status {
     let properties = properties(&peripheral.properties);
+    let topological_path = alloc::format!(
+        "i2c/controller-{controller_node_id}/device-{}",
+        peripheral.node_id
+    );
     let resources = [HardwareResource {
         kind: HardwareResourceKind::BusControl,
         resource_id: peripheral.node_id,
@@ -48,6 +54,7 @@ pub fn register_peripheral(
             bus: hardware_manager_fidl::BusType::I2c,
             has_parent: true,
             parent_node_id: controller_node_id,
+            topological_path: &topological_path,
             properties: WireVector::from_slice(&properties),
         },
         resources: WireVector::from_slice(&resources),

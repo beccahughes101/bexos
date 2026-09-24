@@ -5,6 +5,9 @@ pub struct Tables {
     pub ioapic: u64,
     pub hpet: u64,
     pub ecam: u64,
+    pub pci_segment: u16,
+    pub pci_bus_start: u8,
+    pub pci_bus_end: u8,
     pub ids: [u8; 64],
     pub count: usize,
 }
@@ -36,6 +39,9 @@ pub fn discover() -> Tables {
         ioapic: 0,
         hpet: 0,
         ecam: 0,
+        pci_segment: 0,
+        pci_bus_start: 0,
+        pci_bus_end: 0,
         ids: [0; 64],
         count: 0,
     };
@@ -79,8 +85,15 @@ pub fn discover() -> Tables {
                 }
             }
             b"MCFG" => {
-                assert!(t.len() >= 60 && t[52..55] == [0, 0, 0]);
+                assert!(t.len() >= 60);
                 out.ecam = u64::from_le_bytes(t[44..52].try_into().unwrap());
+                out.pci_segment = u16::from_le_bytes(t[52..54].try_into().unwrap());
+                out.pci_bus_start = t[54];
+                out.pci_bus_end = t[55];
+                assert!(
+                    out.pci_bus_start <= out.pci_bus_end && out.ecam & 0xfff_ffff == 0,
+                    "invalid ACPI MCFG allocation"
+                );
             }
             b"HPET" => {
                 assert!(t.len() >= 56 && t[40] == 0);

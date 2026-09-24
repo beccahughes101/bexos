@@ -11,6 +11,8 @@ packages { label: "//services/usbd:usbd" package_id: "bexos.service.usbd" placem
 packages { label: "//drivers/d1/input/usb_hid:usb_hid" package_id: "bexos.driver.input.usb_hid" placement: BOOTFS }
 packages { label: "//drivers/d1/storage/usb/bot:usb_bot" package_id: "bexos.driver.storage.usb_bot" placement: BOOTFS }
 packages { label: "//drivers/d1/nic/virtio/net:virtio_net_driver" package_id: "bexos.driver.network.virtio_net" placement: SYSTEM_IMAGE }
+packages { label: "//drivers/d1/nic/intel/e1000e:e1000e_driver" package_id: "bexos.driver.network.e1000e" placement: SYSTEM_IMAGE }
+packages { label: "//drivers/d1/nic/intel/igb:igb_driver" package_id: "bexos.driver.network.igb" placement: SYSTEM_IMAGE }
 packages { label: "//drivers/d1/serial/virtio/console:virtio_console_driver" package_id: "bexos.driver.serial.virtio_console" placement: BOOTFS }
 
 # Runtime verification payloads; launched explicitly by the QEMU tests.

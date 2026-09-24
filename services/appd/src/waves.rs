@@ -398,9 +398,11 @@ impl AppdWaveOrchestrator {
                 DeviceNodeState::Unbound | DeviceNodeState::BindFailed { .. } => {}
                 _ => continue,
             }
-            let Some(candidate) = driver_index.best_match(&node.info, driver_policy, |manifest| {
-                identity_for_manifest(manifest)
-            }) else {
+            let Some(candidate) =
+                driver_index.best_match_for_registered(&node, driver_policy, |manifest| {
+                    identity_for_manifest(manifest)
+                })
+            else {
                 continue;
             };
             if candidate.process.wave.is_some_and(|wave| wave > max_wave) {

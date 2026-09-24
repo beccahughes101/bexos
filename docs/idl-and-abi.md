@@ -258,7 +258,8 @@ structured D1 `DriverResource` records plus an internal driver-lifecycle channel
 and now carries initial incoming lazy-service bindings with their descriptors,
 lazy idle timeout, and lazy generation metadata. Generic `resources` remains
 available for non-driver roles. Userspace decoding remains compatible with
-startup ABI v2-v8.
+startup ABI v2-v11. Decoders for v6-v10 are frozen; v11 appends retained
+driver-host controller and recovery handles without changing older layouts.
 
 `bexos.app.manifest.ExposedService` includes the current lazy-service manifest
 ABI: `activation` defaults to `EAGER`, `idle_timeout_ms` is optional and defaults

@@ -38,6 +38,12 @@ reschedule IPIs. Userspace uses the baseline SSE2 ABI and FXSAVE/FXRSTOR, with
 Variant II TLS addressed through FS. AVX and unsupported extended vector
 state are not enabled.
 
+The validated MCFG segment and bus range are now exposed to the PCI root through
+the architecture API together with the board MMIO aperture. Runtime enumeration
+uses those values rather than a QEMU-only root-bus constant. This has source and
+host-build coverage only until the RFC 67 dual-architecture acceptance target
+passes.
+
 ## Products and commands
 
 The explicit `virtual_x86_64_development_product_assembly` selects the

@@ -35,6 +35,7 @@ driver_policy {
   tier_1_allowlist { package_id: "bexos.driver.uart.pl011" expected_signer: "bexos_official_platform_v1" }
   tier_1_allowlist { package_id: "bexos.driver.rtc.pl031" expected_signer: "bexos_official_platform_v1" }
   tier_1_allowlist { package_id: "bexos.driver.pci_root" expected_signer: "bexos_official_platform_v1" }
+  tier_1_allowlist { package_id: "bexos.driver.serial.virtio_console" expected_signer: "bexos_official_platform_v1" }
   tier_1_allowlist { package_id: "bexos.driver.storage.nvme" expected_signer: "bexos_official_platform_v1" }
   tier_1_allowlist { package_id: "bexos.driver.storage.bexfs" expected_signer: "bexos_official_platform_v1" }
   tier_1_allowlist { package_id: "bexos.driver.storage.user_bexfs" expected_signer: "bexos_official_platform_v1" }
@@ -43,6 +44,8 @@ driver_policy {
   tier_1_allowlist { package_id: "bexos.driver.storage.diskimage" expected_signer: "bexos_official_platform_v1" }
   tier_1_allowlist { package_id: "bexos.driver.debugd" expected_signer: "bexos_official_platform_v1" }
   tier_1_allowlist { package_id: "bexos.driver.network.virtio_net" expected_signer: "bexos_official_platform_v1" }
+  tier_1_allowlist { package_id: "bexos.driver.network.e1000e" expected_signer: "bexos_official_platform_v1" }
+  tier_1_allowlist { package_id: "bexos.driver.network.igb" expected_signer: "bexos_official_platform_v1" }
   tier_1_allowlist { package_id: "bexos.driver.display.virtio_gpu" expected_signer: "bexos_official_platform_v1" }
   tier_1_allowlist { package_id: "bexos.service.updated" expected_signer: "bexos_official_platform_v1" }
   tier_1_allowlist { package_id: "bexos.service.powerd" expected_signer: "bexos_official_platform_v1" }

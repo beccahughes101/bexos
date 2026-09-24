@@ -154,6 +154,13 @@ pub fn dispatch(frame: *mut Context, number: u32) {
             };
             f.syscall_words_mut()[0] = result.err().map_or(0, |status| status as i32 as u64);
         }),
+        13 => f.syscall_words_mut()[0] = u64::from(crate::arch::CurrentArch::pci_segment()),
+        14 => {
+            let (start, end) = crate::arch::CurrentArch::pci_bus_range();
+            f.syscall_words_mut()[0] = u64::from(start) | (u64::from(end) << 8);
+        }
+        15 => f.syscall_words_mut()[0] = crate::arch::CurrentArch::pci_mmio_window().0,
+        16 => f.syscall_words_mut()[0] = crate::arch::CurrentArch::pci_mmio_window().1,
         _ => f.syscall_words_mut()[0] = Status::ErrInvalidArgs as i32 as u64,
     }
     let should_reschedule = number == 1
@@ -719,6 +726,42 @@ fn route(
                 status: status(&r),
                 thread_handle: h(r.unwrap_or(0))
             })
+        }
+        (4, Some("BindInterrupt")) => {
+            let q = decode!(SystemPrivilegedBindInterruptRequest);
+            let mut r = rt.bind_interrupt(q.irq_number, q.flags);
+            if let Ok(handle) = r
+                && !crate::arch::CurrentArch::configure_interrupt(q.irq_number, q.flags)
+            {
+                let _ = rt.close(handle);
+                r = Err(Status::ErrInvalidArgs);
+            }
+            reply!(SystemPrivilegedBindInterruptResponse {
+                status: status(&r),
+                irq_handle: h(r.unwrap_or(0))
+            })
+        }
+        (4, Some("AcknowledgeInterrupt")) => {
+            let q = decode!(SystemPrivilegedAcknowledgeInterruptRequest);
+            let r = rt
+                .acknowledge_interrupt(q.irq_handle.raw)
+                .and_then(|(irq, masked)| {
+                crate::arch::CurrentArch::mask_interrupt(irq, masked)
+                    .then_some(())
+                    .ok_or(Status::ErrInvalidArgs)
+            });
+            reply!(SystemPrivilegedAcknowledgeInterruptResponse { status: status(&r) })
+        }
+        (4, Some("MaskInterrupt")) => {
+            let q = decode!(SystemPrivilegedMaskInterruptRequest);
+            let r = rt
+                .mask_interrupt(q.irq_handle.raw, q.masked)
+                .and_then(|(irq, masked)| {
+                crate::arch::CurrentArch::mask_interrupt(irq, masked)
+                    .then_some(())
+                    .ok_or(Status::ErrInvalidArgs)
+            });
+            reply!(SystemPrivilegedMaskInterruptResponse { status: status(&r) })
         }
         (4, Some("RequestSystemPowerState")) => {
             let q = decode!(SystemPrivilegedRequestSystemPowerStateRequest);

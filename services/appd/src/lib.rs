@@ -71,12 +71,13 @@ pub use manager::{
 pub use manifest::{
     AnyRunnerOptions, BindBusType, BindCondition, BindProperty, BindRule, CapabilityMetadata,
     ComponentConfigField, ComponentConfigSchema, ComponentConfigType, ComponentConfigValue,
-    ConsumedCapability, ConsumedService, DEFAULT_LAZY_IDLE_TIMEOUT_MS, DriverInfo,
+    ConsumedCapability, ConsumedService, DEFAULT_LAZY_IDLE_TIMEOUT_MS, DriverColocationPolicy,
+    DriverExecution, DriverHardwareResourceKind, DriverInfo, DriverRestartStrategy,
     ElfRunnerOptions, ExposedService, IntentFilter, JobDefinition, JobNetworkConstraint,
     LibraryDependency, LibraryExport, LibraryExportKind, Lifecycle, Link, LinkType, Manifest,
     ManifestError, Metadata, MethodDependency, PackageKind, Process, ProcessLifecycle,
-    ProcessRunnerOptions, ResourceGroup, ServiceActivation, SharedVault, SharedVaultAccess,
-    UpdateStrategy, Visibility,
+    ProcessRunnerOptions, RequiredHardwareResource, ResourceGroup, ServiceActivation, SharedVault,
+    SharedVaultAccess, UpdateStrategy, Visibility,
 };
 pub use namespace::{
     DependencyNamespaceEntry, NamespaceEntry, NamespaceError, SYSTEM_UID,

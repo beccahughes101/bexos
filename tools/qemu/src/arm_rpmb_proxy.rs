@@ -107,14 +107,14 @@ fn connect(path: &Path, stop: &AtomicBool) -> Result<UnixStream, String> {
 }
 
 fn bridge(frontend: UnixStream, backend: UnixStream, stop: &AtomicBool) -> Result<(), String> {
-    frontend
-        .set_read_timeout(Some(Duration::from_millis(100)))
-        .map_err(|e| e.to_string())?;
-    backend
-        .set_read_timeout(Some(Duration::from_millis(100)))
-        .map_err(|e| e.to_string())?;
-    let mut frontend_reader = frontend.try_clone().map_err(|e| e.to_string())?;
-    let mut backend_writer = backend.try_clone().map_err(|e| e.to_string())?;
+    configure_read_polling(&frontend, "frontend")?;
+    configure_read_polling(&backend, "backend")?;
+    let mut frontend_reader = frontend
+        .try_clone()
+        .map_err(|e| format!("clone frontend RPMB stream: {e}"))?;
+    let mut backend_writer = backend
+        .try_clone()
+        .map_err(|e| format!("clone backend RPMB stream: {e}"))?;
     let direction_done = Arc::new(AtomicBool::new(false));
     let writer_done = direction_done.clone();
     let writer = thread::spawn(move || {
@@ -137,6 +137,19 @@ fn bridge(frontend: UnixStream, backend: UnixStream, stop: &AtomicBool) -> Resul
     Ok(())
 }
 
+fn configure_read_polling(stream: &UnixStream, name: &str) -> Result<(), String> {
+    match stream.set_read_timeout(Some(Duration::from_millis(100))) {
+        Ok(()) => Ok(()),
+        // Darwin rejects SO_RCVTIMEO for the QEMU chardev socket. Nonblocking
+        // mode provides the same bounded cancellation point; writes below
+        // explicitly retry WouldBlock because cloned streams share this flag.
+        Err(error) if error.kind() == ErrorKind::InvalidInput => stream
+            .set_nonblocking(true)
+            .map_err(|e| format!("set {name} RPMB stream nonblocking: {e}")),
+        Err(error) => Err(format!("set {name} RPMB read timeout: {error}")),
+    }
+}
+
 fn pump(reader: &mut UnixStream, writer: &mut UnixStream, done: &AtomicBool) -> Result<(), String> {
     let never_stop = AtomicBool::new(false);
     pump_until(reader, writer, &never_stop, done)
@@ -152,15 +165,33 @@ fn pump_until(
     while !stop.load(Ordering::Acquire) && !done.load(Ordering::Acquire) {
         match reader.read(&mut buffer) {
             Ok(0) => break,
-            Ok(count) => writer
-                .write_all(&buffer[..count])
-                .map_err(|e| format!("write RPMB relay: {e}"))?,
+            Ok(count) => write_all_polling(writer, &buffer[..count], stop, done)?,
             Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
             // Darwin reports EINVAL when a peer disappears while another
             // thread is shutting down the cloned UnixStream.  At that point
             // the direction is at EOF for relay purposes.
             Err(error) if error.kind() == ErrorKind::InvalidInput => break,
             Err(error) => return Err(format!("read RPMB relay: {error}")),
+        }
+    }
+    Ok(())
+}
+
+fn write_all_polling(
+    writer: &mut UnixStream,
+    bytes: &[u8],
+    stop: &AtomicBool,
+    done: &AtomicBool,
+) -> Result<(), String> {
+    let mut written = 0;
+    while written < bytes.len() && !stop.load(Ordering::Acquire) && !done.load(Ordering::Acquire) {
+        match writer.write(&bytes[written..]) {
+            Ok(0) => return Err("write RPMB relay: peer closed".into()),
+            Ok(count) => written += count,
+            Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) => return Err(format!("write RPMB relay: {error}")),
         }
     }
     Ok(())

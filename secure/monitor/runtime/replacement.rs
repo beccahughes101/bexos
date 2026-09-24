@@ -252,6 +252,10 @@ pub unsafe fn request(
                 Ok(protocol::APPLYING)
             }
         }
+        // Durable resolution is owned by the resident activation path.  An
+        // external nucleus cannot safely infer whether a timed-out protected
+        // write committed, so it must fail closed instead of replaying it.
+        Call::Resolve { .. } => Err(Status::Unsupported),
         Call::Query { .. } => Err(Status::Unsupported),
         Call::Begin { .. } => Err(Status::InvalidArgs),
     }

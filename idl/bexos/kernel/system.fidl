@@ -146,6 +146,24 @@ protocol SystemPrivileged {
         irq_handle handle:INTERRUPT
     });
 
+    /// Complete one-shot interrupt handling and unmask the vector.
+    @permission("BEXOS_SYSTEM_PRIVILEGED")
+    AcknowledgeInterrupt(resource struct {
+        irq_handle handle:INTERRUPT;
+    }) -> (struct {
+        status Status;
+    });
+
+    /// Explicitly mask or unmask a bound vector. Unmask is rejected while an
+    /// acknowledgement is outstanding.
+    @permission("BEXOS_SYSTEM_PRIVILEGED")
+    MaskInterrupt(resource struct {
+        irq_handle handle:INTERRUPT;
+        masked bool;
+    }) -> (struct {
+        status Status;
+    });
+
     /// Heart Transplant: Freeze address spaces and serialize capability graph
     @permission("BEXOS_SYSTEM_PRIVILEGED")
     CheckpointSystemState(resource struct {

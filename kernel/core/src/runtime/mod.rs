@@ -32,6 +32,7 @@ pub const CHANNEL_RIGHTS: u32 = READ | WRITE | TRANSFER | DUPLICATE;
 pub const IN_TRANSIT: usize = usize::MAX;
 pub const MAX_PROCESSES: usize = 48;
 pub const MAX_THREADS: usize = 256;
+pub const DEFAULT_INTERRUPT_FLOOD_LIMIT_PER_SECOND: u32 = 100_000;
 
 mod context;
 pub use context::Context;
@@ -47,6 +48,7 @@ pub enum Object {
     Profile(usize),
     ReplyToken(usize, usize, u64),
     IommuDomain(usize),
+    Interrupt(usize),
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Capability {
@@ -132,6 +134,23 @@ pub struct Thread {
     pub blocked_wait_many: bool,
     pub exit_code: i32,
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Interrupt {
+    pub irq_number: u32,
+    pub flags: u32,
+    pub masked: bool,
+    pub awaiting_ack: bool,
+    pub window_started_ns: u64,
+    pub events_in_window: u32,
+    pub flood_limit_per_second: u32,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InterruptDelivery {
+    Signaled,
+    FloodLimited,
+    Masked,
+    NotBound,
+}
 pub struct Runtime<B: Backend> {
     pub handover: Option<handover::Handover>,
     dirty: Option<bexos_migration::dirty::DirtySet>,
@@ -154,6 +173,7 @@ pub struct Runtime<B: Backend> {
     pub pins: Vec<Option<(usize, usize)>>,
     pub iommu_domains: Vec<Option<IommuDomain>>,
     pub dma_mappings: Vec<Option<DmaMapping>>,
+    pub interrupts: Vec<Option<Interrupt>>,
     asids: AsidAllocator,
     pub bootfs_pages: u64,
     pub reclaimed_pages: u64,
@@ -185,6 +205,7 @@ impl<B: Backend> Runtime<B> {
             pins: Vec::new(),
             iommu_domains: Vec::new(),
             dma_mappings: Vec::new(),
+            interrupts: Vec::new(),
             asids: AsidAllocator::disabled(),
             bootfs_pages: 0,
             reclaimed_pages: 0,
@@ -268,6 +289,7 @@ impl<B: Backend> Runtime<B> {
             Object::Profile(id) => self.changed(PROFILE, id),
             Object::ReplyToken(id, _, _) => self.changed(CHANNEL, id),
             Object::IommuDomain(_) => {}
+            Object::Interrupt(id) => self.changed(incremental::INTERRUPT, id),
             _ => {}
         }
         match object {
@@ -318,6 +340,12 @@ impl<B: Backend> Runtime<B> {
             Object::Vmo(id) => self.release_vmo(id),
             Object::Vmar(id) => self.release_vmar(id),
             Object::IommuDomain(id) => self.release_iommu_domain(id),
+            Object::Interrupt(id) => {
+                if let Some(slot) = self.interrupts.get_mut(id) {
+                    *slot = None;
+                }
+                self.changed(incremental::INTERRUPT, id);
+            }
             Object::Channel(id, end) => {
                 self.changed(CHANNEL, id);
                 self.channels[id].refs[end] -= 1;
@@ -751,6 +779,136 @@ impl<B: Backend> Runtime<B> {
         })
     }
 
+    pub fn bind_interrupt(&mut self, irq_number: u32, flags: u32) -> Result<u64> {
+        if self.processes[self.current].hardware != 2
+            || self.processes[self.current].quarantined
+        {
+            return Err(Status::ErrAccessDenied);
+        }
+        if self.interrupts.iter().flatten().any(|interrupt| {
+            interrupt.irq_number == irq_number && (interrupt.flags & 1 == 0 || flags & 1 == 0)
+        }) {
+            return Err(Status::ErrAlreadyExists);
+        }
+        let id = self
+            .interrupts
+            .iter()
+            .position(Option::is_none)
+            .unwrap_or(self.interrupts.len());
+        let interrupt = Some(Interrupt {
+            irq_number,
+            flags,
+            masked: false,
+            awaiting_ack: false,
+            window_started_ns: 0,
+            events_in_window: 0,
+            flood_limit_per_second: DEFAULT_INTERRUPT_FLOOD_LIMIT_PER_SECOND,
+        });
+        if id == self.interrupts.len() {
+            self.interrupts.push(interrupt);
+        } else {
+            self.interrupts[id] = interrupt;
+        }
+        self.changed(incremental::INTERRUPT, id);
+        Ok(self.grant(
+            self.current,
+            Object::Interrupt(id),
+            READ | WRITE | ADMIN | TRANSFER | DUPLICATE,
+        ))
+    }
+
+    pub fn acknowledge_interrupt(&mut self, handle: u64) -> Result<(u32, bool)> {
+        let Object::Interrupt(id) = self.capability(handle, WRITE)?.object else {
+            return Err(Status::ErrInvalidHandle);
+        };
+        let interrupt = self
+            .interrupts
+            .get_mut(id)
+            .and_then(Option::as_mut)
+            .ok_or(Status::ErrInvalidHandle)?;
+        if !interrupt.awaiting_ack {
+            return Err(Status::ErrInvalidArgs);
+        }
+        interrupt.awaiting_ack = false;
+        interrupt.masked = false;
+        let irq_number = interrupt.irq_number;
+        self.changed(incremental::INTERRUPT, id);
+        let hardware_masked = self.interrupts.iter().flatten().any(|interrupt| {
+            interrupt.irq_number == irq_number
+                && (interrupt.masked || interrupt.awaiting_ack)
+        });
+        Ok((irq_number, hardware_masked))
+    }
+
+    pub fn mask_interrupt(&mut self, handle: u64, masked: bool) -> Result<(u32, bool)> {
+        let Object::Interrupt(id) = self.capability(handle, WRITE)?.object else {
+            return Err(Status::ErrInvalidHandle);
+        };
+        let interrupt = self
+            .interrupts
+            .get_mut(id)
+            .and_then(Option::as_mut)
+            .ok_or(Status::ErrInvalidHandle)?;
+        if !masked && interrupt.awaiting_ack {
+            return Err(Status::ErrInvalidArgs);
+        }
+        interrupt.masked = masked;
+        let irq_number = interrupt.irq_number;
+        self.changed(incremental::INTERRUPT, id);
+        let hardware_masked = self.interrupts.iter().flatten().any(|interrupt| {
+            interrupt.irq_number == irq_number
+                && (interrupt.masked || interrupt.awaiting_ack)
+        });
+        Ok((irq_number, hardware_masked))
+    }
+
+    pub fn deliver_interrupt(&mut self, irq_number: u32, now_ns: u64) -> InterruptDelivery {
+        let mut matched = false;
+        let mut signaled = false;
+        let mut flooded = false;
+        let mut wake = Vec::new();
+        for (id, slot) in self.interrupts.iter_mut().enumerate() {
+            let Some(interrupt) = slot
+                .as_mut()
+                .filter(|interrupt| interrupt.irq_number == irq_number)
+            else {
+                continue;
+            };
+            matched = true;
+            if interrupt.masked || interrupt.awaiting_ack {
+                continue;
+            }
+            if now_ns.saturating_sub(interrupt.window_started_ns) >= 1_000_000_000 {
+                interrupt.window_started_ns = now_ns;
+                interrupt.events_in_window = 0;
+            }
+            interrupt.events_in_window = interrupt.events_in_window.saturating_add(1);
+            let this_flooded =
+                interrupt.events_in_window > interrupt.flood_limit_per_second;
+            interrupt.masked = true;
+            interrupt.awaiting_ack = !this_flooded;
+            flooded |= this_flooded;
+            signaled |= !this_flooded;
+            wake.push(id);
+        }
+        for id in wake {
+            self.changed(incremental::INTERRUPT, id);
+            self.wake_waiters_for_object(
+                Object::Interrupt(id),
+                crate::kernel_services::SIGNAL_READABLE,
+            );
+        }
+        if flooded {
+            InterruptDelivery::FloodLimited
+        } else if signaled {
+            InterruptDelivery::Signaled
+        } else if matched {
+            InterruptDelivery::Masked
+        } else {
+            InterruptDelivery::NotBound
+        }
+    }
+
     pub fn object_signals(&self, h: u64) -> Result<u32> {
         let cap = self.capability(h, 0)?;
         let signals = match cap.object {
@@ -809,6 +967,12 @@ impl<B: Backend> Runtime<B> {
             | Object::Profile(_)
             | Object::IommuDomain(_)
             | Object::ReplyToken(_, _, _) => crate::kernel_services::SIGNAL_WRITABLE,
+            Object::Interrupt(id) => self
+                .interrupts
+                .get(id)
+                .and_then(|interrupt| *interrupt)
+                .filter(|interrupt| interrupt.awaiting_ack || interrupt.masked)
+                .map_or(0, |_| crate::kernel_services::SIGNAL_READABLE),
         };
         Ok(signals)
     }

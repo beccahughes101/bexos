@@ -1,6 +1,6 @@
 use bexos_kernel_core::{
     cpu_features::AsidSupport,
-    runtime::{Backend, Result as RuntimeResult, Runtime},
+    runtime::{Backend, InterruptDelivery, Result as RuntimeResult, Runtime},
     sched::{DeadlineProfile, FairProfile, SchedulingProfile},
     transplant::{
         codec::{Reader, Writer},
@@ -13,6 +13,41 @@ use std::collections::BTreeMap;
 const USER_START: u64 = 0x1000_0000;
 const USER_HEAP_VMAR_BASE: u64 = 0x0003_0000_0000;
 const USER_HEAP_CHUNK_SIZE: u64 = 2 * 1024 * 1024;
+
+#[test]
+fn runtime_interrupts_are_shared_one_shot_and_snapshot_safe() {
+    let mut rt = Runtime::new(TestBackend(0x4500_0000));
+    rt.create_process("pci", "bexos.driver.pci_root", 2)
+        .unwrap();
+    let first = rt.bind_interrupt(16, 1).unwrap();
+    let second = rt.bind_interrupt(16, 1).unwrap();
+    assert_eq!(rt.bind_interrupt(16, 0), Err(Status::ErrAlreadyExists));
+
+    assert_eq!(rt.deliver_interrupt(16, 1), InterruptDelivery::Signaled);
+    assert_ne!(
+        rt.object_signals(first).unwrap()
+            & bexos_kernel_core::kernel_services::SIGNAL_READABLE,
+        0
+    );
+    assert_eq!(rt.acknowledge_interrupt(first).unwrap(), (16, true));
+    assert_eq!(rt.acknowledge_interrupt(second).unwrap(), (16, false));
+    assert_eq!(rt.deliver_interrupt(16, 2), InterruptDelivery::Signaled);
+
+    let snapshot = encode(&rt);
+    let mut restored =
+        Runtime::read_snapshot(TestBackend(0x4700_0000), &mut Reader::new(&snapshot)).unwrap();
+    assert_ne!(
+        restored.object_signals(first).unwrap()
+            & bexos_kernel_core::kernel_services::SIGNAL_READABLE,
+        0
+    );
+    assert_eq!(
+        restored.deliver_interrupt(16, 3),
+        InterruptDelivery::Masked
+    );
+    assert_eq!(restored.acknowledge_interrupt(first).unwrap(), (16, true));
+    assert_eq!(restored.acknowledge_interrupt(second).unwrap(), (16, false));
+}
 
 #[test]
 fn channel_identity_requires_an_owned_capability_and_survives_duplication() {
@@ -1901,6 +1936,13 @@ fn legacy_entropy_snapshot_remains_arm_only() {
     // Remove the header and sole process context architecture tags to recreate
     // the legacy v15 layout, including its entropy stream position.
     let mut bytes = encode(&source);
+    let scheduler_start = bytes
+        .windows(8)
+        .rposition(|part| part == b"BEXSCH01" || part == b"BEXSCH02")
+        .unwrap();
+    // v20 appends the interrupt table immediately before the scheduler.  The
+    // empty-table count is not present in the v15 fixture reconstructed here.
+    bytes.drain(scheduler_start - 8..scheduler_start);
     let context = saved_context_bytes(&source.processes[0].context);
     let start = bytes
         .windows(context.len())

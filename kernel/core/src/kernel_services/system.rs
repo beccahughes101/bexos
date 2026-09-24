@@ -87,6 +87,21 @@ pub struct InterruptRecord {
     pub id: u64,
     pub irq_number: u32,
     pub flags: u32,
+    pub masked: bool,
+    pub awaiting_ack: bool,
+    pub window_started_ns: u64,
+    pub events_in_window: u32,
+    pub flood_limit_per_second: u32,
+}
+
+pub const DEFAULT_INTERRUPT_FLOOD_LIMIT_PER_SECOND: u32 = 100_000;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InterruptDelivery {
+    Signaled { interrupt_id: u64 },
+    Masked,
+    FloodLimited { interrupt_id: u64 },
+    NotBound,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -697,12 +712,90 @@ impl InterruptTable {
             id,
             irq_number,
             flags,
+            masked: false,
+            awaiting_ack: false,
+            window_started_ns: 0,
+            events_in_window: 0,
+            flood_limit_per_second: DEFAULT_INTERRUPT_FLOOD_LIMIT_PER_SECOND,
         });
         Ok(id)
     }
 
     pub fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    pub fn record(&self, id: u64) -> Option<&InterruptRecord> {
+        self.entries.iter().find(|record| record.id == id)
+    }
+
+    pub fn set_flood_limit(&mut self, id: u64, limit: u32) -> Result<(), KernelServiceStatus> {
+        if limit == 0 || limit > 10_000_000 {
+            return Err(KernelServiceStatus::InvalidArgs);
+        }
+        let record = self
+            .entries
+            .iter_mut()
+            .find(|record| record.id == id)
+            .ok_or(KernelServiceStatus::InvalidHandle)?;
+        record.flood_limit_per_second = limit;
+        Ok(())
+    }
+
+    pub fn deliver(&mut self, irq_number: u32, now_ns: u64) -> InterruptDelivery {
+        let Some(record) = self
+            .entries
+            .iter_mut()
+            .find(|record| record.irq_number == irq_number)
+        else {
+            return InterruptDelivery::NotBound;
+        };
+        if record.masked || record.awaiting_ack {
+            return InterruptDelivery::Masked;
+        }
+        if now_ns.saturating_sub(record.window_started_ns) >= 1_000_000_000 {
+            record.window_started_ns = now_ns;
+            record.events_in_window = 0;
+        }
+        record.events_in_window = record.events_in_window.saturating_add(1);
+        if record.events_in_window > record.flood_limit_per_second {
+            record.masked = true;
+            return InterruptDelivery::FloodLimited {
+                interrupt_id: record.id,
+            };
+        }
+        record.masked = true;
+        record.awaiting_ack = true;
+        InterruptDelivery::Signaled {
+            interrupt_id: record.id,
+        }
+    }
+
+    pub fn acknowledge(&mut self, id: u64) -> Result<(), KernelServiceStatus> {
+        let record = self
+            .entries
+            .iter_mut()
+            .find(|record| record.id == id)
+            .ok_or(KernelServiceStatus::InvalidHandle)?;
+        if !record.awaiting_ack {
+            return Err(KernelServiceStatus::InvalidArgs);
+        }
+        record.awaiting_ack = false;
+        record.masked = false;
+        Ok(())
+    }
+
+    pub fn mask(&mut self, id: u64, masked: bool) -> Result<(), KernelServiceStatus> {
+        let record = self
+            .entries
+            .iter_mut()
+            .find(|record| record.id == id)
+            .ok_or(KernelServiceStatus::InvalidHandle)?;
+        if !masked && record.awaiting_ack {
+            return Err(KernelServiceStatus::InvalidArgs);
+        }
+        record.masked = masked;
+        Ok(())
     }
 }
 
@@ -1074,10 +1167,62 @@ impl ControlPlane {
         self.handles.insert(
             interrupt_id,
             ObjectKind::Interrupt,
-            RIGHT_SIGNAL | RIGHT_ADMIN | RIGHT_TRANSFER,
+            RIGHT_READ
+                | RIGHT_WRITE
+                | RIGHT_SIGNAL
+                | RIGHT_ADMIN
+                | RIGHT_TRANSFER
+                | super::RIGHT_DUPLICATE,
             0,
             None,
         )
+    }
+
+    pub fn deliver_interrupt(&mut self, irq_number: u32, now_ns: u64) -> InterruptDelivery {
+        let delivery = self.interrupts.deliver(irq_number, now_ns);
+        match delivery {
+            InterruptDelivery::Signaled { interrupt_id }
+            | InterruptDelivery::FloodLimited { interrupt_id } => {
+                self.handles.add_signals_for_object(
+                    interrupt_id,
+                    ObjectKind::Interrupt,
+                    super::SIGNAL_READABLE,
+                )
+            }
+            InterruptDelivery::Masked | InterruptDelivery::NotBound => {}
+        }
+        delivery
+    }
+
+    pub fn acknowledge_interrupt(
+        &mut self,
+        interrupt_handle: Handle,
+    ) -> Result<(), KernelServiceStatus> {
+        let record = self
+            .handles
+            .get(interrupt_handle.raw)
+            .filter(|record| record.kind == ObjectKind::Interrupt && record.has_rights(RIGHT_SIGNAL))
+            .ok_or(KernelServiceStatus::AccessDenied)?;
+        self.interrupts.acknowledge(record.object_id)?;
+        self.handles.remove_signals_for_object(
+            record.object_id,
+            ObjectKind::Interrupt,
+            super::SIGNAL_READABLE,
+        );
+        Ok(())
+    }
+
+    pub fn mask_interrupt(
+        &mut self,
+        interrupt_handle: Handle,
+        masked: bool,
+    ) -> Result<(), KernelServiceStatus> {
+        let record = self
+            .handles
+            .get(interrupt_handle.raw)
+            .filter(|record| record.kind == ObjectKind::Interrupt && record.has_rights(RIGHT_SIGNAL))
+            .ok_or(KernelServiceStatus::AccessDenied)?;
+        self.interrupts.mask(record.object_id, masked)
     }
 
     pub fn checkpoint_system_state(&self, target_vmo: Handle) -> CheckpointResult {

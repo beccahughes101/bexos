@@ -24,7 +24,7 @@ use crate::config::{ConfigSource, NetConfig};
 use crate::dns::DnsRecord;
 use crate::ethernet;
 use crate::link::PacketLink;
-use crate::migration::Runtime;
+use crate::migration::{NodeLink, Runtime};
 use crate::stack::{Netstack, empty_addr};
 
 pub async fn main(channel: u64) -> ! {
@@ -40,34 +40,56 @@ pub async fn main(channel: u64) -> ! {
         }
     }
     let config = NetConfig::from_startup(&startup);
-    let ethernet_endpoint = startup
+    let mut ethernet_endpoints: Vec<(u64, u64)> = startup
         .service_grants
         .iter()
-        .find(|grant| grant.service == "bexos.hardware.ethernet.Device")
-        .map(|grant| grant.endpoint);
+        .filter(|grant| grant.service == "bexos.hardware.ethernet.Device")
+        .map(|grant| {
+            (
+                grant
+                    .provider_instance_id
+                    .as_deref()
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .unwrap_or(grant.endpoint),
+                grant.endpoint,
+            )
+        })
+        .collect();
+    ethernet_endpoints.sort_by_key(|entry| entry.0);
+    ethernet_endpoints.dedup_by_key(|entry| entry.0);
     let tls_trust = startup
         .service_grants
         .iter()
         .find(|grant| grant.service == "bexos.security.trust.TlsTrustManager")
         .map(|grant| Channel(grant.endpoint));
-    let link = ethernet_endpoint.and_then(|endpoint| {
-        let link = ethernet::connect(endpoint)
-            .map_err(|error| {
-                log(&format!(
-                    "netstackd: Ethernet connection failed: {error:?}\n"
-                ));
-            })
-            .ok()?;
-        PacketLink::new(link)
-            .map_err(|error| {
-                log(&format!(
-                    "netstackd: Ethernet packet mapping failed: {error:?}\n"
-                ));
-            })
-            .ok()
-    });
+    let links: Vec<NodeLink> = ethernet_endpoints
+        .into_iter()
+        .take(16)
+        .filter_map(|(node_id, endpoint)| {
+            let link = ethernet::connect(endpoint)
+                .map_err(|error| {
+                    log(&format!(
+                        "netstackd: Ethernet connection failed: {error:?}\n"
+                    ));
+                })
+                .ok()?;
+            PacketLink::new(link)
+                .map(|link| NodeLink { node_id, link })
+                .map_err(|error| {
+                    log(&format!(
+                        "netstackd: Ethernet packet mapping failed: {error:?}\n"
+                    ));
+                })
+                .ok()
+        })
+        .collect();
     let stack = Netstack::new(config, None);
-    log_ready(&stack, link.as_ref().map_or(0, |link| link.resources.mtu));
+    log_ready(
+        &stack,
+        links
+            .first()
+            .map_or(0, |node_link| node_link.link.resources.mtu),
+    );
     Startup::ready(control).unwrap();
     serve(Runtime {
         control,
@@ -76,7 +98,7 @@ pub async fn main(channel: u64) -> ! {
         clients: Vec::new(),
         link_watchers: Vec::new(),
         stack,
-        link,
+        links,
         generation: 0,
     })
     .await
@@ -92,9 +114,9 @@ async fn serve(mut runtime: Runtime) -> ! {
             let _ = bexos_userspace::migration::abort();
         }
         if runtime
-            .link
-            .as_mut()
-            .is_some_and(|link| !link.drain_for_quiesce())
+            .links
+            .iter_mut()
+            .any(|link| !link.link.drain_for_quiesce())
         {
             source.changed(0);
         }
@@ -102,14 +124,24 @@ async fn serve(mut runtime: Runtime) -> ! {
             bexos_userspace::yield_now();
             continue;
         }
-        let had_link = runtime.link.is_some();
+        let had_links = runtime.links.len();
         bexos_trace::trace_scope!(
             bexos_trace::CATEGORY_NETWORK_STACK,
             "netstack:poll_packet_plane"
         );
-        runtime.stack.poll_packet_plane(runtime.link.as_mut());
-        if had_link != runtime.link.is_some() {
-            notify_link_watchers(&mut runtime.link_watchers, runtime.link.as_ref());
+        if let Some((primary, secondary)) = runtime.links.split_first_mut() {
+            runtime.stack.poll_packet_plane(Some(&mut primary.link));
+            for node_link in secondary {
+                runtime
+                    .stack
+                    .poll_secondary_packet_plane(&mut node_link.link);
+            }
+        }
+        if had_links != runtime.links.len() {
+            notify_link_watchers(
+                &mut runtime.link_watchers,
+                runtime.links.first().map(|link| &link.link),
+            );
             source.changed(0);
         }
         if let Ok(message) = control.try_recv() {
@@ -141,11 +173,18 @@ async fn serve(mut runtime: Runtime) -> ! {
         // Every class must be polled even when another one made progress.
         // Short-circuiting here lets repeated directory/DNS activity starve
         // TCP setup, stream control and cancellation indefinitely.
+        let Runtime {
+            clients,
+            link_watchers,
+            stack,
+            links,
+            ..
+        } = &mut runtime;
         let mut changed = poll_netstack_clients(
-            &mut runtime.clients,
-            &mut runtime.link_watchers,
-            &mut runtime.stack,
-            runtime.link.as_mut(),
+            clients,
+            link_watchers,
+            stack,
+            links.first_mut().map(|link| &mut link.link),
         );
         changed |= poll_tcp_clients(&mut runtime.stack);
         changed |= poll_listener_clients(&mut runtime.stack);

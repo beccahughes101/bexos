@@ -12,7 +12,7 @@ BexOS currently has these implementation layers:
   init-style platform service, manifest registry, service broker, driver
   startup/lifecycle coordinator, live device registry, runner policy gate,
   namespace/config provider, debug/lifecycle surface, and migration participant.
-- **D1 native drivers** in `drivers/d1/<type>/<vendor>/<device>`, currently covering PCI root, PL011 UART, NVMe block, BexFS, archivefs, diskimage, and a Linux shim support crate. Boot-critical storage filesystem/image drivers keep no-std core libraries for host tests and shared logic where needed, while NVMe, BexFS, archivefs, and diskimage deploy as std-linked Tokio service ELFs because their manifests declare heart-transplant lifecycle support.
+- **D1 native drivers** in `drivers/d1/<type>/<vendor>/<device>`, currently covering PCI root, VirtIO-Net, Intel e1000e/igb, PL011 UART, NVMe block, BexFS, archivefs, diskimage, and a Linux shim support crate. Appd is the driver manager and launches isolated native ELF processes; there is no generic shared-object-loading devhost. Hardware driver manifests must declare heart-transplant lifecycle support. Shared driver mechanics live in `lib/driver_runtime` and direct-plane recovery journals in `lib/device_dataplane`.
 - **Core services** in `services/`, currently debugd, vfsd, updated, powerd, usersd, keychain, fontd, timed, netstackd, jobd, teed, appd, and storage_verify. Service ELFs are std-linked through the BexOS libc shim.
 - **Secure-side Trusty integration** in `third_party/trusty`, `secure/`, and
   `lib/tee_driver_*`, including the pinned QEMU Trusty/TF-A firmware build, the

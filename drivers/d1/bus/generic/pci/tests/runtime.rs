@@ -14,14 +14,18 @@ fn pci_hotplug_state_retains_allocator_endpoints_and_outstanding_registration() 
         },
         registry: Channel(4),
         cursor: bexos_d1_pci::RootBusConfig::qemu_virt().mmio_base + 0x4000,
+        root: bexos_d1_pci::RootBusConfig::qemu_virt(),
         next_poll_ms: 123,
         known: vec![0x400],
         ports: vec![],
         pending: Some(Pending {
             node: 0x500,
             added: true,
+            control: Some(Channel(6)),
+            interrupt: Some(7),
         }),
         power: vec![Channel(5)],
+        device_controls: vec![],
         extended: true,
     };
     assert!(!source.quiescence_ready());

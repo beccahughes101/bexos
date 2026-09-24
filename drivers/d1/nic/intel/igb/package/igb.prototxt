@@ -1,0 +1,29 @@
+package_name: "bexos.driver.network.igb"
+name: "igb_driver"
+driver_info {
+ name: "igb_d1_driver"
+ package_id: "bexos.driver.network.igb"
+ version: "1.0.0"
+ execution { colocation_policy: DRIVER_ISOLATED max_instances_per_host: 1 restart_strategy: DRIVER_HEART_TRANSPLANT }
+ required_resources { kind: DRIVER_RESOURCE_MMIO min_count: 1 }
+ required_resources { kind: DRIVER_RESOURCE_INTERRUPT min_count: 1 }
+ required_resources { kind: DRIVER_RESOURCE_IOMMU_DOMAIN min_count: 1 }
+ required_resources { kind: DRIVER_RESOURCE_BUS_CONTROL min_count: 1 }
+}
+bind_rules { priority: 100 condition { bus: BUS_PCI property { key: "pci.vendor_id" value: 0x8086 } property { key: "pci.device_id" value: 0x10c9 } } }
+bind_rules { priority: 100 condition { bus: BUS_PCI property { key: "pci.vendor_id" value: 0x8086 } property { key: "pci.device_id" value: 0x1521 } } }
+processes {
+ name: "igb_driver"
+ runner: "elf"
+ lifecycle { update_strategy: HEART_TRANSPLANT }
+ service: true
+ wave: 4
+ runner_options { [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/igb_driver" } }
+}
+services_exposed {
+ name: "bexos.hardware.ethernet.Device"
+ protocol: "Device"
+ lifecycle: MULTIPLE_INSTANCE
+ visibility: PUBLIC
+ capabilities { capability: "Public" method_ordinals: 1 method_ordinals: 2 method_ordinals: 3 method_ordinals: 4 method_ordinals: 5 method_ordinals: 6 }
+}

@@ -1,0 +1,18 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "device_dataplane",
+    srcs = ["src/lib.rs"],
+    crate_name = "bexos_device_dataplane",
+    edition = "2024",
+    deps = ["//lib/migration"],
+)
+
+rust_test(
+    name = "device_dataplane_tests",
+    srcs = ["tests/journal_tests.rs"],
+    edition = "2024",
+    deps = [":device_dataplane"],
+)

@@ -1,0 +1,23 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+std_service_binary(
+    name = "igb_driver",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_d1_igb_driver",
+    deps = [
+        "//drivers/d1/nic/intel/common:intel_common",
+        "//drivers/d1/nic/intel/driver",
+    ],
+)
+
+app_manifest(name = "package_manifest", src = "package/igb.prototxt")
+
+app_archive(
+    name = "driver_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/igb_driver": ":igb_driver"},
+    compression = "zstd",
+)

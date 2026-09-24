@@ -67,6 +67,19 @@ impl Netstack {
         }
     }
 
+    /// Keep every non-primary link active. Protocol state and default routing
+    /// remain on the deterministic primary, while traffic arriving on another
+    /// NIC is still consumed and queued for failover.
+    pub fn poll_secondary_packet_plane(&mut self, link: &mut PacketLink) {
+        let _ = link.poll();
+        let mut frame = [0u8; crate::link::SLOT_SIZE];
+        while let Ok(len) = link.receive_device(&mut frame) {
+            if !self.ingest_ethernet(&frame[..len]) {
+                let _ = link.push_rx_backlog(&frame[..len]);
+            }
+        }
+    }
+
     pub fn source(&self) -> ConfigSource {
         self.config.source
     }

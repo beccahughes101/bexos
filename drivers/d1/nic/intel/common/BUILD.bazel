@@ -1,0 +1,18 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "intel_common",
+    srcs = ["src/lib.rs"],
+    crate_name = "bexos_intel_nic",
+    edition = "2024",
+    deps = ["//lib/migration"],
+)
+
+rust_test(
+    name = "intel_common_tests",
+    srcs = ["tests/intel_tests.rs"],
+    edition = "2024",
+    deps = [":intel_common"],
+)

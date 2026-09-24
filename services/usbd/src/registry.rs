@@ -11,6 +11,11 @@ use hardware_manager_fidl::{
 
 pub fn register_interface(registry: Channel, interface: &Interface, channel: u64) -> Status {
     let properties = properties(interface);
+    let topological_path = alloc::format!(
+        "usb/device-{}/interface-{}",
+        interface.device_id,
+        interface.id
+    );
     let resources = [HardwareResource {
         kind: HardwareResourceKind::BusControl,
         resource_id: interface.id,
@@ -25,6 +30,7 @@ pub fn register_interface(registry: Channel, interface: &Interface, channel: u64
             bus: BusType::Usb,
             has_parent: true,
             parent_node_id: interface.device_id,
+            topological_path: &topological_path,
             properties: WireVector::from_slice(&properties),
         },
         resources: WireVector::from_slice(&resources),

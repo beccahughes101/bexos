@@ -2,16 +2,13 @@ pub mod registry;
 pub mod state;
 mod wait;
 use alloc::format;
-use bexos_d1_pci::{EcamConfigSpace, PciRootBus, RootBusConfig, node_id};
+use bexos_d1_pci::{EcamConfigSpace, PciRootBus, node_id};
 use bexos_userspace::{
     Memory,
     live_migration::{Source, now_ms},
     service_binding::ServiceBinding,
 };
-use state::{Pending, Runtime};
-fn input(device: &bexos_d1_pci::PciDevice) -> bool {
-    device.vendor_id == 0x1af4 && device.device_id == 0x1052
-}
+use state::{DeviceControl, Pending, Runtime};
 fn poll(s: &mut Runtime, draining: bool) -> bool {
     if let Some(p) = &s.pending {
         let result = s.registry.try_recv();
@@ -26,8 +23,35 @@ fn poll(s: &mut Runtime, draining: bool) -> bool {
                 // A rejected registration is remembered until removal: never
                 // repeatedly relocate the BARs of a rejected new endpoint.
                 s.known.push(p.node);
+                if accepted {
+                    if let Some(control) = p.control {
+                        s.device_controls.push(DeviceControl {
+                            node: p.node,
+                            channel: control,
+                            interrupt: p.interrupt.unwrap_or(0),
+                        });
+                    }
+                } else {
+                    if let Some(control) = p.control {
+                        let _ = Memory::close(control.0);
+                    }
+                    if let Some(interrupt) = p.interrupt {
+                        let _ = Memory::close(interrupt);
+                    }
+                }
             } else if accepted {
                 s.known.retain(|node| *node != p.node);
+                if let Some(index) = s
+                    .device_controls
+                    .iter()
+                    .position(|control| control.node == p.node)
+                {
+                    let control = s.device_controls.remove(index);
+                    let _ = Memory::close(control.channel.0);
+                    if control.interrupt != 0 {
+                        let _ = Memory::close(control.interrupt);
+                    }
+                }
             }
             bexos_userspace::log(&format!(
                 "pci: input node={} added={} accepted={}\n",
@@ -45,7 +69,7 @@ fn poll(s: &mut Runtime, draining: bool) -> bool {
     let (_, va, _) = s.control.mapping.unwrap();
     let mut bus = match PciRootBus::restore(
         unsafe { EcamConfigSpace::new(va as usize) },
-        RootBusConfig::qemu_virt(),
+        s.root,
         s.cursor,
     ) {
         Ok(bus) => bus,
@@ -61,18 +85,25 @@ fn poll(s: &mut Runtime, draining: bool) -> bool {
             Err(_) => return true,
         }
     }
-    if let Some(node) = s.known.iter().copied().find(|node| {
-        !devices
-            .iter()
-            .any(|d| input(d) && node_id(d.address) == *node)
-    }) {
+    devices.retain(|device| node_id(device.address) != 0);
+    if let Some(node) = s
+        .known
+        .iter()
+        .copied()
+        .find(|node| !devices.iter().any(|d| node_id(d.address) == *node))
+    {
         if registry::unregister(s.registry, node).is_ok() {
-            s.pending = Some(Pending { node, added: false });
+            s.pending = Some(Pending {
+                node,
+                added: false,
+                control: None,
+                interrupt: None,
+            });
         }
-    } else if s.known.len() < 16 {
+    } else if s.known.len() < 256 {
         if let Some(device) = devices
             .into_iter()
-            .find(|d| input(d) && !s.known.contains(&node_id(d.address)))
+            .find(|d| !s.known.contains(&node_id(d.address)))
         {
             let initialized = if device.address.bus == 0 {
                 bus.initialize_device(device)
@@ -88,10 +119,12 @@ fn poll(s: &mut Runtime, draining: bool) -> bool {
             match initialized {
                 Ok(node) => {
                     s.cursor = bus.allocation_cursor();
-                    if registry::register(s.registry, &node).is_ok() {
+                    if let Ok(registration) = registry::register(s.registry, &node) {
                         s.pending = Some(Pending {
                             node: node.node_id,
                             added: true,
+                            control: Some(registration.control),
+                            interrupt: Some(registration.interrupt),
                         });
                     } else {
                         s.known.push(node.node_id);
@@ -135,10 +168,115 @@ pub fn serve(mut s: Runtime) -> ! {
             source.changed(1);
         }
         power(&mut s, &mut source);
+        device_control(&mut s, &mut source);
         if poll(&mut s, source.draining()) {
             source.changed(1);
         }
         wait::idle(&s, source.draining());
+    }
+}
+
+fn device_control(s: &mut Runtime, source: &mut Source) {
+    use hardware_manager_fidl::*;
+    let Some((_, va, _)) = s.control.mapping else {
+        return;
+    };
+    for control in &s.device_controls {
+        let Ok(message) = control.channel.try_recv() else {
+            continue;
+        };
+        let ordinal = message
+            .bytes
+            .get(..8)
+            .and_then(|bytes| bytes.try_into().ok())
+            .map(u64::from_le_bytes)
+            .unwrap_or(0);
+        let request = message.bytes.get(8..).unwrap_or(&[]);
+        let status = bexos_d1_pci::address_from_node(control.node)
+            .ok_or(())
+            .and_then(|address| {
+                let mut bus = PciRootBus::restore(
+                    unsafe { EcamConfigSpace::new(va as usize) },
+                    s.root,
+                    s.cursor,
+                )
+                .map_err(|_| ())?;
+                match ordinal {
+                    1 => PciDeviceControlSetBusMasterRequest::decode(request, &[])
+                        .map_err(|_| ())
+                        .and_then(|request| {
+                            bus.set_bus_master(address, request.enabled).map_err(|_| ())
+                        }),
+                    2 => PciDeviceControlResetRequest::decode(request, &[])
+                        .map_err(|_| ())
+                        .and_then(|_| bus.reset_device(address).map_err(|_| ())),
+                    3 => PciDeviceControlResumeRequest::decode(request, &[])
+                        .map_err(|_| ())
+                        .and_then(|_| bus.resume_device(address).map_err(|_| ())),
+                    4 => PciDeviceControlConfigureInterruptsRequest::decode(request, &[])
+                        .map_err(|_| ())
+                        .and_then(|request| {
+                            (request.mode == PciInterruptMode::Legacy
+                                && request.vector_count == 1
+                                && control.interrupt != 0)
+                                .then_some(())
+                                .ok_or(())
+                        }),
+                    _ => Err(()),
+                }
+            })
+            .map_or(Status::ErrInvalidArgs, |_| Status::Ok);
+        if ordinal == 4 {
+            let duplicate = if status == Status::Ok {
+                Memory::duplicate(control.interrupt, 1 | 2 | 4 | 32).ok()
+            } else {
+                None
+            };
+            let response_status = if duplicate.is_some() {
+                Status::Ok
+            } else {
+                Status::ErrInvalidArgs
+            };
+            let handles = duplicate
+                .map(|raw| [HandleRef { raw }])
+                .unwrap_or([HandleRef { raw: 0 }]);
+            let interrupts = if duplicate.is_some() {
+                &handles[..]
+            } else {
+                &handles[..0]
+            };
+            let mut out = [0u8; 64];
+            let mut encoded_handles = [HandleRef { raw: 0 }; 1];
+            let encoded = PciDeviceControlConfigureInterruptsResponse {
+                status: response_status,
+                interrupts,
+            }
+            .encode(&mut out, &mut encoded_handles);
+            if let (Ok(encoded), Some(interrupt)) = (encoded, duplicate) {
+                if control
+                    .channel
+                    .send(&out[..encoded.bytes], &[interrupt])
+                    .is_err()
+                {
+                    let _ = Memory::close(interrupt);
+                }
+            } else if let Ok(encoded) = encoded {
+                let _ = control.channel.send(&out[..encoded.bytes], &[]);
+            }
+            source.changed(1);
+            continue;
+        }
+        let mut out = [0u8; 32];
+        let encoded = match ordinal {
+            1 => PciDeviceControlSetBusMasterResponse { status }.encode(&mut out, &mut []),
+            2 => PciDeviceControlResetResponse { status }.encode(&mut out, &mut []),
+            3 => PciDeviceControlResumeResponse { status }.encode(&mut out, &mut []),
+            _ => continue,
+        };
+        if let Ok(encoded) = encoded {
+            let _ = control.channel.send(&out[..encoded.bytes], &[]);
+        }
+        source.changed(1);
     }
 }
 fn power(s: &mut Runtime, source: &mut Source) {

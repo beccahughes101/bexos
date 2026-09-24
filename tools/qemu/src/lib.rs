@@ -784,7 +784,17 @@ impl QemuDevice {
                     arm_rpmb_proxy,
                 };
                 if debug_socket.is_none() {
-                    child._idle_serial = Some(connect_socket(serial_socket)?);
+                    child._idle_serial = Some(match connect_socket(serial_socket) {
+                        Ok(serial) => serial,
+                        Err(error) => {
+                            kill_child(&mut child.qemu);
+                            let diagnostics = collect_child_output(&mut child.qemu);
+                            return Err(format!(
+                                "{error}; QEMU output: {}",
+                                String::from_utf8_lossy(&diagnostics).trim()
+                            ));
+                        }
+                    });
                 }
                 Ok(child)
             }

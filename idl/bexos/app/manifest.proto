@@ -237,6 +237,44 @@ message DriverInfo {
   string name = 1;
   string package_id = 2;
   string version = 3;
+  DriverExecution execution = 4;
+  repeated RequiredHardwareResource required_resources = 5;
+}
+
+// Driver processes are isolated unless a signed manifest explicitly opts into
+// sharing.  Zero is deliberately the safest value so old manifests retain the
+// one-process-per-device behavior.
+enum DriverColocationPolicy {
+  DRIVER_ISOLATED = 0;
+  DRIVER_COLOCATED = 1;
+  DRIVER_HOST_SHARED = 2;
+}
+
+enum DriverRestartStrategy {
+  DRIVER_HEART_TRANSPLANT = 0;
+}
+
+enum DriverHardwareResourceKind {
+  DRIVER_RESOURCE_UNSPECIFIED = 0;
+  DRIVER_RESOURCE_MMIO = 1;
+  DRIVER_RESOURCE_INTERRUPT = 2;
+  DRIVER_RESOURCE_DMA_POOL = 3;
+  DRIVER_RESOURCE_IOMMU_DOMAIN = 4;
+  DRIVER_RESOURCE_REGISTER_PROXY = 5;
+  DRIVER_RESOURCE_BUS_CONTROL = 6;
+}
+
+message DriverExecution {
+  DriverColocationPolicy colocation_policy = 1;
+  // Zero has the backwards-compatible meaning of one instance.
+  uint32 max_instances_per_host = 2;
+  DriverRestartStrategy restart_strategy = 3;
+}
+
+message RequiredHardwareResource {
+  DriverHardwareResourceKind kind = 1;
+  // Zero has the backwards-compatible meaning of one resource.
+  uint32 min_count = 2;
 }
 
 message BindRule {

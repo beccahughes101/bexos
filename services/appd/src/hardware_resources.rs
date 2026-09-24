@@ -20,7 +20,9 @@ pub fn duplicate_startup_resources(
                 resource.kind,
                 HardwareResourceKind::Mmio
                     | HardwareResourceKind::Interrupt
+                    | HardwareResourceKind::DmaPool
                     | HardwareResourceKind::IommuDomain
+                    | HardwareResourceKind::BusControl
             ),
             HardwareAccessTier::Isolated => matches!(
                 resource.kind,

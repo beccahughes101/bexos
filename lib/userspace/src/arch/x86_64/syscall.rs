@@ -62,6 +62,16 @@ pub fn thread_pointer() -> u64 {
 pub fn pci_ecam_base() -> u64 {
     call(10, 0, 0)
 }
+pub fn pci_segment() -> u16 {
+    call(13, 0, 0) as u16
+}
+pub fn pci_bus_range() -> (u8, u8) {
+    let value = call(14, 0, 0);
+    (value as u8, (value >> 8) as u8)
+}
+pub fn pci_mmio_window() -> (u64, u64) {
+    (call(15, 0, 0), call(16, 0, 0))
+}
 
 pub fn cmos(register: u8, value: Option<u8>) -> Result<u8, i32> {
     let result = call(11, register as u64, value.map_or(0, |v| 256 | v as u64));

@@ -146,12 +146,13 @@ pub fn capture_architecture_state() -> [u64; 16] {
     state[..3].copy_from_slice(&super::time::capture_state());
     state[3] = super::interrupts::capture_base();
     cpu::capture_state(&mut state[4..14]);
-    state[14] = cpu::pci_ecam_base();
+    state[14] = (cpu::pci_ecam_base() & 0xffff_ffff) | (cpu::pci_topology_word() << 32);
     state[15] = super::mmu::kernel_root();
     state
 }
 pub fn restore_architecture_state(state: &[u64; 16]) {
-    cpu::restore_ecam(state[14]);
+    cpu::restore_ecam(state[14] & 0xffff_ffff);
+    cpu::restore_pci_topology(state[14] >> 32);
     super::mmu::restore_kernel_root(state[15]);
     cpu::restore_state(&state[4..14]);
     super::time::restore_state(&state[..3]);

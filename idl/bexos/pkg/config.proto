@@ -31,4 +31,20 @@ message ArtifactMapping {
   string repository = 3;
   string tag = 4;
   uint32 kind = 5;
+  HardwareSelector hardware = 6;
+  uint32 priority = 7;
+}
+
+// Optional fields are presence-sensitive: an omitted value is a wildcard.
+// Values are bounded by pkg_config before a mapping can participate.
+message HardwareSelector {
+  optional uint32 pci_segment = 1;
+  optional uint32 pci_bus = 2;
+  optional uint32 pci_device = 3;
+  optional uint32 pci_function = 4;
+  optional uint32 pci_vendor_id = 5;
+  optional uint32 pci_device_id = 6;
+  optional uint32 pci_class = 7;
+  optional uint32 pci_subclass = 8;
+  optional uint32 pci_prog_if = 9;
 }

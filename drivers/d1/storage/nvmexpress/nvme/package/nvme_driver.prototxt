@@ -14,6 +14,11 @@ driver_info {
  name: "nvme_d1_driver"
  package_id: "bexos.driver.storage.nvme"
  version: "1.0.0"
+ execution { colocation_policy: DRIVER_ISOLATED max_instances_per_host: 1 restart_strategy: DRIVER_HEART_TRANSPLANT }
+ required_resources { kind: DRIVER_RESOURCE_MMIO min_count: 1 }
+ required_resources { kind: DRIVER_RESOURCE_INTERRUPT min_count: 1 }
+ required_resources { kind: DRIVER_RESOURCE_IOMMU_DOMAIN min_count: 1 }
+ required_resources { kind: DRIVER_RESOURCE_BUS_CONTROL min_count: 1 }
 }
 bind_rules {
  condition {

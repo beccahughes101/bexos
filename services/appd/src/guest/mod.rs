@@ -811,6 +811,7 @@ async fn boot(initial: Channel) -> Result<(), String> {
         gate.services,
     );
     runtime.input_hotplug.registry = pci_registry.map_or(0, |c| c.0);
+    runtime.input_hotplug.driver_packages = disk_package_ids;
     runtime.launches = launches;
     runtime.updated_lifecycle = updated_lifecycle_server;
     runtime.opener_bindings = opener_bindings;
@@ -1645,6 +1646,9 @@ async fn serve_lifecycle(mut state: state::AppdState, teed: Option<Channel>) -> 
         }
         if pending.is_none() && !activation_sync_pending {
             input_hotplug::poll(&mut state, &mut kernel, &mut source);
+            if crate::package_install::acquire_hardware_driver(&mut state) {
+                source.changed(crate::package_install::KEY);
+            }
             poll_completed_boot_service(&mut state, &mut source);
             poll_lazy_provider_control(&mut state);
             poll_lifecycle_watchdog(&mut state, &mut kernel, &mut source);
@@ -2470,6 +2474,11 @@ async fn serve_lifecycle(mut state: state::AppdState, teed: Option<Channel>) -> 
             // not force a filesystem checkpoint in the service broker.
             let mut app_manager_updates = installed;
             if !drivers.is_empty() {
+                for driver in &drivers {
+                    if !state.input_hotplug.driver_packages.contains(driver) {
+                        state.input_hotplug.driver_packages.push(driver.clone());
+                    }
+                }
                 let mut gate = readiness::Gate::new();
                 gate.registry = core::mem::take(&mut state.devices);
                 gate.services = core::mem::take(&mut state.services);
@@ -2517,6 +2526,7 @@ async fn serve_lifecycle(mut state: state::AppdState, teed: Option<Channel>) -> 
                 );
             }
 
+            #[cfg(feature = "persistent")]
             let directory_launches_before = state.launches.len();
             let mut service_directory_updates = false;
             for binding in state.service_directory_bindings.clone() {
@@ -3688,6 +3698,7 @@ fn startup_service_grants(
             caller_package: Some(package_id.to_string()),
             caller_uid: Some(uid),
             caller_foreground: true,
+            provider_instance_id: binding.provider_instance_id.clone(),
             endpoint: binding.client_endpoint.object_id,
         })
         .collect()
@@ -3705,6 +3716,7 @@ fn incoming_service_grants(bindings: &[BoundCapability]) -> Vec<ServiceGrant> {
             caller_package: Some(binding.caller_package.clone()),
             caller_uid: binding.caller_uid,
             caller_foreground: binding.caller_foreground,
+            provider_instance_id: binding.provider_instance_id.clone(),
             endpoint: binding.provider_endpoint.object_id,
         })
         .collect()

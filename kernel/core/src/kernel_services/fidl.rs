@@ -9,13 +9,15 @@ use kernel_fidl::{
     KernelDebugControlGetUpdateStatusRequest, KernelDebugControlGetUpdateStatusResponse,
     KernelDebugControlListProcessesRequest, KernelDebugControlListProcessesResponse,
     KernelDebugControlPublicServer, KernelUpdateStatus, Rights, Status, SystemPowerState,
+    SystemPrivilegedAcknowledgeInterruptRequest, SystemPrivilegedAcknowledgeInterruptResponse,
     SystemPrivilegedAdjustClockRequest, SystemPrivilegedAdjustClockResponse,
     SystemPrivilegedBexosSystemPrivilegedServer, SystemPrivilegedBindInterruptRequest,
     SystemPrivilegedBindInterruptResponse, SystemPrivilegedCheckpointSystemStateRequest,
     SystemPrivilegedCheckpointSystemStateResponse, SystemPrivilegedCreateProcessRequest,
     SystemPrivilegedCreateProcessResponse, SystemPrivilegedCreateResourceGroupRequest,
     SystemPrivilegedCreateResourceGroupResponse, SystemPrivilegedGetResourceGroupRequest,
-    SystemPrivilegedGetResourceGroupResponse, SystemPrivilegedRequestSystemPowerStateRequest,
+    SystemPrivilegedGetResourceGroupResponse, SystemPrivilegedMaskInterruptRequest,
+    SystemPrivilegedMaskInterruptResponse, SystemPrivilegedRequestSystemPowerStateRequest,
     SystemPrivilegedRequestSystemPowerStateResponse, SystemPrivilegedSetResourceGroupLimitsRequest,
     SystemPrivilegedSetResourceGroupLimitsResponse, SystemPrivilegedSetTimeServer,
     SystemPrivilegedStartThreadInProcessRequest, SystemPrivilegedStartThreadInProcessResponse,
@@ -793,6 +795,30 @@ impl SystemPrivilegedBexosSystemPrivilegedServer for ControlPlane {
                 },
             },
         )
+    }
+
+    fn acknowledge_interrupt<'a>(
+        &mut self,
+        request: SystemPrivilegedAcknowledgeInterruptRequest,
+    ) -> Result<SystemPrivilegedAcknowledgeInterruptResponse, FidlWireError> {
+        Ok(SystemPrivilegedAcknowledgeInterruptResponse {
+            status: match self.acknowledge_interrupt(from_ref(request.irq_handle)) {
+                Ok(()) => Status::Ok,
+                Err(status) => to_fidl_status(status),
+            },
+        })
+    }
+
+    fn mask_interrupt<'a>(
+        &mut self,
+        request: SystemPrivilegedMaskInterruptRequest,
+    ) -> Result<SystemPrivilegedMaskInterruptResponse, FidlWireError> {
+        Ok(SystemPrivilegedMaskInterruptResponse {
+            status: match self.mask_interrupt(from_ref(request.irq_handle), request.masked) {
+                Ok(()) => Status::Ok,
+                Err(status) => to_fidl_status(status),
+            },
+        })
     }
 
     fn create_resource_group<'a>(

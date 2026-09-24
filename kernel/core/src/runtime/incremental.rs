@@ -26,6 +26,7 @@ pub const VMAR: u8 = 8;
 pub const PROFILE: u8 = 9;
 pub const IOMMU_DOMAIN: u8 = 10;
 pub const DMA_MAPPING: u8 = 11;
+pub const INTERRUPT: u8 = 12;
 pub const fn key(kind: u8, index: usize) -> u64 {
     ((kind as u64) << 56) | index as u64
 }
@@ -34,7 +35,7 @@ pub fn parts(key: u64) -> (u8, usize) {
 }
 
 pub struct BulkCursor {
-    counts: [usize; 12],
+    counts: [usize; 13],
     kind: usize,
     index: usize,
 }
@@ -72,6 +73,7 @@ impl<B: Backend> Runtime<B> {
                 self.profiles.len(),
                 self.iommu_domains.len(),
                 self.dma_mappings.len(),
+                self.interrupts.len(),
             ],
             kind: 0,
             index: 0,
@@ -201,6 +203,7 @@ impl<B: Backend> Runtime<B> {
                             (9, id, (call_id << 1) | end as u64)
                         }
                         Object::IommuDomain(id) => (10, id, 0),
+                        Object::Interrupt(id) => (11, id, 0),
                     };
                     for v in [kind, id as u64, end as u64, c.rights as u64, c.owner as u64] {
                         w.word(v)?;
@@ -291,6 +294,23 @@ impl<B: Backend> Runtime<B> {
             }
             DMA_MAPPING => {
                 dma_snapshot::write_mapping(w, *self.dma_mappings.get(index).ok_or(bad)?)?
+            }
+            INTERRUPT => {
+                let interrupt = self.interrupts.get(index).ok_or(bad)?;
+                w.word(interrupt.is_some() as u64)?;
+                if let Some(interrupt) = interrupt {
+                    for value in [
+                        u64::from(interrupt.irq_number),
+                        u64::from(interrupt.flags),
+                        interrupt.masked as u64,
+                        interrupt.awaiting_ack as u64,
+                        interrupt.window_started_ns,
+                        u64::from(interrupt.events_in_window),
+                        u64::from(interrupt.flood_limit_per_second),
+                    ] {
+                        w.word(value)?;
+                    }
+                }
             }
             _ => return Err(bad),
         }
@@ -445,6 +465,7 @@ impl<B: Backend> Runtime<B> {
                         (8, 0) => Object::Profile(id),
                         (9, value) => Object::ReplyToken(id, value & 1, (value >> 1) as u64),
                         (10, 0) => Object::IommuDomain(id),
+                        (11, 0) => Object::Interrupt(id),
                         _ => return Err(bad),
                     };
                     Some(Capability {
@@ -588,6 +609,33 @@ impl<B: Backend> Runtime<B> {
             DMA_MAPPING => {
                 let mapping = dma_snapshot::read_mapping(&mut r)?;
                 put(&mut self.dma_mappings, index, mapping, 262144)?;
+            }
+            INTERRUPT => {
+                let interrupt = if r.flag()? {
+                    let irq_number = u32::try_from(r.word()?).map_err(|_| bad)?;
+                    let flags = u32::try_from(r.word()?).map_err(|_| bad)?;
+                    let masked = r.flag()?;
+                    let awaiting_ack = r.flag()?;
+                    let window_started_ns = r.word()?;
+                    let events_in_window = u32::try_from(r.word()?).map_err(|_| bad)?;
+                    let flood_limit_per_second =
+                        u32::try_from(r.word()?).map_err(|_| bad)?;
+                    if flood_limit_per_second == 0 || (!masked && awaiting_ack) {
+                        return Err(bad);
+                    }
+                    Some(Interrupt {
+                        irq_number,
+                        flags,
+                        masked,
+                        awaiting_ack,
+                        window_started_ns,
+                        events_in_window,
+                        flood_limit_per_second,
+                    })
+                } else {
+                    None
+                };
+                put(&mut self.interrupts, index, interrupt, 65536)?;
             }
             _ => return Err(bad),
         }

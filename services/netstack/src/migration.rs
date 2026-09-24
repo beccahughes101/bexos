@@ -28,8 +28,13 @@ const HEADER_RECORD_KEY: u64 = 0;
 const TCP_RECORD_BASE: u64 = 1;
 const MAX_TCP_RECORDS: usize = 64;
 pub(crate) const LINK_QUEUES: u64 = TCP_RECORD_BASE + MAX_TCP_RECORDS as u64;
-pub(crate) const LINK_BACKLOG: u64 = LINK_QUEUES + 1;
-pub(crate) const LINK_END: u64 = LINK_BACKLOG + crate::link::BACKLOG_CHUNKS as u64;
+const LINK_STRIDE: u64 = 1 + crate::link::BACKLOG_CHUNKS as u64;
+const MAX_LINKS: usize = 16;
+
+pub struct NodeLink {
+    pub node_id: u64,
+    pub link: PacketLink,
+}
 
 pub struct Runtime {
     pub control: Channel,
@@ -38,7 +43,7 @@ pub struct Runtime {
     pub clients: Vec<BoundServiceEndpoint>,
     pub link_watchers: Vec<u64>,
     pub stack: Netstack,
-    pub link: Option<PacketLink>,
+    pub links: Vec<NodeLink>,
     pub generation: u64,
 }
 
@@ -71,7 +76,7 @@ impl State for Runtime {
                 doh_strict: false,
                 dns_cache_capacity: 64,
             }),
-            link: None,
+            links: Vec::new(),
             generation: 0,
         }
     }
@@ -83,21 +88,25 @@ impl State for Runtime {
                 keys.push(TCP_RECORD_BASE + index as u64);
             }
         }
-        if self.link.is_some() {
-            keys.extend(LINK_QUEUES..LINK_END);
+        for index in 0..self.links.len() {
+            let base = LINK_QUEUES + index as u64 * LINK_STRIDE;
+            keys.extend(base..base + LINK_STRIDE);
         }
         keys
     }
 
     fn encode_record(&self, key: u64) -> Result<Option<Vec<u8>>, Error> {
-        if key >= LINK_QUEUES && key < LINK_END {
-            let Some(link) = self.link.as_ref() else {
+        if key >= LINK_QUEUES {
+            let offset = key - LINK_QUEUES;
+            let index = usize::try_from(offset / LINK_STRIDE).map_err(|_| Error::InvalidData)?;
+            let record = offset % LINK_STRIDE;
+            let Some(node_link) = self.links.get(index) else {
                 return Ok(None);
             };
-            return if key == LINK_QUEUES {
-                link.checkpoint_queues()
+            return if record == 0 {
+                node_link.link.checkpoint_queues()
             } else {
-                link.checkpoint_backlog((key - LINK_BACKLOG) as usize)
+                node_link.link.checkpoint_backlog((record - 1) as usize)
             }
             .map(Some);
         }
@@ -115,7 +124,7 @@ impl State for Runtime {
             return Err(Error::InvalidData);
         }
         let mut w = Encoder::new();
-        w.word(5);
+        w.word(6);
         w.word(if cfg!(bexos_arch_x86_64) { 2 } else { 1 });
         w.word(self.control.0);
         w.word(self.migration.map_or(0, |channel| channel.0));
@@ -174,23 +183,27 @@ impl State for Runtime {
                 DnsTransport::Doh => 2,
             });
         }
-        w.word(self.link.is_some() as u64);
-        if let Some(link) = &self.link {
-            encode_link(&mut w, link.resources);
+        w.word(self.links.len() as u64);
+        for node_link in &self.links {
+            w.word(node_link.node_id);
+            encode_link(&mut w, node_link.link.resources);
         }
         Ok(Some(w.finish()))
     }
 
     fn adopt_record(&mut self, key: u64, bytes: Option<&[u8]>) -> Result<(), Error> {
-        if key >= LINK_QUEUES && key < LINK_END {
+        if key >= LINK_QUEUES {
             let Some(bytes) = bytes else {
                 return Ok(());
             };
-            let link = self.link.as_mut().ok_or(Error::InvalidData)?;
-            return if key == LINK_QUEUES {
+            let offset = key - LINK_QUEUES;
+            let index = usize::try_from(offset / LINK_STRIDE).map_err(|_| Error::InvalidData)?;
+            let record = offset % LINK_STRIDE;
+            let link = &mut self.links.get_mut(index).ok_or(Error::InvalidData)?.link;
+            return if record == 0 {
                 link.adopt_queues(bytes)
             } else {
-                link.adopt_backlog((key - LINK_BACKLOG) as usize, bytes)
+                link.adopt_backlog((record - 1) as usize, bytes)
             };
         }
         let mut r = Decoder::new(bytes.ok_or(Error::InvalidData)?);
@@ -213,7 +226,7 @@ impl State for Runtime {
             return Err(Error::InvalidData);
         }
         let version = r.word()?;
-        if version != 3 && version != 4 && version != 5 {
+        if !(3..=6).contains(&version) {
             return Err(Error::UnsupportedVersion);
         }
         let architecture = if version < 5 { 1 } else { r.word()? };
@@ -311,20 +324,38 @@ impl State for Runtime {
             });
         }
         self.stack.dns.replace_pending(pending);
-        self.link = if r.flag()? {
-            let resources = decode_link(&mut r)?;
-            match self.link.take() {
-                Some(previous) if previous.resources == resources => Some(previous),
-                _ => {
-                    let mut link = PacketLink::from_resources(resources);
-                    if version >= 5 {
-                        link.expect_queues();
-                    }
-                    Some(link)
+        let mut previous_links = core::mem::take(&mut self.links);
+        self.links = if version >= 6 {
+            let mut links = Vec::new();
+            for _ in 0..r.count(MAX_LINKS)? {
+                let node_id = r.word()?;
+                let resources = decode_link(&mut r)?;
+                if node_id == 0 || links.iter().any(|link: &NodeLink| link.node_id == node_id) {
+                    return Err(Error::InvalidData);
                 }
+                let link = if let Some(index) = previous_links
+                    .iter()
+                    .position(|link| link.node_id == node_id && link.link.resources == resources)
+                {
+                    previous_links.remove(index).link
+                } else {
+                    let mut link = PacketLink::from_resources(resources);
+                    link.expect_queues();
+                    link
+                };
+                links.push(NodeLink { node_id, link });
             }
+            links.sort_by_key(|link| link.node_id);
+            links
+        } else if r.flag()? {
+            let resources = decode_link(&mut r)?;
+            let mut link = PacketLink::from_resources(resources);
+            if version >= 5 {
+                link.expect_queues();
+            }
+            alloc::vec![NodeLink { node_id: 1, link }]
         } else {
-            None
+            Vec::new()
         };
         r.finish()
     }
@@ -333,9 +364,18 @@ impl State for Runtime {
         if self.control.0 == 0 || self.migration.is_none() {
             return Err(Error::InvalidData);
         }
-        if self.link.as_ref().is_some_and(|link| {
-            link.resources.fifo == 0 || link.resources.rx_vaddr == 0 || !link.queues_valid()
-        }) {
+        if self.links.len() > MAX_LINKS
+            || self
+                .links
+                .windows(2)
+                .any(|pair| pair[0].node_id >= pair[1].node_id)
+            || self.links.iter().any(|node_link| {
+                node_link.node_id == 0
+                    || node_link.link.resources.fifo == 0
+                    || node_link.link.resources.rx_vaddr == 0
+                    || !node_link.link.queues_valid()
+            })
+        {
             return Err(Error::InvalidData);
         }
         for (index, tcp) in self.stack.tcp.iter().enumerate() {
@@ -389,8 +429,8 @@ impl State for Runtime {
                 .iter()
                 .map(|socket| Resource::Handle(socket.control)),
         );
-        if let Some(link) = &self.link {
-            let r = link.resources;
+        for node_link in &self.links {
+            let r = node_link.link.resources;
             resources.extend([
                 Resource::Handle(r.control),
                 Resource::Handle(r.fifo),
@@ -417,7 +457,11 @@ impl State for Runtime {
 
     fn activated(&mut self, generation: u64) {
         self.generation = generation;
-        if self.stack.restore_after_migration(self.link.as_mut()) != net_fidl::Status::Ok {
+        if self
+            .stack
+            .restore_after_migration(self.links.first_mut().map(|link| &mut link.link))
+            != net_fidl::Status::Ok
+        {
             let _ = bexos_userspace::migration::abort();
         }
     }

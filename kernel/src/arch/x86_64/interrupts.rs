@@ -85,7 +85,14 @@ pub fn dispatch(frame: *mut bexos_kernel_core::runtime::Context, vector: u64) {
         }
         crate::sched::reschedule_ipi(frame);
     } else {
-        super::ioapic::dispatch(vector);
+        if super::ioapic::dispatch(vector) {
+            let gsi = (vector - 64) as u32;
+            crate::userspace::RUNTIME.with(|state| {
+                if let Some(runtime) = state.as_mut() {
+                    let _ = runtime.deliver_interrupt(gsi, super::X86_64::monotonic_ns());
+                }
+            });
+        }
     }
     write(0xb0, 0);
     if super::X86_64::is_userspace(unsafe { &*frame }) {

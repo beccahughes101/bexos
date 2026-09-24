@@ -1,8 +1,11 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::device_registry::{BusType, DeviceNodeInfo};
-use crate::manifest::{BindBusType, BindCondition, BindRule, ExposedService, Manifest, Process};
+use crate::device_registry::{BusType, DeviceNodeInfo, HardwareResourceKind, RegisteredDeviceNode};
+use crate::manifest::{
+    BindBusType, BindCondition, BindRule, DriverHardwareResourceKind, ExposedService, Manifest,
+    Process,
+};
 use crate::platform_config::{DriverPolicy, HardwareAccessTier, PackageIdentity};
 use crate::runner::hardware_access_for_driver;
 
@@ -60,6 +63,20 @@ impl<'a> DriverIndex<'a> {
         self.ranked_candidates(node, driver_policy, identity_for_manifest, None, None)
             .into_iter()
             .next()
+    }
+
+    pub fn best_match_for_registered<I>(
+        &self,
+        node: &RegisteredDeviceNode,
+        driver_policy: &DriverPolicy,
+        identity_for_manifest: I,
+    ) -> Option<DriverCandidate<'a>>
+    where
+        I: FnMut(&'a Manifest) -> PackageIdentity<'a>,
+    {
+        self.ranked_candidates(&node.info, driver_policy, identity_for_manifest, None, None)
+            .into_iter()
+            .find(|candidate| resources_satisfy(candidate.manifest, node))
     }
 
     pub fn ranked_candidates<I>(
@@ -121,6 +138,27 @@ impl<'a> DriverIndex<'a> {
     pub fn is_empty(&self) -> bool {
         self.manifests.is_empty()
     }
+}
+
+fn resources_satisfy(manifest: &Manifest, node: &RegisteredDeviceNode) -> bool {
+    manifest.driver_info.as_ref().is_none_or(|info| {
+        info.required_resources.iter().all(|requirement| {
+            let kind = match requirement.kind {
+                DriverHardwareResourceKind::Mmio => HardwareResourceKind::Mmio,
+                DriverHardwareResourceKind::Interrupt => HardwareResourceKind::Interrupt,
+                DriverHardwareResourceKind::DmaPool => HardwareResourceKind::DmaPool,
+                DriverHardwareResourceKind::IommuDomain => HardwareResourceKind::IommuDomain,
+                DriverHardwareResourceKind::RegisterProxy => HardwareResourceKind::RegisterProxy,
+                DriverHardwareResourceKind::BusControl => HardwareResourceKind::BusControl,
+                DriverHardwareResourceKind::Unspecified => return false,
+            };
+            node.resources
+                .iter()
+                .filter(|resource| resource.kind == kind)
+                .count()
+                >= requirement.min_count as usize
+        })
+    })
 }
 
 impl DriverExclusions {

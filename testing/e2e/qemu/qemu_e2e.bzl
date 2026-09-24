@@ -104,8 +104,13 @@ def qemu_e2e_test(
         test_env["BEXOS_QEMU_DEVICE_ARGS"] = " ".join(qemu_args)
     arm_env = dict(test_env, BEXOS_QEMU_ARCH = "aarch64")
     arm_data = list(test_data)
+    if "arm_kernel" in boot_data:
+        arm_env["BEXOS_QEMU_KERNEL"] = "$(rootpath %s)" % boot_data["arm_kernel"]
+        arm_data.append(boot_data["arm_kernel"])
     arm_env["BEXOS_QEMU_AARCH64_BINARY"] = "$(rootpath //third_party/qemu:secure_aarch64)"
     arm_data.append("//third_party/qemu:secure_aarch64")
+    if development:
+        arm_env["BEXOS_QEMU_DEVELOPMENT"] = "1"
     if secure_firmware:
         arm_env["BEXOS_QEMU_SECURE_BL1"] = "$(rootpath %s)" % secure_firmware["bl1"]
         arm_env["BEXOS_QEMU_SECURE_BL2"] = "$(rootpath %s)" % secure_firmware["bl2"]

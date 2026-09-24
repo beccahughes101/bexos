@@ -44,6 +44,8 @@ pub fn decode<'a>(bytes: &'a [u8], handles: &'a [HandleRef]) -> Result<Startup<'
                 locale_data_len: 0,
                 locale_data_generation: 0,
                 locale_settings: &[],
+                driver_host_controller: &[],
+                driver_recovery: &[],
             }
         }};
     }
@@ -93,7 +95,22 @@ pub fn decode<'a>(bytes: &'a [u8], handles: &'a [HandleRef]) -> Result<Startup<'
             out.lazy_generation = s.lazy_generation;
             out
         }
-        10 => read!(Startup),
+        10 => {
+            let s = read!(StartupV10);
+            let mut out = base!(s);
+            trace!(out, s);
+            driver!(out, s);
+            out.incoming_service_endpoints = s.incoming_service_endpoints;
+            out.incoming_service_descriptors = s.incoming_service_descriptors;
+            out.lazy_idle_timeout_ms = s.lazy_idle_timeout_ms;
+            out.lazy_generation = s.lazy_generation;
+            out.locale_data = s.locale_data;
+            out.locale_data_len = s.locale_data_len;
+            out.locale_data_generation = s.locale_data_generation;
+            out.locale_settings = s.locale_settings;
+            out
+        }
+        11 => read!(Startup),
         _ => return Err(Status::ErrInvalidArgs),
     })
 }

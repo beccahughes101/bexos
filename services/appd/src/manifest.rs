@@ -262,6 +262,57 @@ pub struct DriverInfo {
     pub name: String,
     pub package_id: String,
     pub version: String,
+    pub execution: DriverExecution,
+    pub required_resources: Vec<RequiredHardwareResource>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum DriverColocationPolicy {
+    #[default]
+    Isolated,
+    Colocated,
+    HostShared,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum DriverRestartStrategy {
+    #[default]
+    HeartTransplant,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DriverExecution {
+    pub colocation_policy: DriverColocationPolicy,
+    pub max_instances_per_host: u32,
+    pub restart_strategy: DriverRestartStrategy,
+}
+
+impl Default for DriverExecution {
+    fn default() -> Self {
+        Self {
+            colocation_policy: DriverColocationPolicy::Isolated,
+            max_instances_per_host: 1,
+            restart_strategy: DriverRestartStrategy::HeartTransplant,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum DriverHardwareResourceKind {
+    #[default]
+    Unspecified,
+    Mmio,
+    Interrupt,
+    DmaPool,
+    IommuDomain,
+    RegisterProxy,
+    BusControl,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RequiredHardwareResource {
+    pub kind: DriverHardwareResourceKind,
+    pub min_count: u32,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -445,6 +496,7 @@ pub enum ManifestError {
     InvalidWasmOptions,
     InvalidCommand,
     InvalidLazyService,
+    InvalidDriver,
 }
 
 impl Manifest {
@@ -455,6 +507,7 @@ impl Manifest {
     pub fn validate_package_shape(&self) -> Result<(), ManifestError> {
         self.validate_commands()?;
         self.validate_lazy_services()?;
+        self.validate_driver()?;
         match self.package_kind {
             PackageKind::Application => Ok(()),
             PackageKind::Library => {
@@ -467,6 +520,67 @@ impl Manifest {
             PackageKind::TrustedApp => self.validate_trusted_app(),
             PackageKind::Unspecified => Err(ManifestError::InvalidTrustedApp),
         }
+    }
+
+    fn validate_driver(&self) -> Result<(), ManifestError> {
+        let is_driver = self.driver_info.is_some() || !self.bind_rules.is_empty();
+        if !is_driver {
+            return Ok(());
+        }
+        let info = self
+            .driver_info
+            .as_ref()
+            .ok_or(ManifestError::InvalidDriver)?;
+        if info.name.is_empty()
+            || self.bind_rules.is_empty()
+            || self.processes.len() != 1
+            || self.processes[0].lifecycle.update_strategy != UpdateStrategy::HeartTransplant
+            || !(1..=64).contains(&info.execution.max_instances_per_host)
+            || info.required_resources.len() > 16
+        {
+            return Err(ManifestError::InvalidDriver);
+        }
+        if info.execution.colocation_policy == DriverColocationPolicy::Isolated
+            && info.execution.max_instances_per_host != 1
+        {
+            return Err(ManifestError::InvalidDriver);
+        }
+        for (index, required) in info.required_resources.iter().enumerate() {
+            if required.kind == DriverHardwareResourceKind::Unspecified
+                || required.min_count == 0
+                || required.min_count > 16
+                || info.required_resources[..index]
+                    .iter()
+                    .any(|prior| prior.kind == required.kind)
+            {
+                return Err(ManifestError::InvalidDriver);
+            }
+        }
+        for rule in &self.bind_rules {
+            if rule.conditions.is_empty()
+                || rule.conditions.iter().any(|condition| {
+                    condition.bus == BindBusType::Unspecified
+                        || condition.properties.is_empty()
+                        || condition
+                            .properties
+                            .iter()
+                            .any(|property| property.key.is_empty())
+                })
+            {
+                return Err(ManifestError::InvalidDriver);
+            }
+        }
+        // Hardware drivers may consume control-plane services, but never an
+        // ambient socket provider. Package acquisition is performed by appd.
+        if self.services_consumed.iter().any(|service| {
+            matches!(
+                service.name.as_str(),
+                "bexos.net.Netstack" | "bexos.net.SocketProvider"
+            )
+        }) {
+            return Err(ManifestError::InvalidDriver);
+        }
+        Ok(())
     }
 
     pub fn service_provider_process<'a>(
@@ -970,11 +1084,50 @@ fn decode_driver_info(bytes: &[u8]) -> Result<DriverInfo, ManifestError> {
             1 => info.name = field.string()?,
             2 => info.package_id = field.string()?,
             3 => info.version = field.string()?,
+            4 => info.execution = decode_driver_execution(field.bytes()?)?,
+            5 => info
+                .required_resources
+                .push(decode_required_hardware_resource(field.bytes()?)?),
             _ => {}
         }
     }
 
     Ok(info)
+}
+
+fn decode_driver_execution(bytes: &[u8]) -> Result<DriverExecution, ManifestError> {
+    let mut execution = DriverExecution::default();
+    let mut cursor = Cursor::new(bytes);
+    while let Some(field) = cursor.next_field()? {
+        match field.number {
+            1 => execution.colocation_policy = DriverColocationPolicy::from_proto(field.varint()?),
+            2 => {
+                let count = field.varint()? as u32;
+                execution.max_instances_per_host = count.max(1);
+            }
+            3 => execution.restart_strategy = DriverRestartStrategy::from_proto(field.varint()?)?,
+            _ => {}
+        }
+    }
+    Ok(execution)
+}
+
+fn decode_required_hardware_resource(
+    bytes: &[u8],
+) -> Result<RequiredHardwareResource, ManifestError> {
+    let mut required = RequiredHardwareResource {
+        kind: DriverHardwareResourceKind::Unspecified,
+        min_count: 1,
+    };
+    let mut cursor = Cursor::new(bytes);
+    while let Some(field) = cursor.next_field()? {
+        match field.number {
+            1 => required.kind = DriverHardwareResourceKind::from_proto(field.varint()?),
+            2 => required.min_count = (field.varint()? as u32).max(1),
+            _ => {}
+        }
+    }
+    Ok(required)
 }
 
 fn decode_bind_rule(bytes: &[u8]) -> Result<BindRule, ManifestError> {
@@ -1304,6 +1457,39 @@ impl BindBusType {
             3 => Self::PlatformDt,
             4 => Self::I2c,
             5 => Self::Spi,
+            _ => Self::Unspecified,
+        }
+    }
+}
+
+impl DriverColocationPolicy {
+    const fn from_proto(value: u64) -> Self {
+        match value {
+            1 => Self::Colocated,
+            2 => Self::HostShared,
+            _ => Self::Isolated,
+        }
+    }
+}
+
+impl DriverRestartStrategy {
+    fn from_proto(value: u64) -> Result<Self, ManifestError> {
+        match value {
+            0 => Ok(Self::HeartTransplant),
+            _ => Err(ManifestError::InvalidDriver),
+        }
+    }
+}
+
+impl DriverHardwareResourceKind {
+    const fn from_proto(value: u64) -> Self {
+        match value {
+            1 => Self::Mmio,
+            2 => Self::Interrupt,
+            3 => Self::DmaPool,
+            4 => Self::IommuDomain,
+            5 => Self::RegisterProxy,
+            6 => Self::BusControl,
             _ => Self::Unspecified,
         }
     }

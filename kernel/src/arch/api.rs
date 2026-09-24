@@ -37,6 +37,11 @@ pub trait ArchAPI {
         None
     }
     fn pci_ecam_base() -> u64;
+    fn pci_segment() -> u16;
+    fn pci_bus_range() -> (u8, u8);
+    fn pci_mmio_window() -> (u64, u64);
+    fn configure_interrupt(irq_number: u32, flags: u32) -> bool;
+    fn mask_interrupt(irq_number: u32, masked: bool) -> bool;
     fn random_seed() -> Option<[u64; 4]>;
     fn initialize_primary(features: KernelFeatureState, seed: [u64; 4]);
     fn initialize_secondary(features: KernelFeatureState);

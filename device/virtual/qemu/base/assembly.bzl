@@ -42,6 +42,8 @@ QEMU_PRODUCT_MANIFESTS = {
         "//drivers/d1/rtc/arm/pl031:pl031": "//drivers/d1/rtc/arm/pl031:package_manifest",
         "//drivers/d1/serial/arm/pl011:pl011": "//drivers/d1/serial/arm/pl011:package_manifest",
         "//drivers/d1/nic/virtio/net:virtio_net_driver": "//drivers/d1/nic/virtio/net:package_manifest",
+        "//drivers/d1/nic/intel/e1000e:e1000e_driver": "//drivers/d1/nic/intel/e1000e:package_manifest",
+        "//drivers/d1/nic/intel/igb:igb_driver": "//drivers/d1/nic/intel/igb:package_manifest",
         "//lib/crypto:crypto_archive": "//lib/crypto:package_manifest",
         "//lib/net:net_archive": "//lib/net:package_manifest",
         "//lib/tee_driver_software:tee_driver_software_archive": "//lib/tee_driver_software:package_manifest",

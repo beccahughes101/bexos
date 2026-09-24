@@ -362,6 +362,12 @@ impl ReadinessGate for Gate {
             "bexos.service.usersd" => self.users = Some(c),
             "bexos.service.keychaind" => self.keychain = Some(c),
             "bexos.service.fontd" => self.fontd = Some(c),
+            // Runtime-installed drivers are discovered from their manifest,
+            // so their package names are intentionally not part of appd's
+            // boot-time service-name table.  A nonzero binding node proves
+            // this launch came through the authenticated device coordinator;
+            // the generic ready handshake below is the commit point.
+            _ if self.binding_node_id != 0 && p.process_ref.manifest.driver_info.is_some() => {}
             _ if p.process_ref.process.runner == "wasm" => {}
             _ => return Err(ReadinessError::NotReady),
         }
@@ -451,6 +457,8 @@ impl ReadinessGate for Gate {
         process_name: alloc::string::String,
         hardware_access: HardwareAccessTier,
     ) -> Result<(), DeviceRegistryError> {
+        let failed_package = package_id.clone();
+        let failed_process = process_name.clone();
         self.registry
             .begin_binding(node_id, package_id, process_name)?;
         if let Some(node) = self
@@ -476,6 +484,20 @@ impl ReadinessGate for Gate {
                 },
             )
             .map_err(|_| DeviceRegistryError::BadState(node_id))?;
+            if let Some(control) = node
+                .resources
+                .iter()
+                .find(|resource| resource.kind == HardwareResourceKind::BusControl)
+                .map(|resource| resource.capability)
+                && crate::lifecycle::set_pci_bus_master(control, true).is_err()
+            {
+                for resource in self.binding_resources.drain(..) {
+                    let _ = Memory::close(resource.handle);
+                }
+                self.registry
+                    .bind_failed(node_id, failed_package, failed_process)?;
+                return Err(DeviceRegistryError::BadState(node_id));
+            }
         }
         Ok(())
     }
@@ -508,6 +530,21 @@ impl ReadinessGate for Gate {
         package_id: alloc::string::String,
         process_name: alloc::string::String,
     ) -> Result<(), DeviceRegistryError> {
+        if let Some(control) = self
+            .registry
+            .nodes()
+            .iter()
+            .find(|node| node.info.node_id == node_id)
+            .and_then(|node| {
+                node.resources
+                    .iter()
+                    .find(|resource| resource.kind == HardwareResourceKind::BusControl)
+            })
+            .map(|resource| resource.capability)
+        {
+            let _ = crate::lifecycle::set_pci_bus_master(control, false);
+            let _ = crate::lifecycle::reset_pci(control);
+        }
         self.registry.bind_failed(node_id, package_id, process_name)
     }
 }
@@ -688,6 +725,7 @@ pub(super) fn register_fidl_node(
                 .info
                 .has_parent
                 .then_some(request.info.parent_node_id),
+            topological_path: request.info.topological_path.to_string(),
             properties,
         },
         resources,
@@ -970,6 +1008,7 @@ impl Gate {
                         caller_package: None,
                         caller_uid: None,
                         caller_foreground: false,
+                        provider_instance_id: None,
                         endpoint: client.0,
                     });
                 }
@@ -1065,6 +1104,7 @@ impl Gate {
             caller_package: None,
             caller_uid: None,
             caller_foreground: false,
+            provider_instance_id: None,
             endpoint: client.0,
         })
     }
@@ -1097,6 +1137,7 @@ impl Gate {
             caller_package: Some(caller_package.to_string()),
             caller_uid: Some(0),
             caller_foreground: true,
+            provider_instance_id: None,
             endpoint: client.0,
         })
     }

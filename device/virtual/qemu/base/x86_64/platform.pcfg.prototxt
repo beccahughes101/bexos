@@ -103,6 +103,9 @@ driver_policy {
     expected_signer: "bexos_official_platform_v1"
   }
 
+  tier_1_allowlist { package_id: "bexos.driver.network.e1000e" expected_signer: "bexos_official_platform_v1" }
+  tier_1_allowlist { package_id: "bexos.driver.network.igb" expected_signer: "bexos_official_platform_v1" }
+
   tier_1_allowlist {
     package_id: "bexos.service.updated"
     expected_signer: "bexos_official_platform_v1"

@@ -149,6 +149,20 @@ pub extern "C" fn handle_irq(frame: *mut TrapFrame) {
         crate::transplant::prepare::recover_timeout(frame);
     } else if irq == SCHEDULER_SGI {
         sched::reschedule_ipi(frame);
+    } else {
+        let delivery = crate::userspace::RUNTIME.with(|state| {
+            state
+                .as_mut()
+                .map(|runtime| runtime.deliver_interrupt(irq, aarch64::monotonic_ns()))
+                .unwrap_or(bexos_kernel_core::runtime::InterruptDelivery::NotBound)
+        });
+        if matches!(
+            delivery,
+            bexos_kernel_core::runtime::InterruptDelivery::Signaled
+                | bexos_kernel_core::runtime::InterruptDelivery::FloodLimited
+        ) {
+            disable_irq(irq);
+        }
     }
 
     write32(GICC_BASE + GICC_EOIR, iar);
@@ -160,6 +174,33 @@ pub extern "C" fn handle_irq(frame: *mut TrapFrame) {
 fn enable_irq(irq: u32) {
     let register = GICD_BASE + GICD_ISENABLER + ((irq / 32) as usize * 4);
     write32(register, 1 << (irq % 32));
+}
+
+fn disable_irq(irq: u32) {
+    let register = GICD_BASE + GICD_ICENABLER + ((irq / 32) as usize * 4);
+    write32(register, 1 << (irq % 32));
+}
+
+pub fn configure_device_irq(irq: u32) -> bool {
+    if !(32..1020).contains(&irq) {
+        return false;
+    }
+    set_priority(irq, 0x80);
+    set_target_cpus(irq, 1);
+    enable_irq(irq);
+    true
+}
+
+pub fn mask_device_irq(irq: u32, masked: bool) -> bool {
+    if !(32..1020).contains(&irq) {
+        return false;
+    }
+    if masked {
+        disable_irq(irq);
+    } else {
+        enable_irq(irq);
+    }
+    true
 }
 
 fn set_priority(irq: u32, priority: u8) {

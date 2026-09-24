@@ -7,7 +7,8 @@ use crate::transplant::{
     codec::{Reader, Result, Writer},
 };
 
-pub const VERSION: u64 = 19;
+pub const VERSION: u64 = 20;
+const INTERRUPT_VERSION: u64 = 20;
 const CHANNEL_IDENTITY_VERSION: u64 = 19;
 const PRE_SLOT_VERSION: u64 = 18;
 const SHARED_DEVICE_VERSION: u64 = 17;
@@ -220,6 +221,7 @@ impl<B: Backend> Runtime<B> {
                     Object::Profile(id) => (8, id, 0),
                     Object::ReplyToken(id, end, call_id) => (9, id, (call_id << 1) | end as u64),
                     Object::IommuDomain(id) => (10, id, 0),
+                    Object::Interrupt(id) => (11, id, 0),
                 };
                 for v in [kind, id as u64, end as u64, c.rights as u64, c.owner as u64] {
                     w.word(v)?;
@@ -299,6 +301,23 @@ impl<B: Backend> Runtime<B> {
         for mapping in &self.dma_mappings {
             dma_snapshot::write_mapping(w, *mapping)?;
         }
+        w.word(self.interrupts.len() as u64)?;
+        for interrupt in &self.interrupts {
+            w.word(interrupt.is_some() as u64)?;
+            if let Some(interrupt) = interrupt {
+                for value in [
+                    u64::from(interrupt.irq_number),
+                    u64::from(interrupt.flags),
+                    interrupt.masked as u64,
+                    interrupt.awaiting_ack as u64,
+                    interrupt.window_started_ns,
+                    u64::from(interrupt.events_in_window),
+                    u64::from(interrupt.flood_limit_per_second),
+                ] {
+                    w.word(value)?;
+                }
+            }
+        }
         self.scheduler.write_snapshot(w)?;
         Ok(())
     }
@@ -309,6 +328,7 @@ impl<B: Backend> Runtime<B> {
         }
         let version = r.word()?;
         if version != VERSION
+            && version != CHANNEL_IDENTITY_VERSION
             && version != PRE_SLOT_VERSION
             && version != SHARED_DEVICE_VERSION
             && version != ARCHITECTURE_VERSION
@@ -503,6 +523,7 @@ impl<B: Backend> Runtime<B> {
                     (8, 0) => Object::Profile(id),
                     (9, value) => Object::ReplyToken(id, value & 1, (value >> 1) as u64),
                     (10, 0) => Object::IommuDomain(id),
+                    (11, 0) if version >= INTERRUPT_VERSION => Object::Interrupt(id),
                     _ => return Err(TransplantError::InvalidRuntimeSnapshot),
                 };
                 Some(Capability {
@@ -627,6 +648,37 @@ impl<B: Backend> Runtime<B> {
             }
             for _ in 0..r.count(262144)? {
                 rt.dma_mappings.push(dma_snapshot::read_mapping(r)?);
+            }
+            if version >= INTERRUPT_VERSION {
+                for _ in 0..r.count(65536)? {
+                    rt.interrupts.push(if r.flag()? {
+                        let irq_number = u32::try_from(r.word()?)
+                            .map_err(|_| TransplantError::InvalidRuntimeSnapshot)?;
+                        let flags = u32::try_from(r.word()?)
+                            .map_err(|_| TransplantError::InvalidRuntimeSnapshot)?;
+                        let masked = r.flag()?;
+                        let awaiting_ack = r.flag()?;
+                        let window_started_ns = r.word()?;
+                        let events_in_window = u32::try_from(r.word()?)
+                            .map_err(|_| TransplantError::InvalidRuntimeSnapshot)?;
+                        let flood_limit_per_second = u32::try_from(r.word()?)
+                            .map_err(|_| TransplantError::InvalidRuntimeSnapshot)?;
+                        if flood_limit_per_second == 0 || (!masked && awaiting_ack) {
+                            return Err(TransplantError::InvalidRuntimeSnapshot);
+                        }
+                        Some(Interrupt {
+                            irq_number,
+                            flags,
+                            masked,
+                            awaiting_ack,
+                            window_started_ns,
+                            events_in_window,
+                            flood_limit_per_second,
+                        })
+                    } else {
+                        None
+                    });
+                }
             }
             rt.scheduler = Scheduler::read_snapshot(r)?;
         }
@@ -794,6 +846,16 @@ impl<B: Backend> Runtime<B> {
                         .and_then(|domain| domain.as_ref())
                         .ok_or(bad)?;
                     if domain.closed || domain.owner >= self.processes.len() {
+                        return Err(bad);
+                    }
+                }
+                Object::Interrupt(id) => {
+                    if self
+                        .interrupts
+                        .get(id)
+                        .and_then(|interrupt| interrupt.as_ref())
+                        .is_none()
+                    {
                         return Err(bad);
                     }
                 }

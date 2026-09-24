@@ -1,5 +1,5 @@
 use alloc::{vec, vec::Vec};
-use bexos_d1_pci::{ECAM_SIZE, MAX_BUSES, RootPort};
+use bexos_d1_pci::{ECAM_SIZE, MAX_BUSES, RootBusConfig, RootPort};
 use bexos_migration::{
     Error,
     codec::{Decoder, Encoder},
@@ -12,16 +12,25 @@ use bexos_userspace::{
 pub struct Pending {
     pub node: u64,
     pub added: bool,
+    pub control: Option<Channel>,
+    pub interrupt: Option<u64>,
+}
+pub struct DeviceControl {
+    pub node: u64,
+    pub channel: Channel,
+    pub interrupt: u64,
 }
 pub struct Runtime {
     pub control: ControlState,
     pub registry: Channel,
     pub cursor: u64,
+    pub root: RootBusConfig,
     pub next_poll_ms: u64,
     pub known: Vec<u64>,
     pub ports: Vec<RootPort>,
     pub pending: Option<Pending>,
     pub power: Vec<Channel>,
+    pub device_controls: Vec<DeviceControl>,
     pub extended: bool,
 }
 impl State for Runtime {
@@ -30,11 +39,13 @@ impl State for Runtime {
             control: ControlState::empty(),
             registry: Channel(0),
             cursor: 0,
+            root: RootBusConfig::qemu_virt(),
             next_poll_ms: 0,
             known: Vec::new(),
             ports: Vec::new(),
             pending: None,
             power: Vec::new(),
+            device_controls: Vec::new(),
             extended: false,
         }
     }
@@ -52,9 +63,11 @@ impl State for Runtime {
             return Ok(None);
         }
         let mut w = Encoder::new();
-        w.word(if self.ports.is_empty() { 1 } else { 2 });
+        w.word(5);
         w.word(self.registry.0);
         w.word(self.cursor);
+        w.word(self.root.mmio_base);
+        w.word(self.root.mmio_limit);
         w.word(self.next_poll_ms);
         w.word(self.known.len() as u64);
         for node in &self.known {
@@ -64,23 +77,29 @@ impl State for Runtime {
         if let Some(p) = &self.pending {
             w.word(p.node);
             w.word(p.added as u64);
+            w.word(p.control.as_ref().map_or(0, |channel| channel.0));
+            w.word(p.interrupt.unwrap_or(0));
         }
         w.word(self.power.len() as u64);
         for c in &self.power {
             w.word(c.0);
         }
-        if !self.ports.is_empty() {
-            w.word(self.ports.len() as u64);
-            for port in &self.ports {
-                for value in [
-                    bexos_d1_pci::node_id(port.address),
-                    port.secondary as u64,
-                    port.base,
-                    port.limit,
-                    port.cursor,
-                ] {
-                    w.word(value);
-                }
+        w.word(self.device_controls.len() as u64);
+        for control in &self.device_controls {
+            w.word(control.node);
+            w.word(control.channel.0);
+            w.word(control.interrupt);
+        }
+        w.word(self.ports.len() as u64);
+        for port in &self.ports {
+            for value in [
+                bexos_d1_pci::node_id(port.address),
+                port.secondary as u64,
+                port.base,
+                port.limit,
+                port.cursor,
+            ] {
+                w.word(value);
             }
         }
         Ok(Some(w.finish()))
@@ -94,11 +113,16 @@ impl State for Runtime {
         }
         let mut r = Decoder::new(bytes.ok_or(Error::InvalidData)?);
         let version = r.word()?;
-        if !(1..=2).contains(&version) {
+        if !(1..=5).contains(&version) {
             return Err(Error::UnsupportedVersion);
         }
         let registry = Channel(r.word()?);
         let cursor = r.word()?;
+        let root = if version >= 4 {
+            RootBusConfig::new(r.word()?, r.word()?).map_err(|_| Error::InvalidData)?
+        } else {
+            RootBusConfig::qemu_virt()
+        };
         let next_poll_ms = r.word()?;
         let mut known = Vec::new();
         for _ in 0..r.count(16)? {
@@ -112,6 +136,18 @@ impl State for Runtime {
             Some(Pending {
                 node: r.word()?,
                 added: r.flag()?,
+                control: if version >= 3 {
+                    let handle = r.word()?;
+                    (handle != 0).then_some(Channel(handle))
+                } else {
+                    None
+                },
+                interrupt: if version >= 5 {
+                    let handle = r.word()?;
+                    (handle != 0).then_some(handle)
+                } else {
+                    None
+                },
             })
         } else {
             None
@@ -124,7 +160,31 @@ impl State for Runtime {
             }
             power.push(c);
         }
-        let limits = bexos_d1_pci::RootBusConfig::qemu_virt();
+        let mut device_controls = Vec::new();
+        if version >= 3 {
+            for _ in 0..r.count(256)? {
+                let node = r.word()?;
+                let channel = Channel(r.word()?);
+                let interrupt = if version >= 5 { r.word()? } else { 0 };
+                if !valid_node(node)
+                    || channel.0 == 0
+                    || (version >= 5 && interrupt == 0)
+                    || device_controls.iter().any(|control: &DeviceControl| {
+                        control.node == node
+                            || control.channel.0 == channel.0
+                            || (interrupt != 0 && control.interrupt == interrupt)
+                    })
+                {
+                    return Err(Error::InvalidData);
+                }
+                device_controls.push(DeviceControl {
+                    node,
+                    channel,
+                    interrupt,
+                });
+            }
+        }
+        let limits = root;
         let mut ports: Vec<RootPort> = Vec::new();
         if version >= 2 {
             for _ in 0..r.count(MAX_BUSES as usize - 1)? {
@@ -151,7 +211,7 @@ impl State for Runtime {
                 }
                 ports.push(port);
             }
-            if ports.is_empty() {
+            if version < 4 && ports.is_empty() {
                 return Err(Error::InvalidData);
             }
         }
@@ -169,11 +229,13 @@ impl State for Runtime {
         }
         self.registry = registry;
         self.cursor = cursor;
+        self.root = root;
         self.next_poll_ms = next_poll_ms;
         self.known = known;
         self.ports = ports;
         self.pending = pending;
         self.power = power;
+        self.device_controls = device_controls;
         self.extended = true;
         Ok(())
     }
@@ -213,6 +275,22 @@ impl State for Runtime {
             resources.push(Resource::Handle(self.registry.0));
         }
         resources.extend(self.power.iter().map(|c| Resource::Handle(c.0)));
+        resources.extend(
+            self.device_controls
+                .iter()
+                .flat_map(|control| {
+                    [control.channel.0, control.interrupt]
+                        .into_iter()
+                        .filter(|handle| *handle != 0)
+                        .map(Resource::Handle)
+                }),
+        );
+        if let Some(control) = self.pending.as_ref().and_then(|pending| pending.control) {
+            resources.push(Resource::Handle(control.0));
+        }
+        if let Some(interrupt) = self.pending.as_ref().and_then(|pending| pending.interrupt) {
+            resources.push(Resource::Handle(interrupt));
+        }
         resources
     }
     fn activated(&mut self, generation: u64) {

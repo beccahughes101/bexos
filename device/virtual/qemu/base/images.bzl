@@ -60,6 +60,14 @@ QEMU_STORAGE_PREINSTALLS = [
         "path": "pkg/bexos.driver.network.virtio_net.bex",
     },
     {
+        "archive": "//drivers/d1/nic/intel/e1000e:driver_archive",
+        "path": "pkg/bexos.driver.network.e1000e.bex",
+    },
+    {
+        "archive": "//drivers/d1/nic/intel/igb:driver_archive",
+        "path": "pkg/bexos.driver.network.igb.bex",
+    },
+    {
         "archive": ":qemu_netstackd_archive",
         "path": "pkg/bexos.service.netstackd.bex",
     },

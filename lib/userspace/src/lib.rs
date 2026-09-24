@@ -24,6 +24,7 @@ pub mod command;
 pub mod dynamic_link;
 pub mod executor;
 pub mod fs;
+pub mod interrupt;
 pub mod ipc;
 pub mod memory;
 pub mod preferences;
@@ -32,6 +33,7 @@ mod startup_compat;
 pub mod syscall;
 pub mod vfs;
 pub use executor::block_on;
+pub use interrupt::Interrupt;
 pub use ipc::{Channel, KernelTransport, Message, Rpc, Socket, SocketInfo};
 pub use memory::Memory;
 pub use startup::{

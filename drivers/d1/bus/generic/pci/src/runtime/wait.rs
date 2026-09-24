@@ -12,11 +12,12 @@ pub fn idle(state: &Runtime, quiescing: bool) {
     let mut items = [InlineVectorStruct1 {
         h: HandleRef { raw: 0 },
         signals: Signals(Signals::READABLE.0 | Signals::PEER_CLOSED.0),
-    }; 11];
+    }; 267];
     let channels = core::iter::once(state.control.manager)
         .chain(state.control.migration)
         .chain((state.pending.is_some()).then_some(state.registry))
-        .chain(state.power.iter().copied());
+        .chain(state.power.iter().copied())
+        .chain(state.device_controls.iter().map(|control| control.channel));
     let mut count = 0;
     for channel in channels {
         if channel.0 != 0 {

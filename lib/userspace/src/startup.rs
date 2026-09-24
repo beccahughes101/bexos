@@ -2,7 +2,7 @@ use crate::{Channel, Memory, dynamic_link};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 pub use bootstrap_fidl::HardwareResourceKind;
-use bootstrap_fidl::{FidlDecode, FidlEncode, HandleRef};
+use bootstrap_fidl::{FidlEncode, HandleRef};
 use kernel_fidl::Status;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -31,6 +31,7 @@ pub struct ServiceGrant {
     pub caller_package: Option<String>,
     pub caller_uid: Option<u64>,
     pub caller_foreground: bool,
+    pub provider_instance_id: Option<String>,
     pub endpoint: u64,
 }
 
@@ -57,6 +58,8 @@ pub struct Startup {
     pub resources: Vec<u64>,
     pub driver_resources: Vec<StartupHardwareResource>,
     pub driver_lifecycle: Option<Channel>,
+    pub driver_host_controller: Option<Channel>,
+    pub driver_recovery: Option<u64>,
     pub arg0: u64,
     pub arg1: u64,
     pub namespace: Vec<NamespaceEntry>,
@@ -83,7 +86,7 @@ impl Startup {
             2 => decode_v2_startup(&m.bytes, &hs),
             3 => decode_v3_startup(&m.bytes, &hs),
             4 | 5 => decode_v4_or_v5_startup(&m.bytes, &hs),
-            6 | 7 | 8 | 9 | 10 => decode_v6_or_later_startup(&m.bytes, &hs),
+            6 | 7 | 8 | 9 | 10 | 11 => decode_v6_or_later_startup(&m.bytes, &hs),
             _ => Err(Status::ErrInvalidArgs),
         }
     }
@@ -369,6 +372,8 @@ impl Startup {
             0,
             0,
             None,
+            None,
+            None,
         )
     }
 
@@ -410,6 +415,8 @@ impl Startup {
             lazy_idle_timeout_ms,
             lazy_generation,
             locale,
+            None,
+            None,
         )
     }
 
@@ -424,6 +431,37 @@ impl Startup {
         service_grants: &[ServiceGrant],
         linker_data: Option<(u64, u64)>,
         trace_producer: Option<TraceProducerDescriptor>,
+    ) -> Result<(), Status> {
+        Self::send_d1_driver_managed(
+            channel,
+            driver_resources,
+            lifecycle,
+            node_id,
+            migration,
+            generation,
+            target,
+            service_grants,
+            linker_data,
+            trace_producer,
+            None,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn send_d1_driver_managed(
+        channel: Channel,
+        driver_resources: &[StartupHardwareResource],
+        lifecycle: Channel,
+        node_id: u64,
+        migration: Option<Channel>,
+        generation: u64,
+        target: bool,
+        service_grants: &[ServiceGrant],
+        linker_data: Option<(u64, u64)>,
+        trace_producer: Option<TraceProducerDescriptor>,
+        driver_host_controller: Option<Channel>,
+        driver_recovery: Option<u64>,
     ) -> Result<(), Status> {
         Self::send_full(
             channel,
@@ -445,6 +483,8 @@ impl Startup {
             0,
             0,
             None,
+            driver_host_controller,
+            driver_recovery,
         )
     }
 
@@ -468,6 +508,8 @@ impl Startup {
         lazy_idle_timeout_ms: u32,
         lazy_generation: u64,
         locale: Option<&LocaleDescriptor>,
+        driver_host_controller: Option<Channel>,
+        driver_recovery: Option<u64>,
     ) -> Result<(), Status> {
         let locale_handles: Vec<_> = locale
             .into_iter()
@@ -495,6 +537,14 @@ impl Startup {
         let lifecycle_handles: Vec<_> = driver_lifecycle
             .into_iter()
             .map(|c| HandleRef { raw: c.0 })
+            .collect();
+        let driver_host_handles: Vec<_> = driver_host_controller
+            .into_iter()
+            .map(|c| HandleRef { raw: c.0 })
+            .collect();
+        let driver_recovery_handles: Vec<_> = driver_recovery
+            .into_iter()
+            .map(|raw| HandleRef { raw })
             .collect();
         let namespace_handles: Vec<_> = namespace
             .iter()
@@ -550,7 +600,7 @@ impl Startup {
             encode_service_grant_descriptors(incoming_service_grants)?;
         let paths = namespace_paths(namespace)?;
         let s = bootstrap_fidl::Startup {
-            version: 10,
+            version: 11,
             resources: &hs,
             arg0,
             arg1,
@@ -590,6 +640,8 @@ impl Startup {
             locale_data_len: locale.map_or(0, |d| d.data_len),
             locale_data_generation: locale.map_or(0, |d| d.data_generation),
             locale_settings: locale.map_or(&[], |d| d.settings.as_slice()),
+            driver_host_controller: &driver_host_handles,
+            driver_recovery: &driver_recovery_handles,
         };
         let mut bytes = [0; 8192];
         let mut handles = [HandleRef { raw: 0 }; 80];
@@ -633,6 +685,12 @@ impl Startup {
         }
         if let Some(channel) = self.driver_lifecycle {
             close_once(channel.0, &mut closed);
+        }
+        if let Some(channel) = self.driver_host_controller {
+            close_once(channel.0, &mut closed);
+        }
+        if let Some(recovery) = self.driver_recovery {
+            close_once(recovery, &mut closed);
         }
     }
 }
@@ -728,6 +786,10 @@ fn encode_service_grant_descriptors(grants: &[ServiceGrant]) -> Result<String, S
                 .caller_package
                 .as_deref()
                 .is_some_and(|value| value.contains('|') || value.contains(';'))
+            || grant
+                .provider_instance_id
+                .as_deref()
+                .is_some_and(|value| value.contains('|') || value.contains(';'))
             || grant.permission_values.iter().any(|value| {
                 value.contains('|')
                     || value.contains(';')
@@ -759,7 +821,10 @@ fn encode_service_grant_descriptors(grants: &[ServiceGrant]) -> Result<String, S
             }
             out.push_str(value);
         }
-        if grant.caller_package.is_some() || grant.caller_uid.is_some() || !grant.caller_foreground
+        if grant.caller_package.is_some()
+            || grant.caller_uid.is_some()
+            || !grant.caller_foreground
+            || grant.provider_instance_id.is_some()
         {
             out.push('|');
             if let Some(package) = &grant.caller_package {
@@ -771,6 +836,10 @@ fn encode_service_grant_descriptors(grants: &[ServiceGrant]) -> Result<String, S
             }
             out.push('|');
             out.push_str(if grant.caller_foreground { "fg" } else { "bg" });
+            out.push('|');
+            if let Some(instance) = &grant.provider_instance_id {
+                out.push_str(instance);
+            }
         }
     }
     if out.len() > 1024 {
@@ -810,6 +879,13 @@ fn parse_service_grant_descriptors(value: &str) -> Result<Vec<ServiceGrant>, Sta
             .next()
             .map(|value| value == "fg" || value == "1")
             .unwrap_or(true);
+        let provider_instance_id = parts.next().and_then(|value| {
+            if value.is_empty() {
+                None
+            } else {
+                Some(value.to_string())
+            }
+        });
         if parts.next().is_some()
             || service.is_empty()
             || protocol.is_empty()
@@ -836,6 +912,7 @@ fn parse_service_grant_descriptors(value: &str) -> Result<Vec<ServiceGrant>, Sta
             caller_package,
             caller_uid,
             caller_foreground,
+            provider_instance_id,
             endpoint: 0,
         });
     }
@@ -851,6 +928,8 @@ fn decode_v2_startup(bytes: &[u8], handles: &[HandleRef]) -> Result<Startup, Sta
         resources: decode_handle_vector(bytes, handles, 4)?,
         driver_resources: Vec::new(),
         driver_lifecycle: None,
+        driver_host_controller: None,
+        driver_recovery: None,
         arg0: get_u64(bytes, 20)?,
         arg1: get_u64(bytes, 28)?,
         namespace: namespace_from_legacy_paths(
@@ -883,6 +962,8 @@ fn decode_v3_startup(bytes: &[u8], handles: &[HandleRef]) -> Result<Startup, Sta
         resources: decode_handle_vector(bytes, handles, 4)?,
         driver_resources: Vec::new(),
         driver_lifecycle: None,
+        driver_host_controller: None,
+        driver_recovery: None,
         arg0: get_u64(bytes, 20)?,
         arg1: get_u64(bytes, 28)?,
         namespace: namespace_from_legacy_paths(
@@ -945,6 +1026,8 @@ fn decode_v4_or_v5_startup(bytes: &[u8], handles: &[HandleRef]) -> Result<Startu
         resources: resources.clone(),
         driver_resources: Vec::new(),
         driver_lifecycle: None,
+        driver_host_controller: None,
+        driver_recovery: None,
         arg0: get_u64(bytes, 20)?,
         arg1: get_u64(bytes, 28)?,
         namespace: namespace_from_legacy_paths(decode_string(bytes, 36)?, &resources)?,
@@ -992,7 +1075,7 @@ fn decode_v6_or_later_startup(bytes: &[u8], handles: &[HandleRef]) -> Result<Sta
     {
         return Err(Status::ErrInvalidArgs);
     }
-    if !(6..=10).contains(&s.version) {
+    if !(6..=11).contains(&s.version) {
         return Err(Status::ErrInvalidArgs);
     }
     let descriptors = parse_service_grant_descriptors(s.service_grant_descriptors)?;
@@ -1041,6 +1124,22 @@ fn decode_v6_or_later_startup(bytes: &[u8], handles: &[HandleRef]) -> Result<Sta
         },
         driver_lifecycle: if s.version >= 8 {
             s.driver_lifecycle.first().map(|h| Channel(h.raw))
+        } else {
+            None
+        },
+        driver_host_controller: if s.version >= 11 {
+            if s.driver_host_controller.len() > 1 {
+                return Err(Status::ErrInvalidArgs);
+            }
+            s.driver_host_controller.first().map(|h| Channel(h.raw))
+        } else {
+            None
+        },
+        driver_recovery: if s.version >= 11 {
+            if s.driver_recovery.len() > 1 {
+                return Err(Status::ErrInvalidArgs);
+            }
+            s.driver_recovery.first().map(|h| h.raw)
         } else {
             None
         },

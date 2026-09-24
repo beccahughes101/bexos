@@ -151,7 +151,7 @@ fn startup_v9_wire_layout() {
 }
 #[test]
 fn startup_v10_wire_layout() {
-    let source = bootstrap_fidl::Startup {
+    let source = bootstrap_fidl::StartupV10 {
         version: 10,
         resources: &[HandleRef { raw: 41 }],
         arg0: 7,

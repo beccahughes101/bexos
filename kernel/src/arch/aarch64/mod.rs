@@ -89,6 +89,21 @@ impl super::ArchAPI for Aarch64 {
     fn pci_ecam_base() -> u64 {
         0x3f00_0000
     }
+    fn pci_segment() -> u16 {
+        0
+    }
+    fn pci_bus_range() -> (u8, u8) {
+        (0, 15)
+    }
+    fn pci_mmio_window() -> (u64, u64) {
+        (0x1000_0000, 0x3eff_0000)
+    }
+    fn configure_interrupt(irq_number: u32, _flags: u32) -> bool {
+        interrupts::configure_device_irq(irq_number)
+    }
+    fn mask_interrupt(irq_number: u32, masked: bool) -> bool {
+        interrupts::mask_device_irq(irq_number, masked)
+    }
     fn timer_deadline() -> u64 {
         let value;
         unsafe {

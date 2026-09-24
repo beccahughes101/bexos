@@ -1,3 +1,13 @@
-load("@rules_rust//rust:defs.bzl", "rust_library")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 package(default_visibility = ["//visibility:public"])
 rust_library(name = "pkg_config", srcs = ["src/lib.rs"], crate_name = "bexos_pkg_config", edition = "2024", deps = ["//lib/component_config", "//lib/pkg_client"])
+
+rust_test(
+    name = "pkg_config_tests",
+    srcs = ["tests/hardware_mapping_tests.rs"],
+    edition = "2024",
+    deps = [
+        ":pkg_config",
+        "//lib/pkg_client",
+    ],
+)

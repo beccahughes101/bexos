@@ -2,8 +2,19 @@ use super::{acpi, context, interrupts, time};
 use bexos_kernel_core::cpu_features::{Aarch64CpuFeatures, KernelFeatureState};
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 static ECAM: AtomicU64 = AtomicU64::new(0);
+static PCI_TOPOLOGY: AtomicU64 = AtomicU64::new(0);
 pub fn pci_ecam_base() -> u64 {
     ECAM.load(Ordering::Acquire)
+}
+pub fn pci_segment() -> u16 {
+    PCI_TOPOLOGY.load(Ordering::Acquire) as u16
+}
+pub fn pci_bus_range() -> (u8, u8) {
+    let value = PCI_TOPOLOGY.load(Ordering::Acquire);
+    ((value >> 16) as u8, (value >> 24) as u8)
+}
+pub fn pci_topology_word() -> u64 {
+    PCI_TOPOLOGY.load(Ordering::Acquire)
 }
 static BOOTED: AtomicU64 = AtomicU64::new(1);
 static CONFIGURED: AtomicU64 = AtomicU64::new(1);
@@ -22,6 +33,12 @@ pub fn initialize_primary(_features: KernelFeatureState, _seed: [u64; 4]) {
     super::transplant::initialize_parking_trampoline();
     let tables = acpi::discover();
     ECAM.store(tables.ecam, Ordering::Release);
+    PCI_TOPOLOGY.store(
+        u64::from(tables.pci_segment)
+            | (u64::from(tables.pci_bus_start) << 16)
+            | (u64::from(tables.pci_bus_end) << 24),
+        Ordering::Release,
+    );
     let configured = CONFIGURED.load(Ordering::Acquire) as usize;
     assert!(configured <= tables.count && configured <= 64);
     let bsp = (unsafe { core::arch::x86_64::__cpuid(1) }.ebx >> 24) as u8;
@@ -150,4 +167,7 @@ pub fn restore_state(state: &[u64]) {
 
 pub fn restore_ecam(base: u64) {
     ECAM.store(base, Ordering::Release);
+}
+pub fn restore_pci_topology(value: u64) {
+    PCI_TOPOLOGY.store(value, Ordering::Release);
 }

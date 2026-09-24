@@ -35,6 +35,8 @@ struct DeviceNodeInfo {
     bus BusType;
     has_parent bool;
     parent_node_id uint64;
+    /// Stable, canonical path (for example pci/0000:00:03.0/virtio-net).
+    topological_path string:256;
     properties vector<DeviceProperty>:32;
 };
 
@@ -82,6 +84,72 @@ protocol DeviceRegistry {
 protocol DriverLifecycle {
     PrepareStop(struct {
         reason StopReason;
+    }) -> (struct {
+        status Status;
+    });
+};
+
+enum PciInterruptMode : uint8 {
+    LEGACY = 1;
+    MSI = 2;
+    MSIX = 3;
+};
+
+/// Private capability supplied as a BUS_CONTROL resource.  The PCI root owns
+/// configuration space; drivers can only operate on the BDF represented by
+/// this channel.
+protocol PciDeviceControl {
+    SetBusMaster(struct {
+        enabled bool;
+    }) -> (struct {
+        status Status;
+    });
+
+    Reset() -> (struct {
+        status Status;
+    });
+
+    Resume() -> (struct {
+        status Status;
+    });
+
+    ConfigureInterrupts(struct {
+        mode PciInterruptMode;
+        vector_count uint16;
+    }) -> (resource struct {
+        status Status;
+        interrupts vector<handle>:32;
+    });
+};
+
+/// Internal appd-to-driver-host control plane. Existing DeviceRegistry
+/// ordinals remain unchanged because this is a separate protocol.
+protocol DriverHostController {
+    BindDevice(resource struct {
+        info DeviceNodeInfo;
+        resources vector<HardwareResource>:16;
+    }) -> (struct {
+        status Status;
+    });
+
+    UnbindDevice(struct {
+        node_id uint64;
+        reason StopReason;
+    }) -> (struct {
+        status Status;
+    });
+
+    RestoreDevice(resource struct {
+        info DeviceNodeInfo;
+        resources vector<HardwareResource>:16;
+        migration_record handle;
+    }) -> (struct {
+        status Status;
+    });
+
+    SetNodeReady(struct {
+        node_id uint64;
+        ready bool;
     }) -> (struct {
         status Status;
     });

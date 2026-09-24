@@ -320,18 +320,21 @@ fn migration_record_preserves_config_clients_dns_sockets_and_link_resources() {
         )],
         link_watchers: vec![21],
         stack,
-        link: Some(PacketLink::from_resources(LinkResources {
-            control: 3,
-            fifo: 4,
-            rx_vmo: 5,
-            tx_vmo: 6,
-            rx_vaddr: 0x1000,
-            tx_vaddr: 0x2000,
-            rx_vmo_id: 7,
-            tx_vmo_id: 8,
-            mtu: 1500,
-            mac: [0x52, 0x54, 0, 0x12, 0x34, 0x56],
-        })),
+        links: vec![bexos_netstackd::migration::NodeLink {
+            node_id: 7,
+            link: PacketLink::from_resources(LinkResources {
+                control: 3,
+                fifo: 4,
+                rx_vmo: 5,
+                tx_vmo: 6,
+                rx_vaddr: 0x1000,
+                tx_vaddr: 0x2000,
+                rx_vmo_id: 7,
+                tx_vmo_id: 8,
+                mtu: 1500,
+                mac: [0x52, 0x54, 0, 0x12, 0x34, 0x56],
+            }),
+        }],
         generation: 9,
     };
 
@@ -439,7 +442,7 @@ fn header_delta_preserves_previously_adopted_packet_records() {
         mac: [0; 6],
     });
     link.push_rx_backlog(b"retained packet");
-    source.link = Some(link);
+    source.links = vec![bexos_netstackd::migration::NodeLink { node_id: 1, link }];
     let mut target = Runtime::empty();
     let header = source.encode_record(0).unwrap().unwrap();
     target.adopt_record(0, Some(&header)).unwrap();
@@ -459,7 +462,7 @@ fn header_delta_preserves_previously_adopted_packet_records() {
         .unwrap();
     target.validate().unwrap();
     let mut packet = [0; 32];
-    let len = target.link.as_mut().unwrap().receive(&mut packet).unwrap();
+    let len = target.links[0].link.receive(&mut packet).unwrap();
     assert_eq!(&packet[..len], b"retained packet");
     let mut wrong_arch = header.clone();
     wrong_arch[8..16].copy_from_slice(&3u64.to_le_bytes());

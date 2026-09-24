@@ -25,7 +25,9 @@ The appd library exports:
 - `debug`: app process debug registry.
 - `device_registry`: parented device node registration, typed hardware-resource
   leases, ownership validation, lifecycle state, and post-order unregister.
-- `driver_manager`: driver index, bind rule matching, ranked candidates,
+- `driver_manager`: the appd-internal generic device coordinator, driver index,
+  bind rule matching, ranked candidates, canonical topology, host grouping,
+  package acquisition and recovery,
   recovery exclusions, driver package IDs, and lifecycle log.
 - `guest`: guest-facing readiness, resolver, state, launch, and update helpers.
   Heart-transplant archive inspection, runner-adapter gating, and migration

@@ -5,6 +5,13 @@
 * **Target Subsystems:** `driver_manager`, `devhost`, `pkgd`, `kernel` (D0), `networkd`, `scened`
 * **Applicability:** Bus Enumerators, Peripheral Device Drivers, System Services
 
+> **Implementation selection:** The current implementation is documented in
+> [CURRENT.md](CURRENT.md). BexOS currently uses `appd` as the topology and
+> driver-lifecycle coordinator and launches each driver host as a native ELF
+> process. It does not load arbitrary shared objects into a generic `devhost`.
+> The separate `driver_manager`/generic `devhost` architecture below remains the
+> long-term design and is intentionally retained here.
+
 ---
 
 ## 1. Summary

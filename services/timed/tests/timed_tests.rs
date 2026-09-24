@@ -148,6 +148,7 @@ fn migration_round_trips_quality_nts_clients_and_schedule() {
             caller_package: None,
             caller_uid: None,
             caller_foreground: false,
+            provider_instance_id: None,
             endpoint: 21,
         },
         bexos_userspace::ServiceGrant {
@@ -159,6 +160,7 @@ fn migration_round_trips_quality_nts_clients_and_schedule() {
             caller_package: None,
             caller_uid: None,
             caller_foreground: false,
+            provider_instance_id: None,
             endpoint: 22,
         },
         bexos_userspace::ServiceGrant {
@@ -170,6 +172,7 @@ fn migration_round_trips_quality_nts_clients_and_schedule() {
             caller_package: None,
             caller_uid: None,
             caller_foreground: false,
+            provider_instance_id: None,
             endpoint: 0,
         },
         bexos_userspace::ServiceGrant {
@@ -181,6 +184,7 @@ fn migration_round_trips_quality_nts_clients_and_schedule() {
             caller_package: None,
             caller_uid: None,
             caller_foreground: false,
+            provider_instance_id: None,
             endpoint: 0,
         },
     ];

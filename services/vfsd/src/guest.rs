@@ -534,9 +534,7 @@ fn get_package_directory(
         .iter()
         .find(|mounted| mounted.package_id == package_id)
     {
-        return Memory::duplicate(cached.root.0, 1 | 2 | 4 | 32)
-            .map(Channel)
-            .map_err(|_| FsStatus::Io);
+        return fs::open(cached.root, "", 1 | 32);
     }
     log(&alloc::format!(
         "vfsd: package directory open package={package_id} path={archive_path}\n"
@@ -545,12 +543,10 @@ fn get_package_directory(
     let mounted = fs::mount_archive(store.archivefs, archive_file, None);
     let _ = Memory::close(archive_file.0);
     let mounted = mounted?;
-    let returned = Memory::duplicate(mounted.0, 1 | 2 | 4 | 32)
-        .map(Channel)
-        .map_err(|_| {
-            let _ = Memory::close(mounted.0);
-            FsStatus::Io
-        })?;
+    let returned = fs::open(mounted, "", 1 | 32).map_err(|error| {
+        let _ = Memory::close(mounted.0);
+        error
+    })?;
     store.mounted_packages.push(MountedPackage {
         package_id: package_id.into(),
         root: mounted,

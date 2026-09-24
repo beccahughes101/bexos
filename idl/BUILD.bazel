@@ -332,6 +332,19 @@ rust_library(
 )
 
 bexos_fidl_rust(
+    name = "hardware_backend_fidl_rust_src",
+    src = "bexos/hardware/backend.fidl",
+    out = "hardware_backend_fidl.rs",
+)
+
+rust_library(
+    name = "hardware_backend_fidl_rust",
+    srcs = [":hardware_backend_fidl_rust_src"],
+    crate_name = "hardware_backend_fidl",
+    edition = "2024",
+)
+
+bexos_fidl_rust(
     name = "serial_fidl_rust_src",
     src = "bexos/hardware/serial.fidl",
     out = "serial_fidl.rs",

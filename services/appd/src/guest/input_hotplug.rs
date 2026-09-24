@@ -1,26 +1,25 @@
-//! Runtime requests on the private endpoint handed to the PCI registrar at
-//! bootstrap. Input binding uses the installed archive and normal driver policy.
+//! Generic runtime device coordinator for the authenticated registrar endpoint.
+//! Every bus uses the same registration, binding, post-order removal and
+//! recovery path as the boot wave.
 use super::{state::AppdState, *};
+use alloc::vec;
 use bexos_migration::{
     Error,
     codec::{Decoder, Encoder},
 };
 use hardware_manager_fidl::{self as h, FidlDecode, FidlEncode};
 pub const KEY: u64 = 11;
-const PACKAGE: &str = "bexos.driver.input.virtio";
-fn valid_node(node: u64) -> bool {
-    node >> 16 < 16 && (node >> 8) & 255 < 32 && node & 255 < 8
-}
 #[derive(Default)]
 pub struct Hotplug {
     pub registry: u64,
     pub bind_pending: bool,
     pub removing: Option<(u64, u64)>,
+    pub driver_packages: Vec<String>,
 }
 impl Hotplug {
     pub fn encode(&self) -> Vec<u8> {
         let mut w = Encoder::new();
-        w.word(1);
+        w.word(2);
         w.word(self.registry);
         w.word(self.bind_pending as u64);
         w.word(self.removing.is_some() as u64);
@@ -28,11 +27,16 @@ impl Hotplug {
             w.word(node);
             w.word(deadline);
         }
+        w.word(self.driver_packages.len() as u64);
+        for package in &self.driver_packages {
+            w.text(package);
+        }
         w.finish()
     }
     pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
         let mut r = Decoder::new(bytes);
-        if r.word()? != 1 {
+        let version = r.word()?;
+        if !(1..=2).contains(&version) {
             return Err(Error::UnsupportedVersion);
         }
         let state = Self {
@@ -43,28 +47,31 @@ impl Hotplug {
             } else {
                 None
             },
+            driver_packages: if version >= 2 {
+                let mut packages = Vec::new();
+                for _ in 0..r.count(1024)? {
+                    packages.push(r.text(128)?.into());
+                }
+                packages
+            } else {
+                vec!["bexos.driver.input.virtio".into()]
+            },
         };
         r.finish()?;
         if state.registry == 0
             || state
                 .removing
-                .is_some_and(|(node, deadline)| !valid_node(node) || deadline == 0)
+                .is_some_and(|(node, deadline)| node == 0 || deadline == 0)
+            || state.driver_packages.len() > 1024
+            || state
+                .driver_packages
+                .iter()
+                .any(|package| package.is_empty())
         {
             return Err(Error::InvalidData);
         }
         Ok(state)
     }
-}
-fn input(node: &crate::RegisteredDeviceNode) -> bool {
-    node.info.bus == crate::BusType::Pci
-        && [("pci.vendor_id", 0x1af4), ("pci.device_id", 0x1052)]
-            .iter()
-            .all(|(key, value)| {
-                node.info
-                    .properties
-                    .iter()
-                    .any(|p| p.key == *key && p.value == *value)
-            })
 }
 fn binding(state: &crate::DeviceNodeState) -> Option<&crate::DriverBinding> {
     match state {
@@ -119,9 +126,12 @@ pub fn poll(
             .unwrap_or_default();
         let mut handles = alloc::collections::BTreeSet::new();
         for n in removed {
-            state
-                .broker
-                .remove_instance(PACKAGE, &n.info.node_id.to_string());
+            if let Some(binding) = binding(&n.state) {
+                state
+                    .broker
+                    .remove_instance(&binding.package_id, &n.info.node_id.to_string());
+                state.driver_routes.close_node(n.info.node_id);
+            }
             handles.extend(n.resources.iter().map(|r| r.capability.object_id));
             if let Some(b) = binding(&n.state) {
                 if let Some(p) = b.process_handle {
@@ -158,7 +168,7 @@ pub fn poll(
         }
         state.input_hotplug.removing = None;
         reply(state.input_hotplug.registry, h::Status::Ok);
-        log(&format!("appd: input device removed node={node}\n"));
+        log(&format!("appd: device subtree removed node={node}\n"));
         return;
     }
     if let Ok(message) = Channel(state.input_hotplug.registry).try_recv() {
@@ -177,25 +187,12 @@ pub fn poll(
             let request = h::DeviceRegistryRegisterDeviceNodeRequest::decode(bytes, &refs);
             let mut accepted = false;
             if let Ok(request) = request {
-                let property = |key| {
-                    (0..request.info.properties.len())
-                        .filter_map(|i| request.info.properties.get(i).ok())
-                        .find(|p| p.key == key)
-                        .map(|p| p.value)
-                };
                 let node = request.info.node_id;
-                let valid = request.info.bus == h::BusType::Pci
-                    && !request.info.has_parent
-                    && valid_node(node)
-                    && property("pci.vendor_id") == Some(0x1af4)
-                    && property("pci.device_id") == Some(0x1052)
-                    && property("pci.bus") == Some((node >> 16) as u32)
-                    && property("pci.device") == Some(((node >> 8) & 255) as u32)
-                    && property("pci.function") == Some((node & 255) as u32)
-                    && state.devices.nodes().iter().filter(|n| input(n)).count() < 16
+                let valid = node != 0
+                    && state.devices.nodes().len() < 1024
                     && !state.devices.nodes().iter().any(|n| n.info.node_id == node)
                     && request.resources.len() == message.handles.len()
-                    && !message.handles.is_empty();
+                    && request.resources.len() <= 16;
                 if valid {
                     accepted =
                         super::readiness::register_fidl_node(&mut state.devices, request).is_ok();
@@ -221,14 +218,54 @@ pub fn poll(
                     .devices
                     .nodes()
                     .iter()
-                    .find(|n| n.info.node_id == request.node_id && input(n))
+                    .find(|n| n.info.node_id == request.node_id)
                 {
+                    let subtree: Vec<u64> = state
+                        .devices
+                        .nodes()
+                        .iter()
+                        .filter(|candidate| {
+                            candidate.info.node_id == request.node_id
+                                || candidate
+                                    .info
+                                    .topological_path
+                                    .starts_with(&alloc::format!("{}/", node.info.topological_path))
+                        })
+                        .map(|candidate| candidate.info.node_id)
+                        .collect();
+                    for candidate in state
+                        .devices
+                        .nodes()
+                        .iter()
+                        .filter(|candidate| subtree.contains(&candidate.info.node_id))
+                    {
+                        if let Some(control) = candidate
+                            .resources
+                            .iter()
+                            .find(|resource| {
+                                resource.kind == crate::HardwareResourceKind::BusControl
+                            })
+                            .map(|resource| resource.capability)
+                        {
+                            let _ = crate::lifecycle::set_pci_bus_master(control, false);
+                            let _ = crate::lifecycle::reset_pci(control);
+                        }
+                    }
                     // The PCI registrar has observed physical absence. There is
                     // no live device DMA to reset; close the process, then its
                     // retained grants only after termination is observable.
-                    let process =
-                        binding(&node.state).and_then(|b| b.process_handle.map(|p| p.object_id));
-                    if let Some(process) = process {
+                    let processes: alloc::collections::BTreeSet<u64> = state
+                        .devices
+                        .nodes()
+                        .iter()
+                        .filter(|candidate| subtree.contains(&candidate.info.node_id))
+                        .filter_map(|candidate| {
+                            binding(&candidate.state)
+                                .and_then(|binding| binding.process_handle)
+                                .map(|process| process.object_id)
+                        })
+                        .collect();
+                    for process in processes {
                         if crate::runner::KernelOps::terminate_process(
                             kernel,
                             KernelHandle { raw: process },
@@ -276,17 +313,12 @@ pub fn poll(
             .iter()
             .find(|s| s.package == "bexos.service.traced")
             .map(|s| Channel(s.manager));
-        gate.inputs = state
-            .services
-            .iter()
-            .filter(|s| s.package == PACKAGE)
-            .map(|s| Channel(s.manager))
-            .collect();
+        gate.inputs = state.services.iter().map(|s| Channel(s.manager)).collect();
         gate.registry = core::mem::take(&mut state.devices);
         gate.services = core::mem::take(&mut state.services);
         let result = super::bind_preinstalled_drivers(
             state.vfsd,
-            &[PACKAGE.into()],
+            &state.input_hotplug.driver_packages.clone(),
             &state.registry,
             &state.config,
             kernel,
@@ -297,9 +329,9 @@ pub fn poll(
         state.devices = gate.registry;
         state.services = gate.services;
         if let Err(error) = result {
-            log(&format!("appd: input hotplug bind failed {error}\n"));
+            log(&format!("appd: runtime driver bind failed {error}\n"));
         } else {
-            log("appd: runtime input discovery complete\n");
+            log("appd: runtime device discovery complete\n");
         }
     }
 }

@@ -1,0 +1,45 @@
+load("//testing/e2e/qemu:architecture_test.bzl", "qemu_suites")
+load("//testing/e2e/qemu:qemu_e2e.bzl", "QEMU_DEVELOPMENT_BOOT_DATA", "qemu_e2e_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# Raw AArch64 development boot uses the ELF kernel directly.  The generic
+# development fixture names the x86 Multiboot binary because its helper is
+# otherwise x86-only.
+DRIVER_FRAMEWORK_BOOT_DATA = dict(
+    QEMU_DEVELOPMENT_BOOT_DATA,
+    arm_kernel = "//kernel:kernel",
+)
+
+# Keep three independent PCI network functions live at once. The ordinary
+# QEMU launch path supplies VirtIO-Net; these arguments add one e1000e and one
+# igb function with independent backends and BDFs.
+INTEL_NIC_QEMU_ARGS = [
+    "-netdev",
+    "user,id=e1000enet",
+    "-device",
+    "e1000e,netdev=e1000enet,mac=52:54:00:12:34:57,romfile=",
+    "-netdev",
+    "user,id=igbnet",
+    "-device",
+    "igb,netdev=igbnet,mac=52:54:00:12:34:58,romfile=",
+]
+
+qemu_e2e_test(
+    name = "driver_framework_acceptance_test",
+    src = "driver_framework_acceptance_test.rs",
+    crate_name = "driver_framework_acceptance_test",
+    boot_data = DRIVER_FRAMEWORK_BOOT_DATA,
+    # Driver-framework coverage does not depend on the x86 secure-product
+    # firmware snapshot.  Use the ordinary development loader so this suite
+    # validates the current kernel/appd/driver image directly.
+    development = True,
+    secure_firmware = None,
+    qemu_args = INTEL_NIC_QEMU_ARGS,
+    deps = [
+        "//testing/e2e",
+        "//tools/qemu:qemu_test",
+    ],
+)
+
+qemu_suites()

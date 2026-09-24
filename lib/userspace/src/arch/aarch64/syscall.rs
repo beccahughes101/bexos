@@ -108,6 +108,15 @@ pub fn heap_vmar() -> u64 {
 pub fn pci_ecam_base() -> u64 {
     0x3f00_0000
 }
+pub fn pci_segment() -> u16 {
+    0
+}
+pub fn pci_bus_range() -> (u8, u8) {
+    (0, 15)
+}
+pub fn pci_mmio_window() -> (u64, u64) {
+    (0x1000_0000, 0x3eff_0000)
+}
 
 pub fn cmos(_register: u8, _value: Option<u8>) -> Result<u8, i32> {
     Err(-1)

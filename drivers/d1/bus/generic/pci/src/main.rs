@@ -45,10 +45,22 @@ fn run(channel: u64) -> ! {
         }
     };
     log("pci: EL0 enumeration started\n");
-    let mut bus = PciRootBus::new(
-        unsafe { EcamConfigSpace::new(va as usize) },
-        RootBusConfig::qemu_virt(),
-    );
+    let (mmio_base, mmio_limit) = bexos_userspace::syscall::pci_mmio_window();
+    let root = RootBusConfig::new(mmio_base, mmio_limit).unwrap_or_else(|_| {
+        log("pci: invalid platform MMIO window\n");
+        bexos_userspace::exit();
+    });
+    let (bus_start, bus_end) = bexos_userspace::syscall::pci_bus_range();
+    log(&format!(
+        "pci: root segment={} buses={}-{} ecam={:#x} mmio={:#x}-{:#x}\n",
+        bexos_userspace::syscall::pci_segment(),
+        bus_start,
+        bus_end,
+        bexos_userspace::syscall::pci_ecam_base(),
+        mmio_base,
+        mmio_limit
+    ));
+    let mut bus = PciRootBus::new(unsafe { EcamConfigSpace::new(va as usize) }, root);
     let mut nodes = match bus.enumerate_bus0() {
         Ok(nodes) => nodes,
         Err(e) => {
@@ -71,6 +83,7 @@ fn run(channel: u64) -> ! {
         }
     }
     let mut known = Vec::new();
+    let mut device_controls = Vec::new();
     for node in nodes {
         let property = |key| {
             node.properties
@@ -89,11 +102,17 @@ fn run(channel: u64) -> ! {
             property("pci.prog_if"),
             node.bars.len()
         ));
-        if property("pci.vendor_id") == 0x1af4 && property("pci.device_id") == 0x1052 {
-            known.push(node.node_id);
-        }
-        runtime::registry::register(registry, &node)
-            .and_then(|_| registry.recv().map_err(|_| ()))
+        known.push(node.node_id);
+        let registration = runtime::registry::register(registry, &node).unwrap_or_else(|_| {
+            log(&format!(
+                "pci: registry registration send failed node={}\n",
+                node.node_id
+            ));
+            bexos_userspace::exit();
+        });
+        registry
+            .recv()
+            .map_err(|_| ())
             .and_then(runtime::registry::response)
             .unwrap_or_else(|_| {
                 log(&format!(
@@ -102,6 +121,11 @@ fn run(channel: u64) -> ! {
                 ));
                 bexos_userspace::exit();
             });
+        device_controls.push(runtime::state::DeviceControl {
+            node: node.node_id,
+            channel: registration.control,
+            interrupt: registration.interrupt,
+        });
     }
     log("pci: EL0 enumeration and device registration complete\n");
     Startup::ready(channel).unwrap();
@@ -114,11 +138,13 @@ fn run(channel: u64) -> ! {
         },
         registry,
         cursor: bus.allocation_cursor(),
+        root,
         next_poll_ms: 0,
         known,
         ports,
         pending: None,
         power: Vec::new(),
+        device_controls,
         extended: true,
     };
     state.validate().expect("PCI runtime state");

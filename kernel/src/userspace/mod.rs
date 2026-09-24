@@ -184,7 +184,7 @@ pub fn init(
     let linker_refs = [bootstrap_fidl::HandleRef { raw: metadata_vmo }];
     let namespace: [bootstrap_fidl::NamespaceEntry<'_>; 0] = [];
     let startup = bootstrap_fidl::Startup {
-        version: 10,
+        version: 11,
         resources: &refs,
         arg0: handoff.bootfs_len,
         arg1: handoff.boot_evidence_len,
@@ -215,6 +215,8 @@ pub fn init(
         trace_main_tid: 0,
         driver_resources: bootstrap_fidl::WireVector::from_slice(&[]),
         driver_lifecycle: &[],
+        driver_host_controller: &[],
+        driver_recovery: &[],
     };
     let mut payload = [0; 1024];
     let mut handles = [bootstrap_fidl::HandleRef { raw: 0 }; 4];

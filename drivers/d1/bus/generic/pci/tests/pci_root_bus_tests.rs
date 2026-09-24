@@ -223,6 +223,30 @@ fn mock_config_uses_ecam_offsets() {
 }
 
 #[test]
+fn bdf_zero_is_discoverable_but_not_registered_as_a_device_node() {
+    let mut config = MockConfig::new();
+    let root = PciAddress {
+        bus: 0,
+        device: 0,
+        function: 0,
+    };
+    config.add_device(root, 0x1b36, 0x0008);
+    config.set8(root, 0x0b, 0x06);
+    let endpoint = PciAddress {
+        bus: 0,
+        device: 1,
+        function: 0,
+    };
+    config.add_device(endpoint, 0x1af4, 0x1041);
+
+    let mut bus = PciRootBus::new(config, RootBusConfig::qemu_virt());
+    assert_eq!(bus.discover_bus0().unwrap().len(), 2);
+    let nodes = bus.enumerate_bus0().unwrap();
+    assert_eq!(nodes.len(), 1);
+    assert_ne!(nodes[0].node_id, 0);
+}
+
+#[test]
 fn scans_multifunction_devices_and_skips_invalid_vendor_ids() {
     let mut config = MockConfig::new();
     let fn0 = PciAddress {
@@ -274,7 +298,7 @@ fn emits_nvme_class_device_node_properties() {
 }
 
 #[test]
-fn sizes_assigns_bar0_and_enables_memory_bus_mastering() {
+fn sizes_assigns_bar0_and_leaves_bus_mastering_disabled() {
     let mut config = MockConfig::new();
     let address = PciAddress {
         bus: 0,
@@ -297,7 +321,7 @@ fn sizes_assigns_bar0_and_enables_memory_bus_mastering() {
     assert_eq!(nodes[0].bars[0].size, 0x4000);
     let command = bus_test_command_register(bus, address);
     assert_ne!(command & COMMAND_MEMORY_SPACE, 0);
-    assert_ne!(command & COMMAND_BUS_MASTER, 0);
+    assert_eq!(command & COMMAND_BUS_MASTER, 0);
 }
 
 #[test]

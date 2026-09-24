@@ -122,6 +122,28 @@ the system image and preinstalls its `.bex` archive on the `STORAGE` package
 partition. App-service imports preinstalled package manifests after the storage
 pivot and runs a post-storage driver bind pass for matching D1 drivers.
 
+## D1 Intel Ethernet
+
+Packages: `bexos.driver.network.e1000e` and `bexos.driver.network.igb`
+
+Targets:
+
+- `//drivers/d1/nic/intel/common:intel_common_tests`
+- `//drivers/d1/nic/intel/e1000e:e1000e_driver`
+- `//drivers/d1/nic/intel/igb:igb_driver`
+
+The common Intel library contains bounded legacy descriptor rings, DMA-range
+validation, MAC discovery, reset/quiesce and interrupt-mask behavior, register
+programming, and a versioned controller checkpoint. e1000e matches device IDs
+`10d3`, `1539`, and `15b8`; igb matches `10c9` and `1521`. Each package defaults
+to one isolated process per PCI function and requires MMIO, interrupt, IOMMU and
+private bus-control resources. The ELF runtime retains the BAR mapping, hardware
+capabilities, service endpoints and controller checkpoint during heart transplant.
+
+Physical link traffic and MSI/MSI-X behavior have not yet been validated on a
+real Intel adapter. The current testable descriptor model is not evidence of
+physical-hardware acceptance.
+
 ## D1 USB xHCI
 
 Package: `bexos.driver.usb.xhcid`

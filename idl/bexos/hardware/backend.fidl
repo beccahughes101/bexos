@@ -1,0 +1,54 @@
+library bexos.hardware.backend;
+
+enum Status : int32 {
+    OK = 0;
+    ERR_INVALID_HANDLE = -1;
+    ERR_ACCESS_DENIED = -2;
+    ERR_NO_MEMORY = -3;
+    ERR_ALREADY_EXISTS = -7;
+    ERR_INVALID_ARGS = -8;
+    ERR_BAD_STATE = -10;
+};
+
+resource struct RetainedBuffer {
+    buffer_id uint32;
+    size_bytes uint64;
+    vmo handle:VMO;
+};
+
+/// Private appd-to-Ethernet-driver recovery API. Packet entries stay on the
+/// retained FIFO and never traverse appd.
+protocol EthernetBackend {
+    Adopt(resource struct {
+        node_id uint64;
+        generation uint64;
+        buffers vector<RetainedBuffer>:256;
+        fifo_provider handle:CHANNEL;
+        started bool;
+    }) -> (struct {
+        status Status;
+    });
+
+    Quiesce() -> (struct {
+        status Status;
+    });
+};
+
+/// Private appd-to-block-driver recovery API. Block requests stay on the
+/// retained FIFO and never traverse appd.
+protocol BlockBackend {
+    Adopt(resource struct {
+        node_id uint64;
+        generation uint64;
+        buffers vector<RetainedBuffer>:256;
+        request_fifo_provider handle:CHANNEL;
+        completion_fifo_provider handle:CHANNEL;
+        started bool;
+    }) -> (struct {
+        status Status;
+    });
+
+    Quiesce() -> (struct {
+        status Status;
+    });
+};

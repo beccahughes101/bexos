@@ -22,6 +22,7 @@ pub struct DeviceNodeInfo {
     pub node_id: u64,
     pub bus: BusType,
     pub parent_node_id: Option<u64>,
+    pub topological_path: String,
     pub properties: Vec<DeviceProperty>,
 }
 
@@ -183,6 +184,34 @@ impl DeviceRegistry {
         }
         if node.info.parent_node_id == Some(node.info.node_id) {
             return Err(DeviceRegistryError::InvalidParent(node.info.node_id));
+        }
+        if node.info.topological_path.is_empty()
+            || node.info.topological_path.len() > 256
+            || !node.info.topological_path.is_ascii()
+            || node.info.topological_path.starts_with('/')
+            || node.info.topological_path.ends_with('/')
+            || node
+                .info
+                .topological_path
+                .split('/')
+                .any(|part| part.is_empty() || part == "." || part == "..")
+            || self
+                .nodes
+                .iter()
+                .any(|existing| existing.info.topological_path == node.info.topological_path)
+        {
+            return Err(DeviceRegistryError::InvalidParent(node.info.node_id));
+        }
+        if let Some(parent_id) = node.info.parent_node_id {
+            let parent = self
+                .nodes
+                .iter()
+                .find(|parent| parent.info.node_id == parent_id)
+                .ok_or(DeviceRegistryError::MissingParent(parent_id))?;
+            let prefix = alloc::format!("{}/", parent.info.topological_path);
+            if !node.info.topological_path.starts_with(&prefix) {
+                return Err(DeviceRegistryError::InvalidParent(node.info.node_id));
+            }
         }
         if let Some(parent_id) = node.info.parent_node_id {
             if !self

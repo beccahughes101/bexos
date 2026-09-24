@@ -1,0 +1,18 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "driver_runtime",
+    srcs = ["src/lib.rs"],
+    crate_name = "bexos_driver_runtime",
+    edition = "2024",
+    deps = ["//lib/migration"],
+)
+
+rust_test(
+    name = "driver_runtime_tests",
+    srcs = ["tests/runtime_tests.rs"],
+    edition = "2024",
+    deps = [":driver_runtime"],
+)

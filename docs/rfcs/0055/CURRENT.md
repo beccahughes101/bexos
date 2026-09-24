@@ -1,24 +1,33 @@
 # RFC 0055: On-demand driver provisioning — current implementation
 
-- Reviewed: 2026-09-10
+- Reviewed: 2026-09-23
 - Repository revision: `7638e4ce9bad51c7aee4737853da41569593cff2` (implementation baseline; documentation changes in this update are included).
 - Design: [RFC 0055](README.md)
 
 ## Implementation summary
 
-Local driver matching and signed package verification exist; automatic registry-backed provisioning for unmatched hardware does not.
+Local driver matching, signed package verification and the automatic
+registry-backed acquisition path for unmatched PCI hardware are implemented.
 
 ## Implemented behavior
 
 - Appd ranks installed manifest bind rules against device properties, applies hardware policy, and manages failed binding/recovery with retained resources.
-- The package/update libraries can verify archives and TUF targets. Native driver packages use ordinary lifecycle and heart transplant mechanisms.
+- Pkgd prototxt mappings carry bounded PCI selectors and priority. Appd selects
+  exact BDF, then vendor/device, then class fallback; queues the request without
+  blocking the registrar; verifies the downloaded manifest against the waiting
+  identity; installs durably; and re-enters normal binding.
+- Pending node identities, resolver channels and retry state are checkpointed.
+  Duplicate requests are bounded by node ID and the configured request limits.
 
 ## Gaps and deviations
 
-- No canonical hardware-query serializer, trusted driver-registry lookup client, specificity-fallback network search, or automatic install-and-rebind pipeline matching the RFC was found.
-- Public appd URL fetching is unavailable and updated’s feed is seeded, so those interfaces do not supply online driver discovery.
+- The path uses pkgd's signed OCI/TUF resolver rather than public appd URL
+  fetching. Default products intentionally configure no production trust root or
+  mapping, so an unmatched device remains unbound with local diagnostics.
 - The TOML configuration example is a retained design sketch; current app/platform configuration uses prototxt and has no deployed driver_sources.toml parser.
-- Firmware dependency resolution, offline registry policy, provisioning consent, and end-to-end new-device activation remain implementation work.
+- End-to-end dual-architecture guest acceptance and physical-device activation
+  remain unverified. Firmware dependency activation and user-facing provisioning
+  consent remain implementation work.
 
 ## Sources and validation
 

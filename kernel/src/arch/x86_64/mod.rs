@@ -108,6 +108,32 @@ impl super::ArchAPI for X86_64 {
     fn pci_ecam_base() -> u64 {
         cpu::pci_ecam_base()
     }
+    fn pci_segment() -> u16 {
+        cpu::pci_segment()
+    }
+    fn pci_bus_range() -> (u8, u8) {
+        cpu::pci_bus_range()
+    }
+    fn pci_mmio_window() -> (u64, u64) {
+        (0xc000_0000, 0xfebf_0000)
+    }
+    fn configure_interrupt(irq_number: u32, flags: u32) -> bool {
+        ioapic::route(
+            irq_number,
+            cpu::apic_id(0),
+            flags & 2 != 0,
+            flags & 1 != 0,
+        )
+    }
+    fn mask_interrupt(irq_number: u32, masked: bool) -> bool {
+        if masked {
+            ioapic::mask(irq_number, true)
+        } else if ioapic::pending(irq_number) {
+            ioapic::acknowledge(irq_number)
+        } else {
+            ioapic::mask(irq_number, false)
+        }
+    }
     fn random_seed() -> Option<[u64; 4]> {
         None
     }

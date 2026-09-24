@@ -1,0 +1,21 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "driver",
+    srcs = [
+        "src/ethernet.rs",
+        "src/lib.rs",
+    ],
+    crate_name = "bexos_intel_nic_driver",
+    edition = "2024",
+    deps = [
+        "//drivers/d1/nic/intel/common:intel_common",
+        "//idl:ethernet_fidl_rust",
+        "//idl:hardware_manager_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//lib/migration",
+        "//lib/userspace",
+    ],
+)
