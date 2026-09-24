@@ -1,35 +1,49 @@
 # GitHub Actions CI
 
-The `Bazel CI` workflow runs on every pull request, pushes to `main`, and manual
-dispatch. It uses GitHub-hosted `ubuntu-26.04` x86_64 runners (currently public
-preview) with the distribution's QEMU 10.2 packages. See the
-[GitHub runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
-and [Ubuntu package](https://packages.ubuntu.com/resolute/amd64/qemu-system-arm).
-Guest selection remains
-independent of the execution host. No self-hosted runner or repository secret
-is required. `CI` is the aggregate check name available for branch protection;
-the workflow does not change branch-protection settings.
+The `Bazel CI` workflow has separate pull-request and branch paths. Pull
+requests build and test affected Bazel targets without executing QEMU tests.
+Pushes to `main` and manual dispatches build the complete repository, publish
+the resulting build cache, and then execute the maintained E2E inventory with
+one concrete Bazel test per runner.
 
-## Jobs and commands
+All jobs use GitHub-hosted `ubuntu-26.04` x86_64 runners and the distribution's
+QEMU 10.2 packages. Guest architecture remains independent of the execution
+host. `CI` is the aggregate check available for branch protection; the workflow
+does not modify branch-protection settings.
 
-`Prepare firmware` runs the following in order, always with `-c opt`:
+## Pull requests
+
+The AArch64 and x86_64 jobs run in parallel after firmware preparation. Each
+job compares the PR base SHA with `HEAD`, maps changed files to their nearest
+Bazel package, and selects that package's targets plus their repository-wide
+reverse dependencies. It writes separate target-pattern files for builds and
+tests. The test selection explicitly removes targets tagged `requires-qemu`, so
+no E2E or firmware-acceptance test executes on a pull request.
+
+Changes that cannot be mapped safely select `//...`. This conservative fallback
+applies to module/workspace configuration, `.bazelrc`, `.bzl` files, deletions,
+renames, and submodule changes. Changes under `.github` or `tools/ci` always
+select `//tools/ci:workflow_test`. An empty target file is a successful no-op
+instead of a repository-wide build; documentation-only changes produce empty
+target files unless they also contain a conservative-fallback change.
+
+The architecture jobs use the equivalent of:
 
 ```sh
-bazel run -c opt --config=aarch64 //third_party/trusty:refresh_image
-bazel run -c opt --config=aarch64 //third_party/trusty:refresh_authmgr_acceptance_image
-bazel run -c opt --config=x86_64 //third_party/trusty:refresh_x86_64_image
-bazel run -c opt --config=x86_64 //third_party/trusty:refresh_x86_64_acceptance_image
-bazel run -c opt --config=x86_64 //boot/efi:refresh_firmware
-bazel run -c opt --config=x86_64 --//build/platforms:trusty_variant=acceptance //boot/efi:refresh_firmware
+bazel build -c opt --config=aarch64 \
+  --target_pattern_file="$RUNNER_TEMP/bexos-build-targets"
+bazel test -c opt --config=aarch64 --build_tests_only \
+  --target_pattern_file="$RUNNER_TEMP/bexos-test-targets"
 ```
 
-The six saved bundles are transferred to downstream jobs in a tar archive,
-preserving relative paths and modes. Downloads use the current workflow run's
-artifact only. Every run invokes the refresh targets; Bazel may reuse valid
-cached actions. Firmware validators retain their host-ABI, hash, architecture,
-and variant checks. Firmware and generated sources remain untracked.
+The x86_64 job substitutes `--config=x86_64`. Pull requests may restore the
+persistent build caches but do not publish run-scoped caches, because no E2E
+job consumes them.
 
-Two build/test jobs select `aarch64` and `x86_64` respectively:
+## Main and manual builds
+
+The two architecture jobs perform the full optimized build and non-E2E test
+pass:
 
 ```sh
 bazel build -c opt --config=aarch64 //...
@@ -38,78 +52,68 @@ bazel build -c opt --config=x86_64 //...
 bazel test -c opt --config=x86_64 --build_tests_only //...
 ```
 
-Host tests retain `.bazelrc`'s exclusion of `requires-qemu`. The ARM build/test
-job also runs `bazel run //testing/e2e/qemu:check_matrix` and
-`bazel run @rules_rust//:rustfmt`, then requires `git diff --exit-code` to pass.
-`//tools/ci:workflow_test` validates workflow syntax and script parsing with a
-checksum-pinned, Bazel-managed actionlint executable.
+`.bazelrc` excludes `requires-qemu` from ordinary `bazel test`, so these jobs
+compile the repository and E2E artifacts without running guest tests. The ARM
+job also validates the E2E inventory and checks `rustfmt` without changing the
+checkout. Both jobs must finish successfully before E2E begins.
 
-Pull requests run three independent presubmit profile jobs:
+Each successful architecture job saves `~/.cache/bazel-disk` under a key scoped
+to the workflow run, attempt, and guest architecture. The normal setup cache
+remains the seed for later full builds; the immutable run cache is the exact
+handoff to E2E jobs.
 
-```sh
-bazel test --config=e2e --nocache_test_results //testing/e2e/qemu:presubmit_aarch64
-bazel test --config=e2e --nocache_test_results //testing/e2e/qemu:presubmit_x86_64
-bazel test --config=e2e --nocache_test_results //testing/e2e/qemu:presubmit_x86_64_development
+## Firmware and E2E
+
+`Prepare firmware` refreshes the standard and acceptance Trusty bundles for
+AArch64 and x86_64 plus standard and acceptance EFI bundles. The six gitignored
+files are transferred to every downstream job in one uncompressed, one-day
+artifact. Downloads always name the current workflow run's artifact.
+
+For main and manual runs, the firmware job queries the maintained suites:
+
+```text
+//testing/e2e/qemu:aarch64
+//testing/e2e/qemu:x86_64
+//testing/e2e/qemu:x86_64_development
+//testing/e2e/qemu:firmware_acceptance
 ```
 
-Pushes to `main` and manual dispatches additionally run the `platform`, `ui`,
-`update`, and `security` extended shards for each profile, plus
-`//testing/e2e/qemu:firmware_acceptance`. For example,
-`//testing/e2e/qemu:extended_aarch64_update` selects the AArch64 update shard.
-The full local labels `:aarch64`, `:x86_64`, and `:x86_64_development` remain
-the union of presubmit and extended behavior. Focused diagnostic labels are
-runnable but excluded from maintained matrices; `:performance` remains opt-in.
+The generator expands suites to concrete tests, sorts and deduplicates labels,
+assigns architecture-specific x86 labels to the x86 cache and all other labels
+to the ARM cache, and emits the GitHub matrix. The current inventory is 178
+jobs, below GitHub's 256-job matrix limit. Focused and performance tiers remain opt-in.
+There is no workflow `max-parallel`; actual concurrency is controlled by the
+GitHub account's runner quota.
 
-Every QEMU target has exactly one `presubmit`, `extended`, `focused`, or
-`performance` tier. No tier uses automatic retries or tolerated failures.
-Integrated update coverage uses one complete ordered service-replacement chain;
-its prefix labels are focused-only. SysUI has separate one-boot smoke,
-window/input/transplant, migration, and recovery scenarios, plus a two-boot
-preferences/persistence scenario.
+Every E2E runner restores the exact architecture cache with
+`fail-on-cache-miss`, restores the same firmware archive, and selects one label
+with `--config=e2e` plus its architecture configuration. A build preflight
+materializes the target while recording Bazel's execution log. The cache guard
+requires every non-test action to report a cache hit; if any compilation or
+generation action executes, the job fails before starting QEMU. The subsequent
+`bazel test` uses the materialized outputs and keeps test-result caching
+disabled.
 
-## Runner setup and resources
+## Runner setup and diagnostics
 
-The shared composite action installs the native Trusty prerequisites, Python
-cryptography/ELF modules, and QEMU ARM/x86 packages. It places `/usr/bin` first
-on PATH so distro Python and its modules agree. Bazelisk reads `.bazelversion`;
-compilers, Rust, and code generators remain managed by Bazel.
+The shared setup action installs native Trusty prerequisites, Python
+cryptography/ELF modules, and QEMU ARM/x86 packages. Bazelisk reads
+`.bazelversion`; compilers, Rust, and generators remain Bazel-managed. Jobs use
+two build actions, 65% of RAM, and one local test at a time. A new run cancels
+an older run for the same PR or branch, while a matrix failure does not cancel
+sibling jobs.
 
-The setup script is restricted to disposable GitHub-hosted Linux runners. It
-reclaims unused .NET, Android, and Haskell SDK directories before fetching the
-large build dependencies. Jobs log disk availability and tool versions, limit
-Bazel to two concurrent actions and 65% of RAM, and retain one local test at a
-time on each hosted runner. Locally each QEMU test declares four CPUs and 2 GiB
-through Bazel resource tags, so Bazel can schedule independent VMs according to
-configured `--local_resources`; only genuine global fixtures such as the
-package registry's fixed port remain `exclusive`. Build, firmware, and E2E jobs
-have a 360-minute limit. A new run cancels
-an older run for the same PR or branch; an individual matrix failure does not
-cancel sibling jobs.
+Each job attempts guest-process cleanup and diagnostic collection even after a
+failure. Diagnostics include command logs, Bazel profiles, test logs/XML, and
+undeclared outputs and are retained for seven days. E2E artifact names use a
+stable numeric matrix ID while the job name displays the complete Bazel label.
+The firmware transport artifact expires after one day.
 
-Bazelisk and repository downloads are cached. Build caches are separated by
-Ubuntu version, host architecture, and job role. PRs can restore caches but do
-not save them. Actions use immutable commit pins, checkout does not retain
-credentials, and the workflow token has only `contents: read` permission.
-
-## Diagnostics and validation
-
-Each job attempts guest-process cleanup and diagnostic upload even after a
-failure. Normal test harness cleanup remains primary; the runner cleanup step
-terminates remaining QEMU/RPMB helpers without stopping Bazel. Diagnostics
-contain command logs, Bazel execution profiles, available Bazel
-`test.log`/`test.xml` files, and undeclared test outputs from every Bazel
-configuration, retained for seven days. E2E undeclared outputs include named
-phase timings and, on failures, serial/debug/QMP tails and screenshots when the
-scenario provides them. Firmware
-transport artifacts expire after one day. A setup or compilation failure can legitimately produce no test logs;
-the diagnostic inventory states that explicitly.
-
-The aggregate `CI` check fails if any required job fails, is cancelled, or is
-skipped. Check the corresponding job and its diagnostics to distinguish setup,
-compilation, and runtime failures. Hard runner termination may prevent final
-cleanup/upload steps; GitHub disposes of the runner VM after the job.
+The aggregate `CI` job requires firmware and both architecture jobs on every
+event. Pull requests require the E2E job to be skipped; main and manual runs
+require the complete E2E matrix to pass. A first hosted run after CI changes is
+still required to validate cache archive size and restoration, runner fan-out,
+Trusty artifact reuse, and end-to-end wall time. Local validation does not
+establish those hosted results.
 
 Implementation validation is recorded in [Testing Status](testing-status.md).
-Local validation does not establish that a GitHub-hosted run passed. A first
-hosted run is required to measure cold-cache disk use, full-suite duration,
-and runtime outcomes on Ubuntu 26.04.

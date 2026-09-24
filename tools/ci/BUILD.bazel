@@ -2,6 +2,30 @@ package(default_visibility = ["//visibility:public"])
 
 exports_files(["repositories.bzl"])
 
+genrule(
+    name = "cache_fixture_data",
+    outs = ["cache_fixture.txt"],
+    cmd = "echo cache-only > $@",
+)
+
+sh_test(
+    name = "cache_fixture_test",
+    srcs = ["cache_fixture_test.sh"],
+    args = ["$(location :cache_fixture_data)"],
+    data = [":cache_fixture_data"],
+)
+
+[sh_test(
+    name = name,
+    srcs = ["python_test.sh"],
+    args = ["$(location " + source + ")"],
+    data = [source, library],
+) for name, source, library in [
+    ("affected_targets_test", "affected_targets_tests.py", "affected_targets.py"),
+    ("e2e_matrix_test", "e2e_matrix_tests.py", "e2e_matrix.py"),
+    ("verify_cache_test", "verify_cache_tests.py", "verify_cache.py"),
+]]
+
 sh_test(
     name = "workflow_test",
     size = "small",
@@ -17,5 +41,18 @@ sh_test(
         "setup.sh",
         "firmware.sh",
         "cleanup.sh",
+        "affected_targets.py",
+        "e2e_matrix.py",
+    ],
+)
+
+test_suite(
+    name = "tests",
+    tests = [
+        ":affected_targets_test",
+        ":cache_fixture_test",
+        ":e2e_matrix_test",
+        ":verify_cache_test",
+        ":workflow_test",
     ],
 )

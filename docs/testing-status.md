@@ -1,14 +1,34 @@
 # Testing Status
 
+## Split PR and branch CI (2026-09-24)
+
+The `Bazel CI` workflow now separates pull-request validation from main/manual
+acceptance. PR jobs compute changed Bazel packages and reverse dependencies for
+both guest architectures and exclude every `requires-qemu` test. Main and
+manual jobs still perform complete optimized builds and host-test passes, then
+publish architecture-specific, run-scoped Bazel caches. The maintained E2E
+inventory expands to one deduplicated concrete target per runner and consumes
+those caches plus the current run's Trusty/EFI archive. An execution-log
+preflight requires every non-test action to come from the cache and fails before
+QEMU starts if the handoff compiled or generated anything.
+
+The affected-target and E2E-matrix utilities have Bazel-managed unit coverage,
+and workflow syntax, matrix coverage, formatting, and cache-handoff guard
+behavior are validated locally. This local validation does not establish a
+successful GitHub-hosted run. Cache archive size/restoration, the 178-job
+runner fan-out, Trusty artifact reuse, and total main-branch duration remain to
+be measured by the first hosted main or manual run.
+
 ## E2E harness redesign (2026-09-24)
 
 The QEMU matrix now has required `presubmit`, `extended`, `focused`, or
 `performance` classification, resource-aware four-CPU/2-GiB scheduling, and
-per-instance state under `TEST_TMPDIR`. Pull requests select one consolidated
-presubmit scenario for AArch64 integrated, x86 integrated, and x86 development;
-`main` and manual workflows add platform, UI, update, and security shards. The
-full architecture suites remain available. Fixed-port package-registry coverage
-is the only maintained QEMU fixture that remains globally exclusive.
+per-instance state under `TEST_TMPDIR`. Pull requests no longer execute E2E
+tests. `main` and manual workflows expand the AArch64 integrated, x86
+integrated, x86 development, and firmware-acceptance suites into one runner per
+concrete target. The full architecture suites remain available. Fixed-port
+package-registry coverage is the only maintained QEMU fixture that remains
+globally exclusive.
 
 The harness derives its deadline from `TEST_TIMEOUT`, reserves 30 seconds for
 cleanup, records named phases, and enforces a 120-second named-progress stall
