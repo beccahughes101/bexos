@@ -399,9 +399,9 @@ archive {
 }
 archive {
   name: "linux-virt"
-  version: "6.18.50-r0"
-  url: "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/linux-virt-6.18.50-r0.apk"
-  sha256: "66e4b983b8d742cf1426615ce50645203712818f400d08f7d70b14b338f60e5d"
+  version: "6.18.53-r0"
+  url: "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/linux-virt-6.18.53-r0.apk"
+  sha256: "fea61b7fd5e72e626d771f9798df56c83db658d0e221044f06fc28aacf5a118b"
 }
 archive {
   name: "llvm22-libs"
