@@ -134,9 +134,11 @@ Current hardware/power contracts include:
 - `power/power.fidl`: wake leases, provider-backed power snapshots,
   telemetry/performance provider protocols, system power requests, and power
   snapshot watcher callbacks.
-- `net/net.fidl`: TCP/UDP/DNS/link-status APIs plus link watcher callbacks.
-  The wire API remains unchanged while the implementation accepts dual-stack
-  IPv4/IPv6 socket addresses and returns mixed A/AAAA resolver results.
+- `net/net.fidl`: the wire-compatible ordinal 1–6 `Netstack` API plus typed
+  domain/IP endpoints, table/prefix/suffix/upstream types, domain-scoped
+  `SocketProvider`, privileged `NetworkRoutingManager`, raw-hostname
+  `ProxyStreamHandler`, and private stack/switch topology and recovery
+  protocols. Generated bindings remain Bazel outputs.
 - `time/time.fidl`: time quality, sync/manual-time controls, server
   configuration, `RtcHardware`, and time-quality watcher callbacks.
 - `user/manager.fidl`: user create/update/delete/lock/unlock/list/get APIs plus
@@ -152,20 +154,29 @@ Current hardware/power contracts include:
 
 ## Network FIDL
 
-`idl/bexos/net/net.fidl` defines the public netstack surface:
+`idl/bexos/net/net.fidl` defines the networking surface:
 
 - `Netstack.ConnectTcp`, `ListenTcp`, `CreateUdpSocket`, `ResolveHost`, and
   `GetLinkStatus`;
 - TCP socket and listener control protocols;
 - UDP datagram control protocol;
 - IPv4/IPv6 socket address types and bounded socket options. IPv6 rollout added
-  only prototxt configuration fields and versioned internal migration records;
-  it did not change the Netstack, socket, TimeManager, or TlsTrustManager FIDL
-  wire ABIs.
+  only additive types/protocols and versioned internal migration records; the
+  existing Netstack, socket, TimeManager, and TlsTrustManager ordinals did not
+  move;
+- `SocketProvider`, whose channel is bound to one appd-selected domain/table;
+- `NetworkRoutingManager` for atomic provider registration/update/removal,
+  inspection, and scoped-provider creation;
+- `ProxyStreamHandler`, which receives the normalized original domain without
+  local DNS;
+- private `StackBackend`, `StackController`, and
+  `VirtualSwitchController` methods for VRFs, virtual ports, endpoint escrow,
+  recovery checkpoints/adoption, and packet-generation commit.
 
 The std libc compatibility layer calls kernel services through the generated
 FIDL syscall transport. `clock_gettime` uses `Clock.GetTime`, TCP/UDP socket
-setup uses `bexos.net.Netstack`, TCP byte streams use kernel `SocketControl`,
+setup prefers `bexos.net.SocketProvider` with explicit legacy `Netstack`
+fallback, TCP byte streams use kernel `SocketControl`,
 and pthread/futex compatibility entrypoints call `TaskControl`. `ProfileProvider`
 and the scheduling-policy methods on `TaskControl` are routed through the same
 guest syscall path, so userspace can mint profile handles, assign them, adjust

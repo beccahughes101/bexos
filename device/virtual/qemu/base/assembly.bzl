@@ -59,6 +59,8 @@ QEMU_PRODUCT_MANIFESTS = {
         "//services/prefsd:prefsd_archive": "//services/prefsd:package_manifest",
         "//services/jobd:jobd_archive": "//services/jobd:package_manifest",
         "//services/netstack:netstackd_archive": "//services/netstack:package_manifest",
+        "//services/networkd:networkd_archive": "//services/networkd:package_manifest",
+        "//services/vswitchd:vswitchd_archive": "//services/vswitchd:package_manifest",
         "//services/powerd:powerd_elf": "//services/powerd:package_manifest",
         "//services/teed:teed_elf": "//services/teed:package_manifest",
         "//services/storage_verify:storage_verify": "//services/storage_verify:manifest",

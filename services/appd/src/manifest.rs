@@ -120,6 +120,7 @@ pub struct Process {
     pub resource_group: Option<String>,
     pub handles: Vec<IntentFilter>,
     pub shell_role: ShellRole,
+    pub network_domain: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -968,11 +969,29 @@ fn decode_process(bytes: &[u8]) -> Result<Process, ManifestError> {
                     _ => return Err(ManifestError::InvalidConfigValue),
                 }
             }
+            13 => {
+                let domain = field.string()?;
+                if !domain.is_empty() {
+                    if !valid_network_domain(&domain) {
+                        return Err(ManifestError::InvalidConfigValue);
+                    }
+                    process.network_domain = Some(domain);
+                }
+            }
             _ => {}
         }
     }
 
     Ok(process)
+}
+
+fn valid_network_domain(value: &str) -> bool {
+    value.len() <= 63
+        && value.bytes().enumerate().all(|(index, byte)| match byte {
+            b'a'..=b'z' | b'0'..=b'9' | b'_' => true,
+            b'-' => index != 0 && index + 1 != value.len(),
+            _ => false,
+        })
 }
 
 fn decode_intent_filter(bytes: &[u8]) -> Result<IntentFilter, ManifestError> {

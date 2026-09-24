@@ -76,10 +76,18 @@ impl instance_network::Host for Context {
             .resources
             .entries()
             .find(|(_, e)| {
-                e.name == "bexos.net.Netstack"
+                e.name == "bexos.net.SocketProvider"
                     && e.handle.kind() == crate::resources::Kind::Channel
                     && e.handle.rights() & (crate::resources::READ | crate::resources::WRITE)
                         == (crate::resources::READ | crate::resources::WRITE)
+            })
+            .or_else(|| {
+                self.resources.entries().find(|(_, e)| {
+                    e.name == "bexos.net.Netstack"
+                        && e.handle.kind() == crate::resources::Kind::Channel
+                        && e.handle.rights() & (crate::resources::READ | crate::resources::WRITE)
+                            == (crate::resources::READ | crate::resources::WRITE)
+                })
             })
             .map(|(_, e)| e.clone());
         self.push(Network(grant))

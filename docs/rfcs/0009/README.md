@@ -42,9 +42,11 @@ BootFS retained and prevents the pivot success marker.
 ## QEMU disk layout
 
 The generated GPT preserves this order: `ESP`, `BOOT_A`, `BOOT_B`,
-`SYS_STATE`, and `STORAGE`. The compact QEMU image uses 32 MiB for encrypted
-`SYS_STATE` and 256 MiB for encrypted `STORAGE`. The two BexFS namespace
-snapshots each have just under 128 MiB of capacity.
+`SYS_STATE`, and `STORAGE`. The current QEMU image uses 32 MiB for encrypted
+`SYS_STATE` and 512 MiB for encrypted `STORAGE`. The two BexFS namespace
+snapshots each have just under 256 MiB of capacity. The production design below
+continues to size STORAGE from product requirements rather than fixing this
+QEMU development value.
 
 | Partition | QEMU use | Namespace / access |
 | --- | --- | --- |

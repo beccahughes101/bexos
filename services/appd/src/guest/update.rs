@@ -27,6 +27,8 @@ enum Step {
 }
 pub struct Update {
     package: String,
+    process: String,
+    instance_id: String,
     generation: u64,
     source: Channel,
     target: Channel,
@@ -300,7 +302,12 @@ pub fn begin(
     let old = state
         .services
         .iter()
-        .find(|s| s.package == target)
+        .filter(|s| s.package == target && s.generation < generation)
+        .min_by(|left, right| {
+            left.instance_id
+                .cmp(&right.instance_id)
+                .then_with(|| left.process.cmp(&right.process))
+        })
         .ok_or("service not managed by appd")?;
     log(&alloc::format!(
         "appd: migration staging begin target={target} generation={generation}\n"
@@ -326,7 +333,11 @@ pub fn begin(
             .record(target)
             .map(|record| record.accepted_generation)
             .unwrap_or(0);
-        if generation <= floor {
+        let package_already_advancing = state
+            .services
+            .iter()
+            .any(|service| service.package == target && service.generation == generation);
+        if generation <= floor && !package_already_advancing {
             return Err("Rollback generation".into());
         }
     }
@@ -548,7 +559,7 @@ pub fn begin(
                     },
                     Some(&state.config.runner_policy),
                 ),
-                resource_group_id: 1,
+                resource_group_id: old.resource_group_id,
             },
             &mut deferred,
             &image,
@@ -615,6 +626,8 @@ pub fn begin(
         archive_handle: retained_archive,
         archive_len: len,
         package: target.to_string(),
+        process: old.process.clone(),
+        instance_id: old.instance_id.clone(),
         generation,
         source: Channel(old.migration),
         target: target_channel,
@@ -659,6 +672,30 @@ impl Update {
             self.markers[1],
             self.markers[2]
         )
+    }
+    pub fn continue_package(
+        &self,
+        state: &AppdState,
+        kernel: &mut Kernel,
+    ) -> Result<Option<Update>, String> {
+        if !state
+            .services
+            .iter()
+            .any(|service| service.package == self.package && service.generation < self.generation)
+        {
+            return Ok(None);
+        }
+        let archive = Memory::duplicate(self.archive_handle, 1 | 2 | 16 | 32)
+            .map_err(|_| "migration archive duplicate")?;
+        begin(
+            state,
+            kernel,
+            archive,
+            self.archive_len,
+            self.generation,
+            &self.package,
+        )
+        .map(Some)
     }
     pub fn phase(&self) -> &'static str {
         match self.step {
@@ -879,10 +916,15 @@ impl Update {
     }
     fn finish_activation(&self, state: &mut AppdState) -> Result<(), String> {
         log("appd: finishing migration activation\n");
+        let pending_archive = state.pending_archive;
         let s = state
             .services
             .iter_mut()
-            .find(|s| s.package == self.package)
+            .find(|s| {
+                s.package == self.package
+                    && s.process == self.process
+                    && s.instance_id == self.instance_id
+            })
             .ok_or("service disappeared")?;
         state
             .devices
@@ -908,6 +950,11 @@ impl Update {
         s.space_handle = self.replacement.address_space_handle.raw;
         s.thread_handle = self.replacement.main_thread_handle.raw;
         s.generation = self.generation;
+        if s.archive != 0 {
+            let _ = Memory::close(s.archive);
+        }
+        (s.archive, s.archive_len) = pending_archive;
+        state.pending_archive = (0, 0);
         log("appd: activating replacement registry record\n");
         state
             .activate_record()

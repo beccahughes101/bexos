@@ -4,7 +4,10 @@ use bexos_avb::{verify_partition, verify_vbmeta};
 use bexos_bootfs_parser::Bootfs;
 use sha2::{Digest, Sha256};
 
-pub const BOOTFS_MAX_BYTES: usize = 160 * 1024 * 1024;
+// The x86 product BootFS includes both architecture-neutral platform services
+// and the larger x86_64 binaries. Keep a small fixed margin above the current
+// assembled image while retaining a hard authentication/snapshot bound.
+pub const BOOTFS_MAX_BYTES: usize = 168 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {

@@ -89,9 +89,9 @@ pub use opener::{OpenerBinding, OpenerRequest, OpenerRequestKind, register_manif
 pub use permission_route::{PermissionRoute, PermissionRouteTable};
 pub use platform_config::{
     AppLifecyclePolicy, Architecture, DriverPolicy, DriverPolicyDecision, DriverUnmatchedAction,
-    HardwareAccessTier, MicrovmConstraints, NativeRunnerGrant, PackageIdentity, PlatformConfig,
-    PlatformMetadata, RunnerPolicy, RunnerPolicyDecision, RunnerTier, TeePolicy, Tier2DriverRules,
-    UpdateApplyPolicy, UpdatePolicy, UpdateRootKey,
+    HardwareAccessTier, MicrovmConstraints, NativeRunnerGrant, NetworkDomain, NetworkPolicy,
+    PackageIdentity, PlatformConfig, PlatformMetadata, RunnerPolicy, RunnerPolicyDecision,
+    RunnerTier, TeePolicy, Tier2DriverRules, UpdateApplyPolicy, UpdatePolicy, UpdateRootKey,
 };
 pub use policy::{
     ClientContext, FidlCapability, PermissionDecision, PermissionValueGrant, allowed_capabilities,

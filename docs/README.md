@@ -22,7 +22,8 @@ BexOS is currently an experimental Rust OS built with Bazel. The implemented sys
 The current boot product is `virtual_aarch64`. Its product assembly places
 boot-critical platform services and D1 storage drivers in BootFS, and puts
 `storage_verify`, `bexos.lib.crypto`, `bexos.lib.net`,
-`bexos.driver.network.virtio_net`, `bexos.service.netstackd`,
+`bexos.driver.network.virtio_net`, `bexos.service.vswitchd`,
+`bexos.service.netstackd`, `bexos.service.networkd`,
 `bexos.service.timed`, and `bexos.service.jobd` into the system
 image/autoinstall set. The storage-image packages are preinstalled on the
 `STORAGE` package partition and activated after appd pivots from BootFS.
@@ -43,7 +44,9 @@ image/autoinstall set. The storage-image packages are preinstalled on the
 - [Local Fonts](fonts.md): `fontd`, system/user tiers, read-only shared VMOs, matching, shaping clients, and the disabled dynamic-fetch boundary.
 - [Drivers And Storage](drivers-storage.md): D1 drivers, block/filesystem stack, Linux shim, and D2 smoke target.
 - [I2C And SPI Services](i2c_spi.md): scoped D1 I2C/SPI controllers, deterministic backend, topology, migration, and validation state.
-- [Services](services.md): appd, jobd, debugd, traced, vfsd, usersd, keychaind, trustd, netstackd, timed, updated, teed, powerd, i2cd, spid, and storage_verify.
+- [Services](services.md): appd, jobd, debugd, traced, vfsd, usersd,
+  keychaind, trustd, networkd, netstackd, vswitchd, timed, updated, teed,
+  powerd, i2cd, spid, and storage_verify.
 - [Storage Preinstalled Apps](storage-preinstalled-apps.md): QEMU storage package checklist and launch rules.
 - [Secure Runtime And Updates](secure-runtime-updates.md): Trusty integration,
   external TEE driver selection, trusted-app packages, update engine,
@@ -87,6 +90,8 @@ The QEMU product currently assembles these platform packages:
 - `bexos.service.keychaind`
 - `bexos.service.fontd` (workstation)
 - `bexos.service.netstackd`
+- `bexos.service.networkd`
+- `bexos.service.vswitchd`
 - `bexos.service.timed`
 - `bexos.service.jobd`
 - `bexos.platform.storage_verify`
@@ -102,7 +107,9 @@ services carry their wave in their package manifests:
 - wave 2: BexFS, archivefs, and MemFS
 - wave 3: diskimage, vfsd, teed, debugd, traced, updated, and trustd
 - wave 4: powerd and usersd
-- package wave 5: keychaind, fontd and netstackd
+- package wave 4: vswitchd
+- package wave 5: keychaind, fontd and per-group netstackd
+- package wave 6: per-group networkd
 - package wave 6: timed
 - package wave 7: jobd
 
@@ -300,13 +307,13 @@ boundaries are:
   implementation. The current QEMU product can build the live adapter, but it
   still selects the core distribution client and does not enable live
   app/update fetching by default.
-- **Networking:** the packet data plane is dual-stack for configured IPv4 and
-  IPv6. `netstackd` accepts static IPv6, IPv6 DNS/bootstrap, and SLAAC config
-  fields, installs link-local/static IPv6 addressing, uses smoltcp for TCP and
-  UDP sockets, returns mixed A/AAAA resolver results, and keeps strict DoH
-  fail-closed when no secure bootstrap path is available. Its migration state
-  now carries the dual-stack config and restores preserved socket/listener
-  handles over the retained Ethernet resources during activation.
+- **Networking:** appd starts isolated networkd/netstackd instances from
+  platform prototxt. Networkd implements RFC 61 provider routing, domain-scoped
+  sockets, split DNS over UDP/DoT/DoH, proxy hostname delegation, and endpoint
+  escrow. Netstackd enforces VRF/FIB/interface scope and uses smoltcp for
+  dual-stack TCP/UDP. Vswitchd owns the physical NIC and enforces virtual-port
+  MAC/VLAN isolation. All three services support heart transplant; netstackd
+  also emits generation-gated recovery journals used for crash adoption.
 - **Time and power policy:** timed applies initial/failed/manual corrections as
   realtime steps, slews bounded subsequent network corrections through the
   kernel realtime transform, persists target quality state, and uses the QEMU

@@ -468,6 +468,28 @@ TUF root metadata, direct-update public keys, and signer descriptors live under
 `//ecosystem/bexos/{dev,prod}`. App root metadata and distribution policy are
 source prototxt.
 
+## networkd and vswitchd
+
+Packages: `bexos.service.networkd` and `bexos.service.vswitchd`.
+
+Appd launches one networkd and netstackd process per configured isolation group,
+while vswitchd is the heart-transplant-capable physical NIC multiplexer. Networkd
+publishes the domain-scoped `bexos.net.SocketProvider`, the default-only legacy
+`bexos.net.Netstack`, and private routing management. It owns provider routing,
+split DNS (UDP/DoT/DoH), control-channel proxying, backend selection, and
+recovery escrow. TCP payload does not traverse networkd.
+
+Vswitchd consumes physical `bexos.hardware.ethernet.Device` instances and
+creates per-table virtual packet-ring devices. MAC/VLAN demux, access/trunk
+translation, broadcast/multicast fan-out, anti-spoof checks, queue limits,
+backpressure, and generation commits are enforced before frames cross an
+isolation boundary. Its physical/virtual VMO mappings, port policy, queues, and
+generations are migrated during replacement.
+
+Targets are under `//services/networkd` and `//services/vswitchd`; each service
+has normal and replacement archives. See [RFC 0068 current state](rfcs/0068/CURRENT.md)
+and [RFC 0061 current state](rfcs/0061/CURRENT.md).
+
 ## netstackd
 
 Package: `bexos.service.netstackd`
@@ -481,22 +503,25 @@ Targets:
 - `//services/netstack:netstackd_archive`
 - `//services/netstack:replacement_archive`
 
-`netstackd` is a wave 5 system singleton preinstalled on the QEMU `STORAGE`
-partition. App-service launches it after disk drivers and the storage-backed
-VirtIO-Net driver are bound, then publishes `bexos.net.Netstack`.
+`netstackd` is a wave 5 multi-instance backend preinstalled on the QEMU
+`STORAGE` partition. Appd launches one process per RFC 68 isolation group;
+networkd is its only private stack/controller client. The default networkd
+instance translates the compatible `Netstack` API into table zero.
 
 The deployed ELF is a std-linked Tokio daemon. Its entrypoint creates a
 two-worker runtime with I/O and time enabled, then drives the service loop as an
 async task while preserving the existing polling-oriented FIDL and packet-plane
 behavior.
 
-The service declares and consumes `bexos.hardware.ethernet.Device`, registers RX/TX shared
-buffers, maps those VMOs, starts the Ethernet device, and pumps Ethernet
-`FrameEntry` descriptors over the driver FIFO. It keeps RX buffers supplied,
-copies outbound UDP frames into TX slots, consumes TX/RX completions, and maps
-FIFO or VMO failures into `bexos.net.Status`.
+The normal product does not grant netstackd a physical Ethernet capability.
+Networkd attaches a vswitch virtual device to exactly one table through the
+private `StackController`; the same descriptor/VMO packet-link machinery pumps
+frames for that table without exposing another table's physical RX pool.
 
-The current data plane is dual-stack for configured IPv4 and IPv6. A
+Each process contains multiple VRF table states with independent FIBs,
+interfaces, neighbors/runtime generations, quotas, ephemeral ports, TCP,
+listeners, UDP, and resolver fallback. The data plane is dual-stack for
+configured IPv4 and IPv6. A
 FIFO-backed smoltcp device drives TCP connect/listen state over the virtio
 packet path and bridges established TCP payloads to kernel `SOCKET` stream
 handles. UDP sockets also attach to smoltcp, so IPv4 UDP, IPv6 UDP, ARP, and
@@ -518,7 +543,11 @@ port cursor, TCP socket metadata, and Ethernet FIFO/VMO handles plus live RX/TX
 mappings. During quiescence the service stops accepting new client work and
 drains observed FIFO completions before cutover. During activation it restores
 preserved TCP endpoints/listeners over the retained Ethernet resources and
-aborts replacement if any active socket cannot be restored.
+aborts replacement if any active socket cannot be restored. In addition,
+networkd requests generation-gated, checksummed double-slot recovery journals;
+a crash replacement adopts the committed table/transport state and receives
+the stream, listener, and UDP endpoints retained by networkd before vswitchd
+commits the matching packet generation.
 
 ## timed
 
@@ -538,7 +567,8 @@ Targets:
 partition. App-service launches it after storage package import and after
 netstackd's wave 5 service is available.
 
-The service consumes `bexos.net.Netstack`,
+The service prefers `bexos.net.SocketProvider` and retains an optional
+`bexos.net.Netstack` compatibility fallback, plus
 `bexos.security.trust.TlsTrustManager`, `bexos.kernel.Clock`, and
 `bexos.kernel.SystemPrivileged` with the `SET_TIME` permission, and optionally
 consumes `bexos.time.RtcHardware`. It exposes public singleton

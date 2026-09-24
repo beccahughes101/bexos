@@ -124,7 +124,8 @@ driver's latency model can tolerate allocator, thread, and blocking behavior.
 Pre-allocate critical rings and buffers, avoid ambient blocking in interrupt or
 packet paths, and keep hardware-facing capability use explicit.
 
-NVMe, BexFS, archivefs, diskimage, VirtIO-Net, trustd, debugd, netstackd, traced,
+NVMe, BexFS, archivefs, diskimage, VirtIO-Net, trustd, debugd, networkd,
+netstackd, vswitchd, traced,
 vfsd, powerd, timed, and teed are current concrete std-linked Tokio examples. BexFS, archivefs, and
 diskimage keep no-std-compatible cores for host tests and shared logic; NVMe and
 VirtIO-Net deploy as std-linked Tokio drivers directly. Their deployed ELFs are

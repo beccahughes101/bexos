@@ -32,7 +32,7 @@ its kernel, BootFS, policy, evidence, and update ranges explicitly before the
 normal allocator is enabled. This leaves enough
 room for the 64 MiB early BootFS reservation plus appd, early drivers,
 `debugd`, `teed`, `updated`, post-storage system-image driver binding,
-the storage-preinstalled netstackd service, service replacement archives, and
+the storage-preinstalled networkd/netstackd services, vswitchd, service replacement archives, and
 the disk-only verifier heaps.
 
 CPU topology is declared in `device/virtual/qemu/base/aarch64/device.prototxt`. Bazel passes
@@ -106,6 +106,8 @@ Expected guest evidence includes:
 - `teed: service ready`
 - `debugd: tee proxy connected`
 - `netstackd: service ready`
+- `vswitchd: service ready`
+- `networkd: service ready`
 - `appd: launched preinstalled service package=bexos.service.netstackd`
 - `appd: registry launched signed app package=bexos.platform.storage_verify`
 - `appd: app lifecycle registry ready for debugd`
@@ -113,13 +115,14 @@ Expected guest evidence includes:
 
 `//device/virtual/qemu/nongui:qemu_nvme_gpt.img` is a Bazel output. It preserves the
 partition order in [the storage-bootstrap design](rfcs/0009/README.md), with
-32 MiB of encrypted BexFS for `SYS_STATE` and 256 MiB of encrypted BexFS for
+32 MiB of encrypted BexFS for `SYS_STATE` and 512 MiB of encrypted BexFS for
 `STORAGE`. BexFS divides the volume between two namespace snapshots, so each
-snapshot has just under 128 MiB for packages, data, and metadata. The QEMU
+snapshot has just under 256 MiB for packages, data, and metadata. The QEMU
 `STORAGE` volume contains `pkg/` and `data/`; `vfsd`
 owns the managed package-store mount for disk app launch and debug installs
 while `appd` still mounts `/data` writable for the current QEMU verifier path. The image
-preinstalls storage verifier, crypto, VirtIO-Net, netstackd, timed, and jobd
+preinstalls storage verifier, crypto, VirtIO-Net, vswitchd, netstackd,
+networkd, timed, and jobd
 package archives and uses an explicitly QEMU-only test key. Keychaind is present
 as an installable package archive and exposed through its lazy manifest; it is not
 started by the storage service wave. Production A/B boot selection, signed

@@ -27,6 +27,7 @@ pub enum WatchdogPhase {
 pub struct WatchdogRecord {
     pub package_id: String,
     pub process_name: String,
+    pub instance_id: String,
     pub uid: u64,
     pub version: SemVer,
     pub phase: WatchdogPhase,
@@ -44,11 +45,13 @@ pub enum WatchdogAction {
     Restart {
         package_id: String,
         process_name: String,
+        instance_id: String,
         uid: u64,
     },
     RollbackAndRestart {
         package_id: String,
         process_name: String,
+        instance_id: String,
         uid: u64,
     },
     StopCrashLoop {
@@ -60,6 +63,7 @@ impl WatchdogRecord {
     pub fn new(
         package_id: String,
         process_name: String,
+        instance_id: String,
         uid: u64,
         version: SemVer,
         now_ns: u64,
@@ -67,6 +71,7 @@ impl WatchdogRecord {
         Self {
             package_id,
             process_name,
+            instance_id,
             uid,
             version,
             phase: WatchdogPhase::Probation,
@@ -120,6 +125,7 @@ impl WatchdogRecord {
             WatchdogAction::Restart {
                 package_id: self.package_id.clone(),
                 process_name: self.process_name.clone(),
+                instance_id: self.instance_id.clone(),
                 uid: self.uid,
             }
         }
@@ -140,9 +146,10 @@ impl WatchdogRecord {
 
     pub fn checkpoint(&self) -> Vec<u8> {
         let mut w = Encoder::new();
-        w.word(1);
+        w.word(2);
         w.text(&self.package_id);
         w.text(&self.process_name);
+        w.text(&self.instance_id);
         w.word(self.uid);
         encode_semver(&mut w, &self.version);
         w.word(match self.phase {
@@ -165,11 +172,16 @@ impl WatchdogRecord {
     pub fn from_checkpoint(bytes: &[u8]) -> Result<Self, Error> {
         let mut r = Decoder::new(bytes);
         let version = r.word()?;
-        if version != 1 {
+        if !(1..=2).contains(&version) {
             return Err(Error::UnsupportedVersion);
         }
         let package_id = r.text(128)?.to_string();
         let process_name = r.text(64)?.to_string();
+        let instance_id = if version >= 2 {
+            r.text(128)?.to_string()
+        } else {
+            String::new()
+        };
         let uid = r.word()?;
         let package_version = decode_semver(&mut r)?;
         let phase = match r.word()? {
@@ -189,6 +201,7 @@ impl WatchdogRecord {
         Ok(Self {
             package_id,
             process_name,
+            instance_id,
             uid,
             version: package_version,
             phase,
@@ -213,6 +226,7 @@ fn rollback_or_stop(record: &WatchdogRecord, has_rollback: bool) -> WatchdogActi
         WatchdogAction::RollbackAndRestart {
             package_id: record.package_id.clone(),
             process_name: record.process_name.clone(),
+            instance_id: record.instance_id.clone(),
             uid: record.uid,
         }
     } else {

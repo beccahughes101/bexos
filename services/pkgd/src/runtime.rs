@@ -557,7 +557,7 @@ impl Runtime {
         let mut directory =
             bexos_userspace::service_directory::ServiceDirectoryClient::new(self.directory);
         for (slot, name, capability) in [
-            (&mut self.network, "bexos.net.Netstack", "Public"),
+            (&mut self.network, "bexos.net.SocketProvider", "Public"),
             (
                 &mut self.tls,
                 "bexos.security.trust.TlsTrustManager",
@@ -593,7 +593,8 @@ pub async fn main(channel: u64) -> ! {
             let endpoint = Channel(grant.endpoint);
             match grant.protocol.as_str() {
                 "VfsManager" => runtime.vfs = endpoint,
-                "Netstack" => runtime.network = endpoint,
+                "SocketProvider" => runtime.network = endpoint,
+                "Netstack" if runtime.network.0 == 0 => runtime.network = endpoint,
                 "TlsTrustManager" => runtime.tls = endpoint,
                 "TeeManager" => runtime.tee = endpoint,
                 "TimeManager" => runtime.time = endpoint,

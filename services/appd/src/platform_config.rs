@@ -1,6 +1,7 @@
 use crate::manifest::{Cursor, ManifestError};
 use crate::runner::PackageTrustTier;
 use alloc::string::String;
+use alloc::vec;
 use alloc::vec::Vec;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -12,6 +13,279 @@ pub struct PlatformConfig {
     pub driver_policy: DriverPolicy,
     pub update_policy: UpdatePolicy,
     pub app_lifecycle_policy: AppLifecyclePolicy,
+    pub network_policy: NetworkPolicy,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NetworkPolicy {
+    pub isolation_groups: Vec<NetworkIsolationGroup>,
+    pub domains: Vec<NetworkDomain>,
+    pub virtual_ports: Vec<NetworkVirtualPort>,
+    pub routes: Vec<NetworkRoute>,
+    pub dns_upstreams: Vec<NetworkDnsUpstream>,
+    pub resource_templates: Vec<NetworkResourceTemplate>,
+    pub max_dynamic_providers: u32,
+}
+
+impl Default for NetworkPolicy {
+    fn default() -> Self {
+        Self {
+            isolation_groups: Vec::new(),
+            domains: vec![NetworkDomain {
+                name: "system_default".into(),
+                isolation_group: "system_default".into(),
+                table_id: 0,
+                system_default: true,
+                authorized_packages: Vec::new(),
+            }],
+            virtual_ports: Vec::new(),
+            routes: Vec::new(),
+            dns_upstreams: Vec::new(),
+            resource_templates: Vec::new(),
+            max_dynamic_providers: 64,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct NetworkIsolationGroup {
+    pub name: String,
+    pub networkd_package: String,
+    pub networkd_process: String,
+    pub netstackd_package: String,
+    pub netstackd_process: String,
+    pub resource_template: String,
+    pub table_ids: Vec<u32>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct NetworkDomain {
+    pub name: String,
+    pub isolation_group: String,
+    pub table_id: u32,
+    pub system_default: bool,
+    pub authorized_packages: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct NetworkResourceTemplate {
+    pub name: String,
+    pub max_instances: u32,
+    pub cpu_weight: u32,
+    pub memory_high_bytes: u64,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct NetworkVirtualPort {
+    pub port_id: u64,
+    pub isolation_group: String,
+    pub table_id: u32,
+    pub physical_selector: String,
+    pub source_mac: Vec<u8>,
+    pub vlan_id: u16,
+    pub tagged: bool,
+    pub rx_queue_depth: u32,
+    pub tx_queue_depth: u32,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct NetworkIpPrefix {
+    pub address: Vec<u8>,
+    pub prefix_len: u8,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct NetworkRoute {
+    pub isolation_group: String,
+    pub table_id: u32,
+    pub destination: NetworkIpPrefix,
+    pub gateway: Vec<u8>,
+    pub interface_id: u64,
+    pub metric: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum NetworkDnsTransport {
+    #[default]
+    Unspecified,
+    Udp53,
+    Dot,
+    Doh,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct NetworkDnsUpstream {
+    pub isolation_group: String,
+    pub table_id: u32,
+    pub provider: String,
+    pub domain_suffix: String,
+    pub bootstrap_address: Vec<u8>,
+    pub port: u16,
+    pub transport: NetworkDnsTransport,
+    pub tls_server_name: String,
+    pub doh_path: String,
+    pub priority: u32,
+}
+
+impl NetworkPolicy {
+    pub fn domain(&self, name: &str) -> Option<&NetworkDomain> {
+        self.domains.iter().find(|domain| domain.name == name)
+    }
+
+    pub fn authorize_domain(&self, package: &str, name: &str) -> Option<&NetworkDomain> {
+        let domain = self.domain(name)?;
+        if domain.authorized_packages.is_empty()
+            || domain
+                .authorized_packages
+                .iter()
+                .any(|value| value == package)
+        {
+            Some(domain)
+        } else {
+            None
+        }
+    }
+
+    fn validate(&self) -> Result<(), ManifestError> {
+        let default_count = self
+            .domains
+            .iter()
+            .filter(|domain| domain.system_default)
+            .count();
+        if self.domains.is_empty()
+            || default_count != 1
+            || !self
+                .domain("system_default")
+                .is_some_and(|domain| domain.system_default)
+        {
+            return Err(ManifestError::InvalidConfigValue);
+        }
+        for (index, domain) in self.domains.iter().enumerate() {
+            if !valid_identifier(&domain.name)
+                || self.domains[..index]
+                    .iter()
+                    .any(|other| other.name == domain.name)
+                || (!self.isolation_groups.is_empty()
+                    && !self.isolation_groups.iter().any(|group| {
+                        group.name == domain.isolation_group
+                            && group.table_ids.contains(&domain.table_id)
+                    }))
+            {
+                return Err(ManifestError::InvalidConfigValue);
+            }
+        }
+        for (index, group) in self.isolation_groups.iter().enumerate() {
+            if !valid_identifier(&group.name)
+                || group.networkd_package.is_empty()
+                || group.networkd_process.is_empty()
+                || group.netstackd_package.is_empty()
+                || group.netstackd_process.is_empty()
+                || group.table_ids.is_empty()
+                || group.table_ids.iter().any(|table| {
+                    self.isolation_groups[..index]
+                        .iter()
+                        .any(|other| other.table_ids.contains(table))
+                })
+                || !self.resource_templates.iter().any(|template| {
+                    template.name == group.resource_template
+                        && template.max_instances != 0
+                        && template.cpu_weight != 0
+                        && template.memory_high_bytes != 0
+                })
+                || self.isolation_groups[..index]
+                    .iter()
+                    .any(|other| other.name == group.name)
+            {
+                return Err(ManifestError::InvalidConfigValue);
+            }
+        }
+        for (index, template) in self.resource_templates.iter().enumerate() {
+            let instance_count = self
+                .isolation_groups
+                .iter()
+                .filter(|group| group.resource_template == template.name)
+                .count();
+            if !valid_identifier(&template.name)
+                || template.max_instances == 0
+                || template.cpu_weight == 0
+                || template.memory_high_bytes == 0
+                || instance_count > template.max_instances as usize
+                || self.resource_templates[..index]
+                    .iter()
+                    .any(|other| other.name == template.name)
+            {
+                return Err(ManifestError::InvalidConfigValue);
+            }
+        }
+        for port in &self.virtual_ports {
+            if port.port_id == 0
+                || !valid_selector(&port.physical_selector)
+                || !matches!(port.source_mac.len(), 0 | 6)
+                || port.vlan_id > 4094
+                || port.rx_queue_depth == 0
+                || port.tx_queue_depth == 0
+                || port.rx_queue_depth > 4096
+                || port.tx_queue_depth > 4096
+                || !self.table_in_group(&port.isolation_group, port.table_id)
+            {
+                return Err(ManifestError::InvalidConfigValue);
+            }
+        }
+        for route in &self.routes {
+            if !valid_prefix(&route.destination)
+                || (!route.gateway.is_empty() && !matches!(route.gateway.len(), 4 | 16))
+                || !self.table_in_group(&route.isolation_group, route.table_id)
+            {
+                return Err(ManifestError::InvalidConfigValue);
+            }
+        }
+        for upstream in &self.dns_upstreams {
+            if !self.table_in_group(&upstream.isolation_group, upstream.table_id)
+                || !valid_identifier(&upstream.provider)
+                || !matches!(upstream.bootstrap_address.len(), 4 | 16)
+                || upstream.port == 0
+                || upstream.transport == NetworkDnsTransport::Unspecified
+                || matches!(
+                    upstream.transport,
+                    NetworkDnsTransport::Dot | NetworkDnsTransport::Doh
+                ) && upstream.tls_server_name.is_empty()
+                || upstream.transport == NetworkDnsTransport::Doh
+                    && !upstream.doh_path.starts_with('/')
+            {
+                return Err(ManifestError::InvalidConfigValue);
+            }
+        }
+        Ok(())
+    }
+
+    fn table_in_group(&self, name: &str, table_id: u32) -> bool {
+        self.isolation_groups.is_empty() && name == "system_default" && table_id == 0
+            || self
+                .isolation_groups
+                .iter()
+                .any(|group| group.name == name && group.table_ids.contains(&table_id))
+    }
+}
+
+fn valid_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 63
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        })
+}
+
+fn valid_selector(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.is_ascii()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':' | b'/')
+        })
+}
+
+fn valid_prefix(prefix: &NetworkIpPrefix) -> bool {
+    matches!(prefix.address.len(), 4 | 16) && prefix.prefix_len as usize <= prefix.address.len() * 8
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -259,7 +533,9 @@ pub enum DriverPolicyDecision {
 
 impl PlatformConfig {
     pub fn decode(bytes: &[u8]) -> Result<Self, ManifestError> {
-        decode_platform_config(bytes)
+        let config = decode_platform_config(bytes)?;
+        config.network_policy.validate()?;
+        Ok(config)
     }
 }
 
@@ -349,10 +625,173 @@ fn decode_platform_config(bytes: &[u8]) -> Result<PlatformConfig, ManifestError>
             7 => config
                 .interface_defaults
                 .push(decode_interface_default(field.bytes()?)?),
+            8 => config.network_policy = decode_network_policy(field.bytes()?)?,
             _ => {}
         }
     }
     Ok(config)
+}
+
+fn decode_network_policy(bytes: &[u8]) -> Result<NetworkPolicy, ManifestError> {
+    let mut policy = NetworkPolicy {
+        domains: Vec::new(),
+        max_dynamic_providers: 64,
+        ..NetworkPolicy::default()
+    };
+    let mut cursor = Cursor::new(bytes);
+    while let Some(field) = cursor.next_field()? {
+        match field.number {
+            1 => policy
+                .isolation_groups
+                .push(decode_network_isolation_group(field.bytes()?)?),
+            2 => policy.domains.push(decode_network_domain(field.bytes()?)?),
+            3 => policy
+                .virtual_ports
+                .push(decode_network_virtual_port(field.bytes()?)?),
+            4 => policy.routes.push(decode_network_route(field.bytes()?)?),
+            5 => policy
+                .dns_upstreams
+                .push(decode_network_dns_upstream(field.bytes()?)?),
+            6 => policy
+                .resource_templates
+                .push(decode_network_resource_template(field.bytes()?)?),
+            7 => policy.max_dynamic_providers = field.varint()? as u32,
+            _ => {}
+        }
+    }
+    if policy.max_dynamic_providers == 0 {
+        policy.max_dynamic_providers = 64;
+    }
+    Ok(policy)
+}
+
+fn decode_network_isolation_group(bytes: &[u8]) -> Result<NetworkIsolationGroup, ManifestError> {
+    let mut value = NetworkIsolationGroup::default();
+    let mut cursor = Cursor::new(bytes);
+    while let Some(field) = cursor.next_field()? {
+        match field.number {
+            1 => value.name = field.string()?,
+            2 => value.networkd_package = field.string()?,
+            3 => value.networkd_process = field.string()?,
+            4 => value.netstackd_package = field.string()?,
+            5 => value.netstackd_process = field.string()?,
+            6 => value.resource_template = field.string()?,
+            7 => value.table_ids.push(field.varint()? as u32),
+            _ => {}
+        }
+    }
+    Ok(value)
+}
+
+fn decode_network_domain(bytes: &[u8]) -> Result<NetworkDomain, ManifestError> {
+    let mut value = NetworkDomain::default();
+    let mut cursor = Cursor::new(bytes);
+    while let Some(field) = cursor.next_field()? {
+        match field.number {
+            1 => value.name = field.string()?,
+            2 => value.isolation_group = field.string()?,
+            3 => value.table_id = field.varint()? as u32,
+            4 => value.system_default = field.varint()? != 0,
+            5 => value.authorized_packages.push(field.string()?),
+            _ => {}
+        }
+    }
+    Ok(value)
+}
+
+fn decode_network_resource_template(
+    bytes: &[u8],
+) -> Result<NetworkResourceTemplate, ManifestError> {
+    let mut value = NetworkResourceTemplate::default();
+    let mut cursor = Cursor::new(bytes);
+    while let Some(field) = cursor.next_field()? {
+        match field.number {
+            1 => value.name = field.string()?,
+            2 => value.max_instances = field.varint()? as u32,
+            3 => value.cpu_weight = field.varint()? as u32,
+            4 => value.memory_high_bytes = field.varint()?,
+            _ => {}
+        }
+    }
+    Ok(value)
+}
+
+fn decode_network_virtual_port(bytes: &[u8]) -> Result<NetworkVirtualPort, ManifestError> {
+    let mut value = NetworkVirtualPort::default();
+    let mut cursor = Cursor::new(bytes);
+    while let Some(field) = cursor.next_field()? {
+        match field.number {
+            1 => value.port_id = field.varint()?,
+            2 => value.isolation_group = field.string()?,
+            3 => value.table_id = field.varint()? as u32,
+            4 => value.physical_selector = field.string()?,
+            5 => value.source_mac = field.bytes()?.to_vec(),
+            6 => value.vlan_id = field.varint()? as u16,
+            7 => value.tagged = field.varint()? != 0,
+            8 => value.rx_queue_depth = field.varint()? as u32,
+            9 => value.tx_queue_depth = field.varint()? as u32,
+            _ => {}
+        }
+    }
+    Ok(value)
+}
+
+fn decode_network_ip_prefix(bytes: &[u8]) -> Result<NetworkIpPrefix, ManifestError> {
+    let mut value = NetworkIpPrefix::default();
+    let mut cursor = Cursor::new(bytes);
+    while let Some(field) = cursor.next_field()? {
+        match field.number {
+            1 => value.address = field.bytes()?.to_vec(),
+            2 => value.prefix_len = field.varint()? as u8,
+            _ => {}
+        }
+    }
+    Ok(value)
+}
+
+fn decode_network_route(bytes: &[u8]) -> Result<NetworkRoute, ManifestError> {
+    let mut value = NetworkRoute::default();
+    let mut cursor = Cursor::new(bytes);
+    while let Some(field) = cursor.next_field()? {
+        match field.number {
+            1 => value.isolation_group = field.string()?,
+            2 => value.table_id = field.varint()? as u32,
+            3 => value.destination = decode_network_ip_prefix(field.bytes()?)?,
+            4 => value.gateway = field.bytes()?.to_vec(),
+            5 => value.interface_id = field.varint()?,
+            6 => value.metric = field.varint()? as u32,
+            _ => {}
+        }
+    }
+    Ok(value)
+}
+
+fn decode_network_dns_upstream(bytes: &[u8]) -> Result<NetworkDnsUpstream, ManifestError> {
+    let mut value = NetworkDnsUpstream::default();
+    let mut cursor = Cursor::new(bytes);
+    while let Some(field) = cursor.next_field()? {
+        match field.number {
+            1 => value.isolation_group = field.string()?,
+            2 => value.table_id = field.varint()? as u32,
+            3 => value.provider = field.string()?,
+            4 => value.domain_suffix = field.string()?,
+            5 => value.bootstrap_address = field.bytes()?.to_vec(),
+            6 => value.port = field.varint()? as u16,
+            7 => {
+                value.transport = match field.varint()? {
+                    1 => NetworkDnsTransport::Udp53,
+                    2 => NetworkDnsTransport::Dot,
+                    3 => NetworkDnsTransport::Doh,
+                    _ => NetworkDnsTransport::Unspecified,
+                }
+            }
+            8 => value.tls_server_name = field.string()?,
+            9 => value.doh_path = field.string()?,
+            10 => value.priority = field.varint()? as u32,
+            _ => {}
+        }
+    }
+    Ok(value)
 }
 
 fn decode_app_lifecycle_policy(bytes: &[u8]) -> Result<AppLifecyclePolicy, ManifestError> {

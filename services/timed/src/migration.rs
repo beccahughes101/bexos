@@ -52,7 +52,7 @@ impl State for Runtime {
             return Err(Error::InvalidData);
         }
         let mut w = Encoder::new();
-        w.word(4);
+        w.word(5);
         w.word(self.control.0);
         w.word(self.migration.map_or(0, |c| c.0));
         w.word(self.generation);
@@ -60,6 +60,7 @@ impl State for Runtime {
         encode_config(&mut w, &self.service.config);
         encode_quality(&mut w, &self.service.quality);
         w.word(self.service.netstack.map_or(0, |c| c.0));
+        w.word(self.service.scoped_network as u64);
         w.word(self.service.tls_trust.map_or(0, |c| c.0));
         w.word(self.service.rtc.map_or(0, |c| c.0));
         w.word(self.service.has_clock as u64);
@@ -90,7 +91,7 @@ impl State for Runtime {
         }
         let mut r = Decoder::new(bytes.ok_or(Error::InvalidData)?);
         let version = r.word()?;
-        if !(1..=4).contains(&version) {
+        if !(1..=5).contains(&version) {
             return Err(Error::UnsupportedVersion);
         }
         self.control = Channel(r.word()?);
@@ -100,6 +101,7 @@ impl State for Runtime {
         self.service.config = decode_config(&mut r, version)?;
         self.service.quality = decode_quality(&mut r)?;
         self.service.netstack = nonzero_channel(r.word()?);
+        self.service.scoped_network = version >= 5 && decode_bool(r.word()?)?;
         self.service.tls_trust = nonzero_channel(r.word()?);
         if version >= 2 {
             self.service.rtc = nonzero_channel(r.word()?);

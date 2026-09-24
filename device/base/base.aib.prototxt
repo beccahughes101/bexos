@@ -21,6 +21,8 @@ packages { label: "//lib/tee_driver_trusty:tee_driver_trusty_archive" package_id
 packages { label: "//lib/tee_driver_software:tee_driver_software_archive" package_id: "bexos.lib.tee_driver.software" placement: SYSTEM_IMAGE }
 packages { label: "//lib/ui/theme:theme_archive" package_id: "bexos.ui.theme" placement: SYSTEM_IMAGE }
 packages { label: "//services/netstack:netstackd_archive" package_id: "bexos.service.netstackd" placement: SYSTEM_IMAGE }
+packages { label: "//services/networkd:networkd_archive" package_id: "bexos.service.networkd" placement: SYSTEM_IMAGE }
+packages { label: "//services/vswitchd:vswitchd_archive" package_id: "bexos.service.vswitchd" placement: SYSTEM_IMAGE }
 packages { label: "//services/timed:timed_archive" package_id: "bexos.service.timed" placement: SYSTEM_IMAGE }
 packages { label: "//services/jobd:jobd_archive" package_id: "bexos.service.jobd" placement: SYSTEM_IMAGE }
 

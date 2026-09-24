@@ -94,9 +94,9 @@ impl Transport for LiveTransport {
             bexos_pkg_client::split_registry_authority(host).ok_or(Error::InvalidArgs)?;
         let network =
             bexos_userspace::service_directory::ServiceDirectoryClient::new(self.directory)
-                .connect("bexos.net.Netstack", "Public")
-                .map_err(|error| unavailable("bind netstack", error))?;
-        let stream = bexos_net::async_connect::connect_with_timeout(
+                .connect("bexos.net.SocketProvider", "Public")
+                .map_err(|error| unavailable("bind network provider", error))?;
+        let stream = bexos_net::async_connect::connect_scoped_with_timeout(
             network,
             server_name,
             port,

@@ -1,3 +1,4 @@
+use alloc::collections::BTreeMap;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 
@@ -13,9 +14,10 @@ use net_fidl::{IpAddress, Ipv4Address, SocketAddress};
 use crate::config::{ActiveConfig, ConfigSource, DnsMode};
 use crate::dns::{DnsEntry, DnsRecord, DnsTransport, PendingDnsQuery};
 use crate::link::{LinkResources, PacketLink};
+use crate::router::{FibRoute, InterfaceState, Router, Table, TableQuota};
 use crate::stack::Netstack;
 use crate::tcp::{TcpEndpoint, TcpListenerState, TcpState};
-use crate::udp::UdpEndpoint;
+use crate::udp::{Datagram, OutboundDatagram, UdpEndpoint};
 use smoltcp::socket::tcp::{
     MigrationRttEstimator, MigrationState as TcpMigrationState, State as SmoltcpTcpState,
 };
@@ -41,8 +43,13 @@ pub struct Runtime {
     pub migration: Option<Channel>,
     pub tls_trust: Option<Channel>,
     pub clients: Vec<BoundServiceEndpoint>,
+    pub backend_clients: Vec<BoundServiceEndpoint>,
+    pub controller_clients: Vec<BoundServiceEndpoint>,
+    pub backend_connections: BTreeMap<u64, u32>,
+    pub backend_controls: BTreeMap<u64, (u8, u64)>,
     pub link_watchers: Vec<u64>,
     pub stack: Netstack,
+    pub router: Router,
     pub links: Vec<NodeLink>,
     pub generation: u64,
 }
@@ -54,8 +61,33 @@ impl State for Runtime {
             migration: None,
             tls_trust: None,
             clients: Vec::new(),
+            backend_clients: Vec::new(),
+            controller_clients: Vec::new(),
+            backend_connections: BTreeMap::new(),
+            backend_controls: BTreeMap::new(),
             link_watchers: Vec::new(),
             stack: Netstack::from_active(ActiveConfig {
+                source: ConfigSource::Unconfigured,
+                ipv4: None,
+                prefix_len: 0,
+                gateway: None,
+                dns: None,
+                ipv6: None,
+                ipv6_prefix_len: 0,
+                ipv6_gateway: None,
+                dns_ipv6: None,
+                doh_bootstrap_ipv6: None,
+                slaac_enabled: true,
+                mtu: 1500,
+                dns_mode: DnsMode::Udp53,
+                doh_host: "dns.google".to_string(),
+                doh_path: "/dns-query".to_string(),
+                doh_bootstrap_ipv4: None,
+                doh_port: 443,
+                doh_strict: false,
+                dns_cache_capacity: 64,
+            }),
+            router: Router::new(ActiveConfig {
                 source: ConfigSource::Unconfigured,
                 ipv4: None,
                 prefix_len: 0,
@@ -124,7 +156,7 @@ impl State for Runtime {
             return Err(Error::InvalidData);
         }
         let mut w = Encoder::new();
-        w.word(6);
+        w.word(8);
         w.word(if cfg!(bexos_arch_x86_64) { 2 } else { 1 });
         w.word(self.control.0);
         w.word(self.migration.map_or(0, |channel| channel.0));
@@ -140,6 +172,19 @@ impl State for Runtime {
                 w.word(*ordinal);
             }
         }
+        encode_bound_clients(&mut w, &self.backend_clients);
+        encode_bound_clients(&mut w, &self.controller_clients);
+        w.word(self.backend_connections.len() as u64);
+        for (connection, table) in &self.backend_connections {
+            w.word(*connection);
+            w.word(u64::from(*table));
+        }
+        w.word(self.backend_controls.len() as u64);
+        for (object, (kind, control)) in &self.backend_controls {
+            w.word(*object);
+            w.word(u64::from(*kind));
+            w.word(*control);
+        }
         w.word(self.link_watchers.len() as u64);
         for watcher in &self.link_watchers {
             w.word(*watcher);
@@ -154,7 +199,7 @@ impl State for Runtime {
         }
         w.word(self.stack.udp.len() as u64);
         for udp in &self.stack.udp {
-            encode_udp(&mut w, udp);
+            encode_udp_v7(&mut w, udp);
         }
         w.word(self.stack.dns.entries().len() as u64);
         for entry in self.stack.dns.entries() {
@@ -188,6 +233,7 @@ impl State for Runtime {
             w.word(node_link.node_id);
             encode_link(&mut w, node_link.link.resources);
         }
+        encode_router(&mut w, &self.router)?;
         Ok(Some(w.finish()))
     }
 
@@ -226,7 +272,7 @@ impl State for Runtime {
             return Err(Error::InvalidData);
         }
         let version = r.word()?;
-        if !(3..=6).contains(&version) {
+        if !(3..=8).contains(&version) {
             return Err(Error::UnsupportedVersion);
         }
         let architecture = if version < 5 { 1 } else { r.word()? };
@@ -254,6 +300,37 @@ impl State for Runtime {
             self.clients
                 .push(BoundServiceEndpoint::new(channel, allowed_methods));
         }
+        self.backend_clients = if version >= 7 {
+            decode_bound_clients(&mut r)?
+        } else {
+            Vec::new()
+        };
+        self.controller_clients = if version >= 7 {
+            decode_bound_clients(&mut r)?
+        } else {
+            Vec::new()
+        };
+        self.backend_connections.clear();
+        if version >= 7 {
+            for _ in 0..r.count(4096)? {
+                self.backend_connections.insert(
+                    r.word()?,
+                    u32::try_from(r.word()?).map_err(|_| Error::InvalidData)?,
+                );
+            }
+        }
+        self.backend_controls.clear();
+        if version >= 8 {
+            for _ in 0..r.count(4096)? {
+                let object = r.word()?;
+                let kind = u8::try_from(r.word()?).map_err(|_| Error::InvalidData)?;
+                let control = r.word()?;
+                if !matches!(kind, 1 | 2) || control == 0 {
+                    return Err(Error::InvalidData);
+                }
+                self.backend_controls.insert(object, (kind, control));
+            }
+        }
         self.link_watchers.clear();
         for _ in 0..r.count(64)? {
             self.link_watchers.push(r.word()?);
@@ -276,7 +353,11 @@ impl State for Runtime {
         }
         self.stack.udp.clear();
         for _ in 0..r.count(64)? {
-            self.stack.udp.push(decode_udp(&mut r)?);
+            self.stack.udp.push(if version >= 7 {
+                decode_udp_v7(&mut r)?
+            } else {
+                decode_udp(&mut r)?
+            });
         }
         let mut entries = Vec::new();
         for _ in 0..r.count(64)? {
@@ -357,6 +438,11 @@ impl State for Runtime {
         } else {
             Vec::new()
         };
+        self.router = if version >= 7 {
+            decode_router(&mut r)?
+        } else {
+            Router::new(self.stack.config.clone())
+        };
         r.finish()
     }
 
@@ -399,9 +485,21 @@ impl State for Runtime {
                 .iter()
                 .map(|client| Resource::Handle(client.channel.0)),
         );
+        resources.extend(
+            self.backend_clients
+                .iter()
+                .map(|client| Resource::Handle(client.channel.0)),
+        );
+        resources.extend(
+            self.controller_clients
+                .iter()
+                .map(|client| Resource::Handle(client.channel.0)),
+        );
         resources.extend(self.link_watchers.iter().copied().map(Resource::Handle));
         for tcp in &self.stack.tcp {
-            resources.push(Resource::Handle(tcp.control));
+            if !self.backend_connections.contains_key(&tcp.control) {
+                resources.push(Resource::Handle(tcp.control));
+            }
             if let Some(client) = tcp.client_control {
                 resources.push(Resource::Handle(client));
             }
@@ -452,6 +550,7 @@ impl State for Runtime {
                 },
             ]);
         }
+        append_router_resources(&mut resources, &self.router, &self.backend_connections);
         resources
     }
 
@@ -464,6 +563,19 @@ impl State for Runtime {
         {
             let _ = bexos_userspace::migration::abort();
         }
+        for table in self.router.tables.values_mut() {
+            let mut ids = table.links.keys().copied().collect::<Vec<_>>();
+            ids.sort_unstable();
+            let status = ids
+                .first()
+                .and_then(|id| table.links.get_mut(id))
+                .map_or(net_fidl::Status::Ok, |link| {
+                    table.stack.restore_after_migration(Some(link))
+                });
+            if status != net_fidl::Status::Ok {
+                let _ = bexos_userspace::migration::abort();
+            }
+        }
     }
 }
 
@@ -475,6 +587,351 @@ impl Runtime {
             .as_ref()
             .and_then(|runtime| runtime.checkpoint_tcp(tcp))
             .or_else(|| tcp.smoltcp_migration.clone())
+    }
+}
+
+fn encode_bound_clients(w: &mut Encoder, clients: &[BoundServiceEndpoint]) {
+    w.word(clients.len() as u64);
+    for client in clients {
+        w.word(client.channel.0);
+        w.text(&client.protocol);
+        w.word(client.allowed_methods.len() as u64);
+        for ordinal in &client.allowed_methods {
+            w.word(*ordinal);
+        }
+    }
+}
+
+fn decode_bound_clients(r: &mut Decoder<'_>) -> Result<Vec<BoundServiceEndpoint>, Error> {
+    let mut clients = Vec::new();
+    for _ in 0..r.count(256)? {
+        let channel = Channel(r.word()?);
+        let protocol = r.text(64)?.to_string();
+        let mut methods = Vec::new();
+        for _ in 0..r.count(64)? {
+            methods.push(r.word()?);
+        }
+        clients.push(BoundServiceEndpoint::new_with_protocol(
+            channel, methods, &protocol,
+        ));
+    }
+    Ok(clients)
+}
+
+fn encode_router(w: &mut Encoder, router: &Router) -> Result<(), Error> {
+    encode_config(w, router.default_config.clone());
+    w.word(router.tables.len() as u64);
+    for table in router.tables.values() {
+        w.word(u64::from(table.id));
+        for quota in [
+            table.quota.tcp,
+            table.quota.listeners,
+            table.quota.udp,
+            table.quota.interfaces,
+            table.quota.routes,
+        ] {
+            w.word(quota as u64);
+        }
+        w.word(table.interfaces.len() as u64);
+        for interface in table.interfaces.values() {
+            w.word(interface.id);
+            w.text(&interface.name);
+            w.word(interface.up as u64);
+            w.word(interface.neighbor_generation);
+            w.word(interface.packet_generation);
+            if let Some(link) = table.links.get(&interface.id) {
+                w.word(1);
+                encode_link(w, link.resources);
+                w.bytes(&link.checkpoint_queues()?);
+                w.word(crate::link::BACKLOG_CHUNKS as u64);
+                for chunk in 0..crate::link::BACKLOG_CHUNKS {
+                    w.bytes(&link.checkpoint_backlog(chunk)?);
+                }
+            } else {
+                w.word(0);
+            }
+        }
+        w.word(table.fib.len() as u64);
+        for route in &table.fib {
+            encode_socket_addr(
+                w,
+                SocketAddress {
+                    addr: route.destination,
+                    port: 0,
+                },
+            );
+            w.word(u64::from(route.prefix_len));
+            w.word(route.gateway.is_some() as u64);
+            if let Some(gateway) = route.gateway {
+                encode_socket_addr(
+                    w,
+                    SocketAddress {
+                        addr: gateway,
+                        port: 0,
+                    },
+                );
+            }
+            w.word(route.interface_id);
+            w.word(u64::from(route.metric));
+        }
+        encode_stack_v7(w, &table.stack)?;
+    }
+    Ok(())
+}
+
+fn decode_router(r: &mut Decoder<'_>) -> Result<Router, Error> {
+    let default_config = decode_config(r, 7)?;
+    let mut router = Router::new(default_config.clone());
+    for _ in 0..r.count(64)? {
+        let id = u32::try_from(r.word()?).map_err(|_| Error::InvalidData)?;
+        if id != 0 && router.tables.contains_key(&id) {
+            return Err(Error::InvalidData);
+        }
+        let quota = TableQuota {
+            tcp: r.count(4096)?,
+            listeners: r.count(4096)?,
+            udp: r.count(4096)?,
+            interfaces: r.count(256)?,
+            routes: r.count(4096)?,
+        };
+        let mut interfaces = alloc::collections::BTreeMap::new();
+        let mut links = alloc::collections::BTreeMap::new();
+        for _ in 0..r.count(quota.interfaces.min(256))? {
+            let interface = InterfaceState {
+                id: r.word()?,
+                name: r.text(32)?.to_string(),
+                up: r.flag()?,
+                neighbor_generation: r.word()?,
+                packet_generation: r.word()?,
+            };
+            if interface.id == 0 || interfaces.contains_key(&interface.id) {
+                return Err(Error::InvalidData);
+            }
+            if r.flag()? {
+                let resources = decode_link(r)?;
+                let queues = r.bytes(2 * 1024 * 1024)?.to_vec();
+                let chunks = r.count(crate::link::BACKLOG_CHUNKS)?;
+                if chunks != crate::link::BACKLOG_CHUNKS {
+                    return Err(Error::InvalidData);
+                }
+                let mut link = PacketLink::from_resources(resources);
+                link.adopt_queues(&queues)?;
+                for chunk in 0..chunks {
+                    let bytes = r.bytes(2 * 1024 * 1024)?;
+                    link.adopt_backlog(chunk, bytes)?;
+                }
+                links.insert(interface.id, link);
+            }
+            router.interface_table.insert(interface.id, id);
+            interfaces.insert(interface.id, interface);
+        }
+        let mut fib = Vec::new();
+        for _ in 0..r.count(quota.routes.min(4096))? {
+            let destination = decode_socket_addr(r)?.addr;
+            let prefix_len = r.count(128)? as u8;
+            let gateway = if r.flag()? {
+                Some(decode_socket_addr(r)?.addr)
+            } else {
+                None
+            };
+            fib.push(FibRoute {
+                destination,
+                prefix_len,
+                gateway,
+                interface_id: r.word()?,
+                metric: u32::try_from(r.word()?).map_err(|_| Error::InvalidData)?,
+            });
+        }
+        let stack = decode_stack_v7(r)?;
+        router.tables.insert(
+            id,
+            Table {
+                id,
+                stack,
+                fib,
+                interfaces,
+                links,
+                quota,
+            },
+        );
+    }
+    Ok(router)
+}
+
+fn encode_stack_v7(w: &mut Encoder, stack: &Netstack) -> Result<(), Error> {
+    encode_config(w, stack.config.clone());
+    w.word(u64::from(stack.next_ephemeral_port));
+    w.word(stack.tcp.len() as u64);
+    for tcp in &stack.tcp {
+        encode_tcp(w, tcp);
+        let snapshot = stack
+            .smoltcp
+            .as_ref()
+            .and_then(|runtime| runtime.checkpoint_tcp(tcp))
+            .or_else(|| tcp.smoltcp_migration.clone());
+        w.word(snapshot.is_some() as u64);
+        if let Some(snapshot) = snapshot {
+            encode_tcp_snapshot(w, &snapshot);
+        }
+    }
+    w.word(stack.listeners.len() as u64);
+    for listener in &stack.listeners {
+        encode_listener(w, listener);
+    }
+    w.word(stack.udp.len() as u64);
+    for udp in &stack.udp {
+        encode_udp_v7(w, udp);
+    }
+    encode_dns_state(w, stack);
+    Ok(())
+}
+
+fn decode_stack_v7(r: &mut Decoder<'_>) -> Result<Netstack, Error> {
+    let mut stack = Netstack::from_active(decode_config(r, 7)?);
+    stack.next_ephemeral_port = u16::try_from(r.word()?).map_err(|_| Error::InvalidData)?;
+    for _ in 0..r.count(4096)? {
+        let mut tcp = decode_tcp(r)?;
+        if r.flag()? {
+            tcp.smoltcp_migration = Some(decode_tcp_snapshot(r)?);
+        }
+        stack.tcp.push(tcp);
+    }
+    for _ in 0..r.count(4096)? {
+        stack.listeners.push(decode_listener(r)?);
+    }
+    for _ in 0..r.count(4096)? {
+        stack.udp.push(decode_udp_v7(r)?);
+    }
+    decode_dns_state(r, &mut stack)?;
+    Ok(stack)
+}
+
+fn encode_dns_state(w: &mut Encoder, stack: &Netstack) {
+    w.word(stack.dns.entries().len() as u64);
+    for entry in stack.dns.entries() {
+        w.text(&entry.hostname);
+        w.word(entry.expires_at_ms);
+        w.word(entry.records.len() as u64);
+        for record in &entry.records {
+            match record {
+                DnsRecord::A(address) => {
+                    w.word(1);
+                    w.bytes(address);
+                }
+                DnsRecord::Aaaa(address) => {
+                    w.word(28);
+                    w.bytes(address);
+                }
+            }
+        }
+    }
+    w.word(stack.dns.pending().len() as u64);
+    for pending in stack.dns.pending() {
+        w.text(&pending.hostname);
+        w.word(u64::from(pending.id));
+        w.word(match pending.transport {
+            DnsTransport::Udp53 => 1,
+            DnsTransport::Doh => 2,
+        });
+    }
+}
+
+fn decode_dns_state(r: &mut Decoder<'_>, stack: &mut Netstack) -> Result<(), Error> {
+    let mut entries = Vec::new();
+    for _ in 0..r.count(1024)? {
+        let hostname = r.text(255)?.to_string();
+        let expires_at_ms = r.word()?;
+        let mut records = Vec::new();
+        for _ in 0..r.count(8)? {
+            match r.word()? {
+                1 => {
+                    let bytes = r.bytes(4)?;
+                    records.push(DnsRecord::A(
+                        bytes.try_into().map_err(|_| Error::InvalidData)?,
+                    ));
+                }
+                28 => {
+                    let bytes = r.bytes(16)?;
+                    records.push(DnsRecord::Aaaa(
+                        bytes.try_into().map_err(|_| Error::InvalidData)?,
+                    ));
+                }
+                _ => return Err(Error::InvalidData),
+            }
+        }
+        entries.push(DnsEntry {
+            hostname,
+            records,
+            expires_at_ms,
+        });
+    }
+    stack.dns.replace_entries(entries);
+    let mut pending = Vec::new();
+    for _ in 0..r.count(256)? {
+        pending.push(PendingDnsQuery {
+            hostname: r.text(255)?.to_string(),
+            id: u16::try_from(r.word()?).map_err(|_| Error::InvalidData)?,
+            transport: match r.word()? {
+                1 => DnsTransport::Udp53,
+                2 => DnsTransport::Doh,
+                _ => return Err(Error::InvalidData),
+            },
+        });
+    }
+    stack.dns.replace_pending(pending);
+    Ok(())
+}
+
+fn append_router_resources(
+    resources: &mut Vec<Resource>,
+    router: &Router,
+    backend_connections: &BTreeMap<u64, u32>,
+) {
+    for table in router.tables.values() {
+        for tcp in &table.stack.tcp {
+            if tcp.control != 0 && !backend_connections.contains_key(&tcp.control) {
+                resources.push(Resource::Handle(tcp.control));
+            }
+            if let Some(client) = tcp.client_control {
+                resources.push(Resource::Handle(client));
+            }
+            if let Some(stream) = tcp.stream {
+                resources.push(Resource::Handle(stream.0));
+            }
+        }
+        for listener in &table.stack.listeners {
+            if listener.control != 0 {
+                resources.push(Resource::Handle(listener.control));
+            }
+        }
+        for udp in &table.stack.udp {
+            if udp.control != 0 {
+                resources.push(Resource::Handle(udp.control));
+            }
+        }
+        for link in table.links.values() {
+            let r = link.resources;
+            resources.extend([
+                Resource::Handle(r.control),
+                Resource::Handle(r.fifo),
+                Resource::Handle(r.rx_vmo),
+                Resource::Handle(r.tx_vmo),
+                Resource::Mapping {
+                    handle: r.rx_vmo,
+                    offset: 0,
+                    va: r.rx_vaddr,
+                    size: crate::ethernet::RX_BYTES,
+                    rights: 6,
+                },
+                Resource::Mapping {
+                    handle: r.tx_vmo,
+                    offset: 0,
+                    va: r.tx_vaddr,
+                    size: crate::ethernet::TX_BYTES,
+                    rights: 6,
+                },
+            ]);
+        }
     }
 }
 
@@ -814,6 +1271,47 @@ fn decode_udp(r: &mut Decoder<'_>) -> Result<UdpEndpoint, Error> {
         udp.local = Some(decode_socket_addr(r)?);
     }
     udp.closed = r.flag()?;
+    Ok(udp)
+}
+
+fn encode_udp_v7(w: &mut Encoder, udp: &UdpEndpoint) {
+    encode_udp(w, udp);
+    w.word(udp.queue.len() as u64);
+    for packet in &udp.queue {
+        w.bytes(&packet.data[..packet.len]);
+        encode_socket_addr(w, packet.source);
+    }
+    w.word(udp.outbound.len() as u64);
+    for packet in &udp.outbound {
+        w.bytes(&packet.data[..packet.len]);
+        encode_socket_addr(w, packet.source);
+        encode_socket_addr(w, packet.destination);
+    }
+}
+
+fn decode_udp_v7(r: &mut Decoder<'_>) -> Result<UdpEndpoint, Error> {
+    let mut udp = decode_udp(r)?;
+    for _ in 0..r.count(64)? {
+        let bytes = r.bytes(8192)?;
+        let mut data = [0; 8192];
+        data[..bytes.len()].copy_from_slice(bytes);
+        udp.queue.push_back(Datagram {
+            data,
+            len: bytes.len(),
+            source: decode_socket_addr(r)?,
+        });
+    }
+    for _ in 0..r.count(64)? {
+        let bytes = r.bytes(8192)?;
+        let mut data = [0; 8192];
+        data[..bytes.len()].copy_from_slice(bytes);
+        udp.outbound.push_back(OutboundDatagram {
+            data,
+            len: bytes.len(),
+            source: decode_socket_addr(r)?,
+            destination: decode_socket_addr(r)?,
+        });
+    }
     Ok(udp)
 }
 

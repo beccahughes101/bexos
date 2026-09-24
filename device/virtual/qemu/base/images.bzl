@@ -3,7 +3,9 @@ load("//build/platforms:architecture.bzl", "guest_select")
 load("//build/rules:app_archive.bzl", "app_archive")
 load("//lib/flatland_text:BUILD.fonts.bzl", "FONT_LICENSES", "SYSTEM_FONT_ENTRIES")
 
-QEMU_STORAGE_SIZE_BYTES = 335544320
+# BexFS retains two complete namespace snapshots. Keep enough room for the
+# larger x86_64 service/replacement ELFs as well as runtime package/data writes.
+QEMU_STORAGE_SIZE_BYTES = 536870912
 
 QEMU_STORAGE_PREINSTALLS = [
     {"archive": "//services/pkgd:pkgd_archive", "path": "pkg/bexos.service.pkgd.bex"},
@@ -70,6 +72,14 @@ QEMU_STORAGE_PREINSTALLS = [
     {
         "archive": ":qemu_netstackd_archive",
         "path": "pkg/bexos.service.netstackd.bex",
+    },
+    {
+        "archive": "//services/networkd:networkd_archive",
+        "path": "pkg/bexos.service.networkd.bex",
+    },
+    {
+        "archive": "//services/vswitchd:vswitchd_archive",
+        "path": "pkg/bexos.service.vswitchd.bex",
     },
     {
         "archive": ":qemu_timed_archive",

@@ -234,8 +234,14 @@ async fn boot(initial: Channel) -> Result<(), String> {
     }
     let mut boot_graphics = graphics::BootGraphics::connect(&gate);
     boot_graphics.report(1, 30, "Drivers available");
-    publish_running_services(&mut broker, &manifests, &gate.services, &gate.registry)
-        .map_err(|e| format!("service broker publish {e:?}"))?;
+    publish_running_services(
+        &mut broker,
+        &manifests,
+        &gate.services,
+        &gate.registry,
+        &config,
+    )
+    .map_err(|e| format!("service broker publish {e:?}"))?;
     let storage = gate.bexfs.ok_or("BexFS missing")?;
     let user_storage = gate.user_bexfs.ok_or("user BexFS missing")?;
     let diskimage = gate.diskimage.ok_or("DiskImage missing")?;
@@ -656,6 +662,7 @@ async fn boot(initial: Channel) -> Result<(), String> {
         launches.push(state::LaunchRecord {
             package: record.package_id.clone(),
             process: manifest.processes[0].name.clone(),
+            instance_id: String::new(),
             process_handle: launched.process_handle.raw,
             space_handle: launched.address_space_handle.raw,
             thread_handle: launched.main_thread_handle.raw,
@@ -783,6 +790,7 @@ async fn boot(initial: Channel) -> Result<(), String> {
     gate.services.push(state::ManagedService {
         package: state::APPD_PACKAGE.into(),
         process: "appd".into(),
+        instance_id: String::new(),
         process_handle: 0,
         space_handle: 0,
         thread_handle: 0,
@@ -792,6 +800,8 @@ async fn boot(initial: Channel) -> Result<(), String> {
         generation: 0,
         archive: 0,
         archive_len: 0,
+        resource_group_id: 1,
+        resource_job: 0,
     });
     let pci_registry = gate.pci_registry;
     let mut runtime = state::AppdState::cold(
@@ -1386,6 +1396,7 @@ fn bind_preinstalled_drivers(
                 &manifests,
                 &gate.services[first_new_service..],
                 &gate.registry,
+                config,
             )
             .map_err(|e| format!("driver service publish {package_id} {e:?}"))?;
             Ok::<(), String>(())
@@ -1431,42 +1442,74 @@ fn launch_preinstalled_storage_services(
 ) -> Result<(), String> {
     let processes = preinstalled_storage_service_processes(registry, package_ids)?;
     for process in processes {
-        let status = launch_lifecycle_app(
-            registry,
-            launches,
-            services,
-            vfsd,
-            users,
-            kernel,
-            broker,
-            permission_routes,
-            permissions,
-            opener_bindings,
-            version_manager_bindings,
-            app_manager_bindings,
-            worker_launcher_bindings,
-            service_directory_bindings,
-            lazy,
-            domain_associations,
-            config,
-            component_configs,
-            &process.package_id,
-            &process.process_name,
-            0,
-            SYSTEM_UID,
-            None,
-            false,
-        );
-        if status != lifecycle::AppLifecycleStatus::Ok {
-            return Err(format!(
-                "storage service launch package={} process={} {status:?}",
-                process.package_id, process.process_name
+        let configured_instances = config
+            .network_policy
+            .isolation_groups
+            .iter()
+            .filter(|group| {
+                group.networkd_package == process.package_id
+                    && group.networkd_process == process.process_name
+                    || group.netstackd_package == process.package_id
+                        && group.netstackd_process == process.process_name
+            })
+            .map(|group| group.name.clone())
+            .collect::<Vec<_>>();
+        let instances = if configured_instances.is_empty() {
+            vec![None]
+        } else {
+            configured_instances
+                .iter()
+                .map(|name| Some(name.as_str()))
+                .collect()
+        };
+        for instance_id in instances {
+            let status = launch_application(
+                registry,
+                launches,
+                services,
+                vfsd,
+                users,
+                kernel,
+                broker,
+                permission_routes,
+                permissions,
+                opener_bindings,
+                version_manager_bindings,
+                app_manager_bindings,
+                worker_launcher_bindings,
+                service_directory_bindings,
+                lazy,
+                domain_associations,
+                config,
+                component_configs,
+                &process.package_id,
+                &process.process_name,
+                0,
+                SYSTEM_UID,
+                None,
+                false,
+                instance_id,
+                None,
+                Vec::new(),
+                0,
+                false,
+            );
+            if status != lifecycle::AppLifecycleStatus::Ok {
+                return Err(format!(
+                    "storage service launch package={} process={} instance={} {status:?}",
+                    process.package_id,
+                    process.process_name,
+                    instance_id.unwrap_or("singleton"),
+                ));
+            }
+            log(&format!(
+                "appd: launched preinstalled service package={} process={} instance={} wave={}\n",
+                process.package_id,
+                process.process_name,
+                instance_id.unwrap_or("singleton"),
+                process.wave,
             ));
         }
-        log(&format!(
-            "appd: launched preinstalled service package={} process={} wave={}\n",
-            process.package_id, process.process_name, process.wave
-        ));
         if process.package_id == preferences::PACKAGE && boot_sysui.is_none() {
             match preferences::resolve_shell_selection(
                 registry,
@@ -1582,12 +1625,32 @@ async fn serve_lifecycle(mut state: state::AppdState, teed: Option<Channel>) -> 
                         (0..state.launches.len()).map(|i| state::LAUNCH_BASE + i as u64),
                     );
                     log(&alloc::format!("appd: {last_update}\n"));
-                    pending = None;
-                    activation_sync_pending = true;
-                    activation_completion_reported = false;
-                    activation_sync_after =
-                        bexos_userspace::syscall::ticks().saturating_add(activation_sync_delay);
-                    log("appd: migration coordinator resources released\n");
+                    match task.continue_package(&state, &mut kernel) {
+                        Ok(Some(next)) => {
+                            state.pending_archive = next.archive();
+                            state.pending_replacement = next.replacement_descriptors();
+                            state.pending_record = Some(next.candidate_record.clone());
+                            pending = Some(next);
+                            last_update = "migration continuing with next service instance".into();
+                            source.changed(4);
+                        }
+                        Ok(None) => {
+                            pending = None;
+                            activation_sync_pending = true;
+                            activation_completion_reported = false;
+                            activation_sync_after = bexos_userspace::syscall::ticks()
+                                .saturating_add(activation_sync_delay);
+                            log("appd: migration coordinator resources released\n");
+                        }
+                        Err(error) => {
+                            state.pending_record = None;
+                            state.pending_archive = (0, 0);
+                            state.pending_replacement = (0, 0, 0);
+                            last_update = error;
+                            pending = None;
+                            source.changed(4);
+                        }
+                    }
                 }
                 Ok(false) => {
                     last_update = task.phase().into();
@@ -1955,9 +2018,13 @@ async fn serve_lifecycle(mut state: state::AppdState, teed: Option<Channel>) -> 
                             lifecycle::AppLifecycleControlGetMigrationStatusRequest::decode(
                                 req, &hs,
                             );
-                        let service = request
-                            .ok()
-                            .and_then(|q| state.services.iter().find(|s| s.package == q.target));
+                        let service = request.ok().and_then(|q| {
+                            state
+                                .services
+                                .iter()
+                                .filter(|s| s.package == q.target)
+                                .min_by_key(|s| s.generation)
+                        });
                         lifecycle_reply(
                             channel,
                             &lifecycle::AppLifecycleControlGetMigrationStatusResponse {
@@ -2814,6 +2881,7 @@ fn poll_lifecycle_watchdog(
                     None,
                     false,
                     None,
+                    None,
                     initial,
                     lazy_idle_timeout_ms,
                     false,
@@ -2835,6 +2903,7 @@ fn poll_lifecycle_watchdog(
         if let Some(watchdog) = state.watchdogs.iter_mut().find(|watchdog| {
             watchdog.package_id == launch.package
                 && watchdog.process_name == launch.process
+                && watchdog.instance_id == launch.instance_id
                 && watchdog.uid == launch.uid
         }) {
             match watchdog.exit(now_ns, policy, has_rollback) {
@@ -2880,6 +2949,7 @@ fn poll_lifecycle_watchdog(
             && !state.launches.iter().any(|launch| {
                 launch.package == watchdog.package_id
                     && launch.process == watchdog.process_name
+                    && launch.instance_id == watchdog.instance_id
                     && launch.uid == watchdog.uid
             })
         {
@@ -2898,6 +2968,7 @@ fn poll_lifecycle_watchdog(
             due.push((
                 watchdog.package_id.clone(),
                 watchdog.process_name.clone(),
+                watchdog.instance_id.clone(),
                 watchdog.uid,
             ));
             watchdog.mark_restarted(now_ns);
@@ -2909,8 +2980,8 @@ fn poll_lifecycle_watchdog(
             changed = true;
         }
     }
-    for (package, process, uid) in due {
-        let _ = launch_lifecycle_app(
+    for (package, process, instance_id, uid) in due {
+        let _ = launch_application(
             &mut state.registry,
             &mut state.launches,
             &mut state.services,
@@ -2934,6 +3005,11 @@ fn poll_lifecycle_watchdog(
             0,
             uid,
             None,
+            false,
+            (!instance_id.is_empty()).then_some(instance_id.as_str()),
+            None,
+            Vec::new(),
+            0,
             false,
         );
     }
@@ -3063,6 +3139,7 @@ fn ensure_watchdog_record(state: &mut state::AppdState, launch: &state::LaunchRe
     if state.watchdogs.iter().any(|watchdog| {
         watchdog.package_id == launch.package
             && watchdog.process_name == launch.process
+            && watchdog.instance_id == launch.instance_id
             && watchdog.uid == launch.uid
     }) {
         return;
@@ -3078,6 +3155,7 @@ fn ensure_watchdog_record(state: &mut state::AppdState, launch: &state::LaunchRe
         state.watchdogs.push(crate::watchdog::WatchdogRecord::new(
             record.package_id.clone(),
             launch.process.clone(),
+            launch.instance_id.clone(),
             launch.uid,
             record.version.clone(),
             now_ns,
@@ -3092,7 +3170,7 @@ fn cleanup_dead_launch(state: &mut state::AppdState, launch: &state::LaunchRecor
         if service.process_handle != launch.process_handle {
             return true;
         }
-        for handle in [service.migration, service.archive] {
+        for handle in [service.migration, service.archive, service.resource_job] {
             if handle != 0 && !launch.handles().contains(&handle) {
                 let _ = Memory::close(handle);
             }
@@ -3102,7 +3180,22 @@ fn cleanup_dead_launch(state: &mut state::AppdState, launch: &state::LaunchRecor
     let _ = state
         .registry
         .mark_lifecycle(&launch.package, LifecycleState::Stopped);
-    state.broker.remove_provider_package(&launch.package);
+    if launch.instance_id.is_empty() {
+        state.broker.remove_provider_package(&launch.package);
+    } else {
+        state
+            .broker
+            .remove_instance(&launch.package, &launch.instance_id);
+        for domain in state
+            .config
+            .network_policy
+            .domains
+            .iter()
+            .filter(|domain| domain.isolation_group == launch.instance_id)
+        {
+            state.broker.remove_instance(&launch.package, &domain.name);
+        }
+    }
     state
         .opener_bindings
         .retain(|binding| binding.package != launch.package || binding.uid != launch.uid);
@@ -3388,6 +3481,7 @@ fn publish_running_services(
     manifests: &[Manifest],
     services: &[state::ManagedService],
     devices: &crate::DeviceRegistry,
+    config: &PlatformConfig,
 ) -> Result<(), crate::BindError> {
     for managed in services {
         if let Some(manifest) = manifests
@@ -3411,7 +3505,13 @@ fn publish_running_services(
                 })
                 .collect();
             if active_nodes.is_empty() {
-                publish_manifest_services_for_manager(broker, manifest, managed.manager)?;
+                publish_manifest_services_for_manager(
+                    broker,
+                    manifest,
+                    managed.manager,
+                    (!managed.instance_id.is_empty()).then_some(managed.instance_id.as_str()),
+                    Some(config),
+                )?;
             } else {
                 for node_id in active_nodes {
                     publish_manifest_services_for_device(
@@ -3620,8 +3720,10 @@ fn publish_manifest_services_for_manager(
     broker: &mut AppdBroker,
     manifest: &Manifest,
     manager: u64,
+    instance_id: Option<&str>,
+    config: Option<&PlatformConfig>,
 ) -> Result<(), crate::BindError> {
-    for service in manifest.services_exposed.iter().cloned() {
+    for mut service in manifest.services_exposed.iter().cloned() {
         if service.activation == crate::ServiceActivation::Lazy {
             let provider = manifest
                 .service_provider_process(&service)
@@ -3636,14 +3738,64 @@ fn publish_manifest_services_for_manager(
             );
             continue;
         }
-        broker.publish_interface(
-            manifest.package_name.clone(),
-            service,
-            bexos_kernel_core::ipc::Capability {
-                object_id: manager,
-                rights: 0b11,
-            },
-        )?;
+        let endpoint = bexos_kernel_core::ipc::Capability {
+            object_id: manager,
+            rights: 0b11,
+        };
+        let Some(instance_id) = instance_id else {
+            broker.publish_interface(manifest.package_name.clone(), service, endpoint)?;
+            continue;
+        };
+        if service.name == "bexos.net.SocketProvider" {
+            let Some(config) = config else {
+                return Err(crate::BindError::InvalidCapability);
+            };
+            for domain in config
+                .network_policy
+                .domains
+                .iter()
+                .filter(|domain| domain.isolation_group == instance_id)
+            {
+                let mut scoped = service.clone();
+                scoped
+                    .metadata
+                    .retain(|metadata| metadata.key != "network.domain");
+                scoped.metadata.push(crate::manifest::Metadata {
+                    key: "network.domain".into(),
+                    value: domain.name.clone(),
+                });
+                broker.publish_instance_interface(
+                    manifest.package_name.clone(),
+                    domain.name.clone(),
+                    scoped,
+                    endpoint,
+                )?;
+            }
+        } else if service.name == "bexos.net.Netstack" {
+            let is_default =
+                config.is_some_and(|config| {
+                    config.network_policy.domains.iter().any(|domain| {
+                        domain.system_default && domain.isolation_group == instance_id
+                    })
+                });
+            if is_default {
+                broker.publish_interface(manifest.package_name.clone(), service, endpoint)?;
+            }
+        } else {
+            service
+                .metadata
+                .retain(|metadata| metadata.key != "network.instance");
+            service.metadata.push(crate::manifest::Metadata {
+                key: "network.instance".into(),
+                value: instance_id.into(),
+            });
+            broker.publish_instance_interface(
+                manifest.package_name.clone(),
+                instance_id,
+                service,
+                endpoint,
+            )?;
+        }
     }
     Ok(())
 }
@@ -3902,6 +4054,7 @@ fn activate_lazy_bindings(
                     provider_uid,
                     None,
                     false,
+                    None,
                     None,
                     initial,
                     binding.idle_timeout_ms,
@@ -4672,6 +4825,10 @@ fn provider_binding_metadata(binding: &BoundCapability) -> Vec<u8> {
     } else {
         "bg"
     });
+    metadata.push('|');
+    if let Some(instance_id) = &binding.provider_instance_id {
+        metadata.push_str(instance_id);
+    }
     metadata.into_bytes()
 }
 
@@ -5074,6 +5231,7 @@ fn launch_lifecycle_app(
         job_control,
         require_job_target,
         None,
+        None,
         Vec::new(),
         0,
         false,
@@ -5105,6 +5263,7 @@ fn launch_application(
     uid: u64,
     job_control: Option<u64>,
     require_job_target: bool,
+    instance_id: Option<&str>,
     command: Option<&command_runtime::CommandLaunch>,
     initial_incoming_bindings: Vec<BoundCapability>,
     lazy_idle_timeout_ms: u32,
@@ -5243,9 +5402,68 @@ fn launch_application(
         };
     }
     let client = client_context_from_grants(&manifest.package_name, uid, permissions);
+    let requested_network_domain = process
+        .network_domain
+        .as_deref()
+        .unwrap_or("system_default");
+    if config
+        .network_policy
+        .authorize_domain(&manifest.package_name, requested_network_domain)
+        .is_none()
+    {
+        let _ = Memory::close(archive_root.0);
+        return lifecycle::AppLifecycleStatus::AccessDenied;
+    }
     let mut bound_capabilities = Vec::new();
     for consumed in &manifest.services_consumed {
-        match broker.bind_consumed_service(&client, consumed, kernel) {
+        let mut scoped = consumed.clone();
+        if let Some(instance_id) = instance_id {
+            if matches!(
+                scoped.name.as_str(),
+                "bexos.net.NetstackBackend"
+                    | "bexos.net.StackBackend"
+                    | "bexos.net.StackController"
+            ) {
+                let expected_filter = alloc::format!("network.instance == '{instance_id}'");
+                if scoped
+                    .filter
+                    .as_deref()
+                    .is_some_and(|filter| filter != expected_filter)
+                {
+                    close_bound_capabilities(&bound_capabilities);
+                    let _ = Memory::close(archive_root.0);
+                    return lifecycle::AppLifecycleStatus::AccessDenied;
+                }
+                scoped.filter = Some(expected_filter);
+            }
+        }
+        if matches!(
+            scoped.name.as_str(),
+            "bexos.net.SocketProvider" | "bexos.net.Netstack"
+        ) {
+            let domain = if scoped.name == "bexos.net.Netstack" {
+                if requested_network_domain != "system_default" {
+                    close_bound_capabilities(&bound_capabilities);
+                    let _ = Memory::close(archive_root.0);
+                    return lifecycle::AppLifecycleStatus::AccessDenied;
+                }
+                "system_default"
+            } else {
+                requested_network_domain
+            };
+            let expected_filter = alloc::format!("network.domain == '{domain}'");
+            if scoped
+                .filter
+                .as_deref()
+                .is_some_and(|filter| filter != expected_filter)
+            {
+                close_bound_capabilities(&bound_capabilities);
+                let _ = Memory::close(archive_root.0);
+                return lifecycle::AppLifecycleStatus::AccessDenied;
+            }
+            scoped.filter = Some(expected_filter);
+        }
+        match broker.bind_consumed_service(&client, &scoped, kernel) {
             Ok(mut bindings) => bound_capabilities.append(&mut bindings),
             Err(_) if consumed.link_type == LinkType::Optional => {}
             Err(_) => {
@@ -5257,6 +5475,15 @@ fn launch_application(
     }
     for binding in &mut bound_capabilities {
         preferences::bind_identity(binding, &record);
+        if binding.service_name == "bexos.net.SocketProvider" {
+            binding
+                .permission_values
+                .push(alloc::format!("network.domain={requested_network_domain}"));
+        } else if binding.service_name == "bexos.net.Netstack" {
+            binding
+                .permission_values
+                .push("network.domain=system_default".to_string());
+        }
         if binding.service_name == "bexos.ui.scened.FlatlandSession" {
             crate::shell::stamp_grant(
                 &mut binding.permission_values,
@@ -5362,6 +5589,25 @@ fn launch_application(
             return lifecycle::AppLifecycleStatus::Storage;
         }
     };
+    let mut network_resource_job = match create_network_instance_resource_group(
+        config,
+        services,
+        kernel,
+        package_id,
+        process_name,
+        instance_id,
+    ) {
+        Ok(job) => job,
+        Err(status) => {
+            mark_launch_failed(registry, &record);
+            close_bound_capabilities(&bound_capabilities);
+            close_shared_vault_roots(shared_vault_roots);
+            close_dependency_roots(dependency_roots);
+            let _ = Memory::close(archive_root.0);
+            return status;
+        }
+    };
+    let resource_group_id = network_resource_job.as_ref().map_or(1, |job| job.id);
     let launched = RunnerRegistry::new().launch(
         &LaunchRequest {
             manifest: &manifest,
@@ -5386,7 +5632,7 @@ fn launch_application(
                 },
                 Some(&config.runner_policy),
             ),
-            resource_group_id: 1,
+            resource_group_id,
         },
         kernel,
         &disk_resolver,
@@ -5595,7 +5841,7 @@ fn launch_application(
     if let Some(job_control) = job_control {
         resources.push(job_control);
     }
-    let (config_vmo, config_endpoint) =
+    let (mut config_vmo, mut config_endpoint) =
         match preferences::launch(services, archive_root, &record, uid, component_configs) {
             Ok(config) => config,
             Err(error) => {
@@ -5612,6 +5858,27 @@ fn launch_application(
                 return lifecycle::AppLifecycleStatus::LaunchFailed;
             }
         };
+    if package_id == "bexos.service.networkd" {
+        let Some(instance_id) = instance_id else {
+            close_bound_capabilities(&bound_capabilities);
+            return lifecycle::AppLifecycleStatus::AccessDenied;
+        };
+        let Some(bytes) = networkd_config_snapshot(&manifest, config, instance_id) else {
+            close_bound_capabilities(&bound_capabilities);
+            return lifecycle::AppLifecycleStatus::AccessDenied;
+        };
+        if let Some((handle, _)) = config_vmo.take() {
+            let _ = Memory::close(handle);
+        }
+        if let Some(endpoint) = config_endpoint.take() {
+            let _ = Memory::close(endpoint.0);
+        }
+        let Ok(handle) = Memory::from_bytes(&bytes) else {
+            close_bound_capabilities(&bound_capabilities);
+            return lifecycle::AppLifecycleStatus::LaunchFailed;
+        };
+        config_vmo = Some((handle, bytes.len() as u64));
+    }
     let linker_data = launched
         .runtime_linker_data
         .map(|(handle, len)| (handle.raw, len));
@@ -5729,7 +5996,13 @@ fn launch_application(
         internal_shell && process.shell_role != crate::manifest::ShellRole::None,
     );
     if process.service {
-        if let Err(_) = publish_manifest_services_for_manager(broker, &manifest, control.0) {
+        if let Err(_) = publish_manifest_services_for_manager(
+            broker,
+            &manifest,
+            control.0,
+            instance_id,
+            Some(config),
+        ) {
             mark_launch_failed(registry, &record);
             close_bound_capabilities(&bound_capabilities);
             return lifecycle::AppLifecycleStatus::LaunchFailed;
@@ -5747,6 +6020,7 @@ fn launch_application(
             services.push(state::ManagedService {
                 package: package_id.into(),
                 process: process_name.into(),
+                instance_id: instance_id.unwrap_or_default().into(),
                 process_handle: launched.process_handle.raw,
                 space_handle: launched.address_space_handle.raw,
                 thread_handle: launched.main_thread_handle.raw,
@@ -5756,6 +6030,8 @@ fn launch_application(
                 generation: 0,
                 archive: 0,
                 archive_len: 0,
+                resource_group_id,
+                resource_job: network_resource_job.take().map_or(0, |job| job.retain()),
             });
             log(&format!("appd: process ready package={package_id}\n"));
         }
@@ -5772,6 +6048,7 @@ fn launch_application(
     let launched_record = state::LaunchRecord {
         package: package_id.into(),
         process: process_name.into(),
+        instance_id: instance_id.unwrap_or_default().into(),
         process_handle: launched.process_handle.raw,
         space_handle: launched.address_space_handle.raw,
         thread_handle: launched.main_thread_handle.raw,
@@ -5807,6 +6084,214 @@ fn launch_application(
     let _ = registry.mark_lifecycle(&record.package_key(), LifecycleState::Running);
     let _ = Memory::close(archive_root.0);
     lifecycle::AppLifecycleStatus::Ok
+}
+
+struct NetworkResourceJob {
+    id: u32,
+    handle: Option<u64>,
+}
+
+impl NetworkResourceJob {
+    fn retain(mut self) -> u64 {
+        self.handle.take().unwrap_or(0)
+    }
+}
+
+impl Drop for NetworkResourceJob {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            let _ = Memory::close(handle);
+        }
+    }
+}
+
+fn create_network_instance_resource_group(
+    config: &PlatformConfig,
+    services: &[state::ManagedService],
+    kernel: &mut KernelFidlOps<KernelTransport, KernelTransport, KernelTransport>,
+    package: &str,
+    process: &str,
+    instance_id: Option<&str>,
+) -> Result<Option<NetworkResourceJob>, lifecycle::AppLifecycleStatus> {
+    let Some(instance_id) = instance_id else {
+        return Ok(None);
+    };
+    let Some(group) = config.network_policy.isolation_groups.iter().find(|group| {
+        group.name == instance_id
+            && ((group.networkd_package == package && group.networkd_process == process)
+                || (group.netstackd_package == package && group.netstackd_process == process))
+    }) else {
+        return Err(lifecycle::AppLifecycleStatus::AccessDenied);
+    };
+    let Some(template) = config
+        .network_policy
+        .resource_templates
+        .iter()
+        .find(|template| template.name == group.resource_template)
+    else {
+        return Err(lifecycle::AppLifecycleStatus::AccessDenied);
+    };
+    let active = services
+        .iter()
+        .filter(|service| {
+            config
+                .network_policy
+                .isolation_groups
+                .iter()
+                .find(|candidate| candidate.name == service.instance_id)
+                .is_some_and(|candidate| candidate.resource_template == template.name)
+        })
+        .count();
+    if active >= template.max_instances as usize {
+        return Err(lifecycle::AppLifecycleStatus::LaunchFailed);
+    }
+    let parent = crate::runner::KernelOps::open_resource_group(kernel, "system")
+        .map_err(|_| lifecycle::AppLifecycleStatus::LaunchFailed)?;
+    let resource_name = alloc::format!("net-{instance_id}-{process}");
+    let created = crate::runner::KernelOps::create_resource_group_v2(
+        kernel,
+        &resource_name,
+        parent.handle,
+        crate::runner::ResourceGroupLimits {
+            cpu_weight: template.cpu_weight,
+            max_cpu_utilization_permille: 0,
+            allow_realtime: false,
+            memory_low_watermark_bytes: 0,
+            memory_high_watermark_bytes: template.memory_high_bytes,
+            max_render_budget_percent: 0,
+            max_vram_bytes: 0,
+        },
+    );
+    let _ = Memory::close(parent.handle.raw);
+    let created = created.map_err(|_| lifecycle::AppLifecycleStatus::LaunchFailed)?;
+    Ok(Some(NetworkResourceJob {
+        id: created.id,
+        handle: Some(created.handle.raw),
+    }))
+}
+
+fn networkd_config_snapshot(
+    manifest: &Manifest,
+    config: &PlatformConfig,
+    instance_id: &str,
+) -> Option<Vec<u8>> {
+    use bexos_migration::codec::Encoder;
+    let group = config
+        .network_policy
+        .isolation_groups
+        .iter()
+        .find(|group| group.name == instance_id)?;
+    let mut policy = Encoder::new();
+    policy.word(0x4e45_5450_4f4c_3031);
+    policy.word(1);
+    policy.text(instance_id);
+    policy.word(config.network_policy.max_dynamic_providers as u64);
+    let domains = config
+        .network_policy
+        .domains
+        .iter()
+        .filter(|domain| domain.isolation_group == instance_id)
+        .collect::<Vec<_>>();
+    policy.word(domains.len() as u64);
+    for domain in domains {
+        policy.text(&domain.name);
+        policy.word(domain.table_id as u64);
+        policy.word(domain.system_default as u64);
+    }
+    policy.word(group.table_ids.len() as u64);
+    for table in &group.table_ids {
+        policy.word(*table as u64);
+    }
+    let ports = config
+        .network_policy
+        .virtual_ports
+        .iter()
+        .filter(|port| port.isolation_group == instance_id)
+        .collect::<Vec<_>>();
+    policy.word(ports.len() as u64);
+    for port in ports {
+        policy.word(port.port_id);
+        policy.word(port.table_id as u64);
+        policy.text(&port.physical_selector);
+        policy.bytes(&port.source_mac);
+        policy.word(port.vlan_id as u64);
+        policy.word(port.tagged as u64);
+        policy.word(port.rx_queue_depth as u64);
+        policy.word(port.tx_queue_depth as u64);
+    }
+    let routes = config
+        .network_policy
+        .routes
+        .iter()
+        .filter(|route| route.isolation_group == instance_id)
+        .collect::<Vec<_>>();
+    policy.word(routes.len() as u64);
+    for route in routes {
+        policy.word(route.table_id as u64);
+        policy.bytes(&route.destination.address);
+        policy.word(route.destination.prefix_len as u64);
+        policy.bytes(&route.gateway);
+        policy.word(route.interface_id);
+        policy.word(route.metric as u64);
+    }
+    let upstreams = config
+        .network_policy
+        .dns_upstreams
+        .iter()
+        .filter(|upstream| upstream.isolation_group == instance_id)
+        .collect::<Vec<_>>();
+    policy.word(upstreams.len() as u64);
+    for upstream in upstreams {
+        policy.word(upstream.table_id as u64);
+        policy.text(&upstream.provider);
+        policy.text(&upstream.domain_suffix);
+        policy.bytes(&upstream.bootstrap_address);
+        policy.word(upstream.port as u64);
+        policy.word(match upstream.transport {
+            crate::platform_config::NetworkDnsTransport::Udp53 => 1,
+            crate::platform_config::NetworkDnsTransport::Dot => 2,
+            crate::platform_config::NetworkDnsTransport::Doh => 3,
+            crate::platform_config::NetworkDnsTransport::Unspecified => return None,
+        });
+        policy.text(&upstream.tls_server_name);
+        policy.text(&upstream.doh_path);
+        policy.word(upstream.priority as u64);
+    }
+    let mut values = manifest
+        .config_schema
+        .resolve(
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+        )
+        .ok()?;
+    values.insert(
+        "instance_id".into(),
+        crate::ComponentConfigValue::String(instance_id.into()),
+    );
+    values.insert(
+        "domains".into(),
+        crate::ComponentConfigValue::String(
+            config
+                .network_policy
+                .domains
+                .iter()
+                .filter(|domain| domain.isolation_group == instance_id)
+                .map(|domain| alloc::format!("{}:{}", domain.name, domain.table_id))
+                .collect::<Vec<_>>()
+                .join(","),
+        ),
+    );
+    values.insert(
+        "max_dynamic_providers".into(),
+        crate::ComponentConfigValue::Uint32(config.network_policy.max_dynamic_providers),
+    );
+    values.insert(
+        "boot_policy".into(),
+        crate::ComponentConfigValue::Bytes(policy.finish()),
+    );
+    manifest.config_schema.encode_table(&values, 0).ok()
 }
 
 fn mark_launch_failed(registry: &mut MemoryAppRegistry, record: &bexos_app_registry::AppRecord) {

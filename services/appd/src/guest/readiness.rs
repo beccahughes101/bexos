@@ -428,6 +428,7 @@ impl ReadinessGate for Gate {
         self.services.push(super::state::ManagedService {
             package: name.to_string(),
             process: p.process_ref.process.name.clone(),
+            instance_id: String::new(),
             process_handle: p.result.process_handle.raw,
             space_handle: p.result.address_space_handle.raw,
             thread_handle: p.result.main_thread_handle.raw,
@@ -441,6 +442,8 @@ impl ReadinessGate for Gate {
             generation: 0,
             archive: 0,
             archive_len: 0,
+            resource_group_id: 1,
+            resource_job: 0,
         });
         log(&alloc::format!("appd: process ready package={name}\n"));
         Ok(())

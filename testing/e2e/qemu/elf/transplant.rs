@@ -5,8 +5,10 @@ use std::time::{Duration, Instant};
 pub fn replace_network<T: DebugTransport>(session: &mut DebugSession<T>) -> Result<(), String> {
     for (package, generation) in [
         ("bexos.driver.network.virtio_net", 71),
-        ("bexos.service.netstackd", 72),
-        ("bexos.service.keychaind", 73),
+        ("bexos.service.vswitchd", 72),
+        ("bexos.service.netstackd", 73),
+        ("bexos.service.networkd", 74),
+        ("bexos.service.keychaind", 75),
     ] {
         let before = session
             .client

@@ -132,22 +132,46 @@ fn options() -> n::SocketOptions {
         tx_buffer_size: Some(65536),
     }
 }
+fn scoped(g: &dyn Handle) -> bool {
+    g.grant()
+        .is_some_and(|grant| grant.protocol == "SocketProvider")
+}
 pub fn resolve(g: &dyn Handle, name: &str) -> NetResult<Vec<net::IpAddress>> {
-    let r = rpc(
-        g.native(),
-        4,
-        n::NetstackResolveHostRequest { hostname: name },
-    )?;
-    let r: n::NetstackResolveHostResponse = decode(&r)?;
-    check(r.status)?;
-    (0..r.addresses.len())
-        .map(|index| {
-            r.addresses
-                .get(index)
-                .map(ip)
-                .map_err(|_| net::ErrorCode::Unknown)
-        })
-        .collect()
+    let (status, addresses) = if scoped(g) {
+        let reply = rpc(
+            g.native(),
+            4,
+            n::SocketProviderResolveHostRequest { hostname: name },
+        )?;
+        let response: n::SocketProviderResolveHostResponse = decode(&reply)?;
+        let addresses = (0..response.addresses.len())
+            .map(|index| {
+                response
+                    .addresses
+                    .get(index)
+                    .map_err(|_| net::ErrorCode::Unknown)
+            })
+            .collect::<NetResult<Vec<_>>>()?;
+        (response.status, addresses)
+    } else {
+        let reply = rpc(
+            g.native(),
+            4,
+            n::NetstackResolveHostRequest { hostname: name },
+        )?;
+        let response: n::NetstackResolveHostResponse = decode(&reply)?;
+        let addresses = (0..response.addresses.len())
+            .map(|index| {
+                response
+                    .addresses
+                    .get(index)
+                    .map_err(|_| net::ErrorCode::Unknown)
+            })
+            .collect::<NetResult<Vec<_>>>()?;
+        (response.status, addresses)
+    };
+    check(status)?;
+    Ok(addresses.into_iter().map(ip).collect())
 }
 fn stream(control: u64) -> NetResult<Entry> {
     let mut reply = rpc(control, 1, n::TcpSocketGetStreamRequest {})?;
@@ -175,17 +199,30 @@ pub fn connect(
     let address = address(a)?;
     let (client, server) = pair()?;
     let result = (|| {
-        let r = rpc(
-            g.native(),
-            1,
-            n::NetstackConnectTcpRequest {
-                remote_addr: address,
-                options: options(),
-                socket: n::HandleRef { raw: server.0 },
-            },
-        )?;
-        let r: n::NetstackConnectTcpResponse = decode(&r)?;
-        check(r.status)?;
+        let status = if scoped(g) {
+            let reply = rpc(
+                g.native(),
+                1,
+                n::SocketProviderConnectTcpRequest {
+                    target: n::Endpoint::Ip(address),
+                    options: options(),
+                    socket: n::HandleRef { raw: server.0 },
+                },
+            )?;
+            decode::<n::SocketProviderConnectTcpResponse>(&reply)?.status
+        } else {
+            let reply = rpc(
+                g.native(),
+                1,
+                n::NetstackConnectTcpRequest {
+                    remote_addr: address,
+                    options: options(),
+                    socket: n::HandleRef { raw: server.0 },
+                },
+            )?;
+            decode::<n::NetstackConnectTcpResponse>(&reply)?.status
+        };
+        check(status)?;
         let response = rpc(client.0, 3, n::TcpSocketGetLocalAddressRequest {})?;
         let response: n::TcpSocketGetLocalAddressResponse = decode(&response)?;
         check(response.status)?;
@@ -206,17 +243,30 @@ pub fn listen(g: &dyn Handle, a: &net::IpSocketAddress) -> NetResult<Entry> {
     }
     let (client, server) = pair()?;
     let result = (|| {
-        let r = rpc(
-            g.native(),
-            2,
-            n::NetstackListenTcpRequest {
-                local_addr: address,
-                options: options(),
-                listener: n::HandleRef { raw: server.0 },
-            },
-        )?;
-        let r: n::NetstackListenTcpResponse = decode(&r)?;
-        check(r.status)?;
+        let status = if scoped(g) {
+            let reply = rpc(
+                g.native(),
+                2,
+                n::SocketProviderListenTcpRequest {
+                    local_addr: address,
+                    options: options(),
+                    listener: n::HandleRef { raw: server.0 },
+                },
+            )?;
+            decode::<n::SocketProviderListenTcpResponse>(&reply)?.status
+        } else {
+            let reply = rpc(
+                g.native(),
+                2,
+                n::NetstackListenTcpRequest {
+                    local_addr: address,
+                    options: options(),
+                    listener: n::HandleRef { raw: server.0 },
+                },
+            )?;
+            decode::<n::NetstackListenTcpResponse>(&reply)?.status
+        };
+        check(status)?;
         Ok(entry("", client.0, Kind::Channel, READ | WRITE | TRANSFER))
     })();
     if result.is_err() {
@@ -255,16 +305,28 @@ pub fn bind_udp(g: &dyn Handle, a: &net::IpSocketAddress) -> NetResult<Entry> {
     }
     let (client, server) = pair()?;
     let result = (|| {
-        let r = rpc(
-            g.native(),
-            3,
-            n::NetstackCreateUdpSocketRequest {
-                options: options(),
-                socket: n::HandleRef { raw: server.0 },
-            },
-        )?;
-        let r: n::NetstackCreateUdpSocketResponse = decode(&r)?;
-        check(r.status)?;
+        let status = if scoped(g) {
+            let reply = rpc(
+                g.native(),
+                3,
+                n::SocketProviderCreateUdpSocketRequest {
+                    options: options(),
+                    socket: n::HandleRef { raw: server.0 },
+                },
+            )?;
+            decode::<n::SocketProviderCreateUdpSocketResponse>(&reply)?.status
+        } else {
+            let reply = rpc(
+                g.native(),
+                3,
+                n::NetstackCreateUdpSocketRequest {
+                    options: options(),
+                    socket: n::HandleRef { raw: server.0 },
+                },
+            )?;
+            decode::<n::NetstackCreateUdpSocketResponse>(&reply)?.status
+        };
+        check(status)?;
         let r = rpc(
             client.0,
             3,

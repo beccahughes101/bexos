@@ -21,6 +21,7 @@ pub struct Runtime {
     pub vfsd: Option<Channel>,
     pub power: Option<Channel>,
     pub netstack: Option<Channel>,
+    pub scoped_network: bool,
     pub timed: Option<Channel>,
     pub usersd: Option<Channel>,
     pub power_watcher: Option<Channel>,
@@ -42,6 +43,7 @@ impl Runtime {
         vfsd: Option<Channel>,
         power: Option<Channel>,
         netstack: Option<Channel>,
+        scoped_network: bool,
         timed: Option<Channel>,
         usersd: Option<Channel>,
         clock: bool,
@@ -54,6 +56,7 @@ impl Runtime {
             vfsd,
             power,
             netstack,
+            scoped_network,
             timed,
             usersd,
             power_watcher: None,
@@ -78,6 +81,7 @@ impl bexos_userspace::live_migration::State for Runtime {
             None,
             None,
             None,
+            false,
             None,
             None,
             false,
@@ -114,8 +118,9 @@ impl bexos_userspace::live_migration::State for Runtime {
                 ] {
                     w.word(value);
                 }
-                w.word(2);
+                w.word(3);
                 w.word(if cfg!(bexos_arch_x86_64) { 2 } else { 1 });
+                w.word(self.scoped_network as u64);
                 w.word(self.service.jobs.list_jobs().len() as u64);
                 w.word(self.service.locked_users.len() as u64);
                 for uid in &self.service.locked_users {
@@ -219,12 +224,14 @@ impl bexos_userspace::live_migration::State for Runtime {
                     }
                     self.migration_jobs = None;
                 } else {
-                    if r.word()? != 2 {
+                    let version = r.word()?;
+                    if version != 2 && version != 3 {
                         return Err(Error::UnsupportedVersion);
                     }
                     if r.word()? != if cfg!(bexos_arch_x86_64) { 2 } else { 1 } {
                         return Err(Error::InvalidData);
                     }
+                    self.scoped_network = version >= 3 && r.flag()?;
                     let count = r.count(4096)?;
                     self.service.locked_users.clear();
                     for _ in 0..r.count(4096)? {

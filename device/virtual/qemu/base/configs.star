@@ -37,6 +37,12 @@ def qemu_system(product, architecture, graphics = False, development = False):
                 _value("doh_strict", {"bool_value": False}),
                 _value("dns_cache_capacity", {"uint32_value": 64}),
             ]),
+            _component("bexos.service.networkd", [
+                _value("instance_id", {"string_value": "system_default"}),
+                _value("domains", {"string_value": "system_default:0"}),
+                _value("max_dynamic_providers", {"uint32_value": 64}),
+                _value("dns_cache_capacity", {"uint32_value": 256}),
+            ]),
             _component("bexos.service.timed", [
                 _value("primary_server", {"string_value": "time.google.com"}),
                 _value("poll_interval_ms", {"uint32_value": 60000}),

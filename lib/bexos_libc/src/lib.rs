@@ -190,6 +190,7 @@ static HOST_THREAD_LOCAL: AtomicUsize = AtomicUsize::new(0);
 #[cfg(not(bexos_guest))]
 static HOST_PTHREAD_VALUES: [AtomicUsize; 64] = [const { AtomicUsize::new(0) }; 64];
 static NETSTACK: AtomicU64 = AtomicU64::new(0);
+static SOCKET_PROVIDER: AtomicU64 = AtomicU64::new(0);
 static TIME_PAGE_VADDR: AtomicUsize = AtomicUsize::new(0);
 static NAMESPACE: Locked<NamespaceTable> = Locked::new(NamespaceTable::new());
 static FD_TABLE: Locked<FdTable> = Locked::new(FdTable::new());
@@ -248,8 +249,12 @@ pub unsafe fn init() {
 
 pub fn install_startup(startup: &bexos_userspace::Startup) {
     for grant in &startup.service_grants {
-        if grant.service == "bexos.net.Netstack" {
-            NETSTACK.store(grant.endpoint, Ordering::Release);
+        match grant.service.as_str() {
+            "bexos.net.SocketProvider" => {
+                SOCKET_PROVIDER.store(grant.endpoint, Ordering::Release);
+            }
+            "bexos.net.Netstack" => NETSTACK.store(grant.endpoint, Ordering::Release),
+            _ => {}
         }
     }
     NAMESPACE.with(|namespace| namespace.install_entries(&startup.namespace));
@@ -957,6 +962,171 @@ fn netstack_client() -> Result<net_fidl::NetstackPublicClient<bexos_userspace::R
     Ok(net_fidl::NetstackPublicClient::new(bexos_userspace::Rpc(
         bexos_userspace::Channel(raw),
     )))
+}
+
+fn socket_provider_client()
+-> Result<net_fidl::SocketProviderPublicClient<bexos_userspace::Rpc>, c_int> {
+    let raw = SOCKET_PROVIDER.load(Ordering::Acquire);
+    if raw == 0 {
+        return Err(ENETUNREACH);
+    }
+    Ok(net_fidl::SocketProviderPublicClient::new(
+        bexos_userspace::Rpc(bexos_userspace::Channel(raw)),
+    ))
+}
+
+fn network_create_udp(server_end: u64) -> Result<net_fidl::Status, c_int> {
+    let mut rb = [0; 128];
+    let mut rh = [net_fidl::HandleRef { raw: 0 }; 1];
+    let mut ob = [0; 128];
+    let mut oh = [net_fidl::HandleRef { raw: 0 }; 1];
+    if let Ok(mut client) = socket_provider_client() {
+        return client
+            .create_udp_socket(
+                &net_fidl::SocketProviderCreateUdpSocketRequest {
+                    options: default_options(),
+                    socket: net_fidl::HandleRef { raw: server_end },
+                },
+                &mut rb,
+                &mut rh,
+                &mut ob,
+                &mut oh,
+            )
+            .map(|response| response.status)
+            .map_err(|_| EINVAL);
+    }
+    netstack_client()?
+        .create_udp_socket(
+            &net_fidl::NetstackCreateUdpSocketRequest {
+                options: default_options(),
+                socket: net_fidl::HandleRef { raw: server_end },
+            },
+            &mut rb,
+            &mut rh,
+            &mut ob,
+            &mut oh,
+        )
+        .map(|response| response.status)
+        .map_err(|_| EINVAL)
+}
+
+fn network_connect_tcp(
+    remote: net_fidl::SocketAddress,
+    server_end: u64,
+) -> Result<net_fidl::Status, c_int> {
+    let mut rb = [0; 256];
+    let mut rh = [net_fidl::HandleRef { raw: 0 }; 1];
+    let mut ob = [0; 128];
+    let mut oh = [net_fidl::HandleRef { raw: 0 }; 1];
+    if let Ok(mut client) = socket_provider_client() {
+        return client
+            .connect_tcp(
+                &net_fidl::SocketProviderConnectTcpRequest {
+                    target: net_fidl::Endpoint::Ip(remote),
+                    options: default_options(),
+                    socket: net_fidl::HandleRef { raw: server_end },
+                },
+                &mut rb,
+                &mut rh,
+                &mut ob,
+                &mut oh,
+            )
+            .map(|response| response.status)
+            .map_err(|_| EINVAL);
+    }
+    netstack_client()?
+        .connect_tcp(
+            &net_fidl::NetstackConnectTcpRequest {
+                remote_addr: remote,
+                options: default_options(),
+                socket: net_fidl::HandleRef { raw: server_end },
+            },
+            &mut rb,
+            &mut rh,
+            &mut ob,
+            &mut oh,
+        )
+        .map(|response| response.status)
+        .map_err(|_| EINVAL)
+}
+
+fn network_listen_tcp(
+    local: net_fidl::SocketAddress,
+    server_end: u64,
+) -> Result<net_fidl::Status, c_int> {
+    let mut rb = [0; 256];
+    let mut rh = [net_fidl::HandleRef { raw: 0 }; 1];
+    let mut ob = [0; 128];
+    let mut oh = [net_fidl::HandleRef { raw: 0 }; 1];
+    if let Ok(mut client) = socket_provider_client() {
+        return client
+            .listen_tcp(
+                &net_fidl::SocketProviderListenTcpRequest {
+                    local_addr: local,
+                    options: default_options(),
+                    listener: net_fidl::HandleRef { raw: server_end },
+                },
+                &mut rb,
+                &mut rh,
+                &mut ob,
+                &mut oh,
+            )
+            .map(|response| response.status)
+            .map_err(|_| EINVAL);
+    }
+    netstack_client()?
+        .listen_tcp(
+            &net_fidl::NetstackListenTcpRequest {
+                local_addr: local,
+                options: default_options(),
+                listener: net_fidl::HandleRef { raw: server_end },
+            },
+            &mut rb,
+            &mut rh,
+            &mut ob,
+            &mut oh,
+        )
+        .map(|response| response.status)
+        .map_err(|_| EINVAL)
+}
+
+fn network_resolve(name: &str) -> Result<Vec<net_fidl::IpAddress>, c_int> {
+    let mut rb = [0; 384];
+    let mut rh = [net_fidl::HandleRef { raw: 0 }; 1];
+    let mut ob = [0; 512];
+    let mut oh = [net_fidl::HandleRef { raw: 0 }; 1];
+    if let Ok(mut client) = socket_provider_client() {
+        let response = client
+            .resolve_host(
+                &net_fidl::SocketProviderResolveHostRequest { hostname: name },
+                &mut rb,
+                &mut rh,
+                &mut ob,
+                &mut oh,
+            )
+            .map_err(|_| EINVAL)?;
+        if response.status != net_fidl::Status::Ok {
+            return Err(errno_from_net(response.status));
+        }
+        return (0..response.addresses.len())
+            .map(|index| response.addresses.get(index).map_err(|_| ENETUNREACH))
+            .collect();
+    }
+    let response = netstack_client()?
+        .resolve_host(
+            &net_fidl::NetstackResolveHostRequest { hostname: name },
+            &mut rb,
+            &mut rh,
+            &mut ob,
+            &mut oh,
+        )
+        .map_err(|_| EINVAL)?;
+    if response.status != net_fidl::Status::Ok {
+        return Err(errno_from_net(response.status));
+    }
+    (0..response.addresses.len())
+        .map(|index| response.addresses.get(index).map_err(|_| ENETUNREACH))
+        .collect()
 }
 
 fn channel_pair() -> Result<(u64, u64), c_int> {
@@ -2533,25 +2703,12 @@ pub extern "C" fn socket(domain: c_int, kind: c_int, _protocol: c_int) -> c_int 
                 Ok(pair) => pair,
                 Err(e) => return fail(e, -1),
             };
-            let mut client = match netstack_client() {
-                Ok(client) => client,
-                Err(e) => return fail(e, -1),
+            let status = match network_create_udp(server_end) {
+                Ok(status) => status,
+                Err(error) => return fail(error, -1),
             };
-            let request = net_fidl::NetstackCreateUdpSocketRequest {
-                options: default_options(),
-                socket: net_fidl::HandleRef { raw: server_end },
-            };
-            let mut rb = [0; 128];
-            let mut rh = [net_fidl::HandleRef { raw: 0 }; 1];
-            let mut ob = [0; 128];
-            let mut oh = [net_fidl::HandleRef { raw: 0 }; 1];
-            let response =
-                match client.create_udp_socket(&request, &mut rb, &mut rh, &mut ob, &mut oh) {
-                    Ok(response) => response,
-                    Err(_) => return fail(EINVAL, -1),
-                };
-            if response.status != net_fidl::Status::Ok {
-                return fail(errno_from_net(response.status), -1);
+            if status != net_fidl::Status::Ok {
+                return fail(errno_from_net(status), -1);
             }
             FD_TABLE
                 .with(|t| {
@@ -2582,25 +2739,12 @@ pub extern "C" fn connect(fd: c_int, addr: *const c_void, len: u32) -> c_int {
         Ok(pair) => pair,
         Err(e) => return fail(e, -1),
     };
-    let mut client = match netstack_client() {
-        Ok(client) => client,
-        Err(e) => return fail(e, -1),
+    let status = match network_connect_tcp(remote, server_end) {
+        Ok(status) => status,
+        Err(error) => return fail(error, -1),
     };
-    let request = net_fidl::NetstackConnectTcpRequest {
-        remote_addr: remote,
-        options: default_options(),
-        socket: net_fidl::HandleRef { raw: server_end },
-    };
-    let mut rb = [0; 256];
-    let mut rh = [net_fidl::HandleRef { raw: 0 }; 1];
-    let mut ob = [0; 128];
-    let mut oh = [net_fidl::HandleRef { raw: 0 }; 1];
-    let response = match client.connect_tcp(&request, &mut rb, &mut rh, &mut ob, &mut oh) {
-        Ok(response) => response,
-        Err(_) => return fail(EINVAL, -1),
-    };
-    if response.status != net_fidl::Status::Ok {
-        return fail(errno_from_net(response.status), -1);
+    if status != net_fidl::Status::Ok {
+        return fail(errno_from_net(status), -1);
     }
     let socket = match tcp_get_stream(client_end) {
         Ok(socket) => socket,
@@ -2656,25 +2800,12 @@ pub extern "C" fn bind(fd: c_int, addr: *const c_void, len: u32) -> c_int {
                 Ok(pair) => pair,
                 Err(e) => return fail(e, -1),
             };
-            let mut client = match netstack_client() {
-                Ok(client) => client,
-                Err(e) => return fail(e, -1),
+            let status = match network_listen_tcp(local, server_end) {
+                Ok(status) => status,
+                Err(error) => return fail(error, -1),
             };
-            let request = net_fidl::NetstackListenTcpRequest {
-                local_addr: local,
-                options: default_options(),
-                listener: net_fidl::HandleRef { raw: server_end },
-            };
-            let mut rb = [0; 256];
-            let mut rh = [net_fidl::HandleRef { raw: 0 }; 1];
-            let mut ob = [0; 128];
-            let mut oh = [net_fidl::HandleRef { raw: 0 }; 1];
-            let response = match client.listen_tcp(&request, &mut rb, &mut rh, &mut ob, &mut oh) {
-                Ok(response) => response,
-                Err(_) => return fail(EINVAL, -1),
-            };
-            if response.status != net_fidl::Status::Ok {
-                return fail(errno_from_net(response.status), -1);
+            if status != net_fidl::Status::Ok {
+                return fail(errno_from_net(status), -1);
             }
             FD_TABLE
                 .with(|t| {
@@ -2993,28 +3124,10 @@ pub extern "C" fn getaddrinfo(
         };
         if name == "localhost" {
             count = 1;
-        } else if let Ok(mut client) = netstack_client() {
-            let mut rb = [0; 384];
-            let mut rh = [net_fidl::HandleRef { raw: 0 }; 1];
-            let mut ob = [0; 512];
-            let mut oh = [net_fidl::HandleRef { raw: 0 }; 1];
-            if let Ok(response) = client.resolve_host(
-                &net_fidl::NetstackResolveHostRequest { hostname: name },
-                &mut rb,
-                &mut rh,
-                &mut ob,
-                &mut oh,
-            ) {
-                if response.status != net_fidl::Status::Ok {
-                    return errno_from_net(response.status);
-                }
-                for index in 0..response.addresses.len().min(addresses.len()) {
-                    let Ok(address) = response.addresses.get(index) else {
-                        return ENETUNREACH;
-                    };
-                    addresses[count] = address;
-                    count += 1;
-                }
+        } else if let Ok(resolved) = network_resolve(name) {
+            for address in resolved.into_iter().take(addresses.len()) {
+                addresses[count] = address;
+                count += 1;
             }
         }
     }

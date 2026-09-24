@@ -8,6 +8,8 @@ base_packages: "//drivers/d1/nic/virtio/net:virtio_net_driver"
 base_packages: "//drivers/d1/nic/intel/e1000e:e1000e_driver"
 base_packages: "//drivers/d1/nic/intel/igb:igb_driver"
 base_packages: "//services/netstack:netstackd_archive"
+base_packages: "//services/networkd:networkd_archive"
+base_packages: "//services/vswitchd:vswitchd_archive"
 base_packages: "//services/timed:timed_archive"
 base_packages: "//services/jobd:jobd_archive"
 
@@ -37,6 +39,8 @@ autoinstall_packages { package: "//drivers/d1/nic/intel/igb:igb_driver" }
 autoinstall_packages {
   package: "//services/netstack:netstackd_archive"
 }
+autoinstall_packages { package: "//services/networkd:networkd_archive" }
+autoinstall_packages { package: "//services/vswitchd:vswitchd_archive" }
 
 autoinstall_packages {
   package: "//services/timed:timed_archive"

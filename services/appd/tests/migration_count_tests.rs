@@ -10,6 +10,7 @@ fn graphical_session_checkpoint_accepts_the_full_runtime_record_capacity() {
         source.services.push(ManagedService {
             package: format!("bexos.test.service{i}"),
             process: "main".into(),
+            instance_id: format!("instance-{i}"),
             process_handle: i + 1,
             space_handle: 101 + i,
             thread_handle: 201 + i,
@@ -19,10 +20,13 @@ fn graphical_session_checkpoint_accepts_the_full_runtime_record_capacity() {
             generation: 7,
             archive: 0,
             archive_len: 0,
+            resource_group_id: 1,
+            resource_job: 0,
         });
         source.launches.push(LaunchRecord {
             package: format!("bexos.test.app{i}"),
             process: "main".into(),
+            instance_id: format!("instance-{i}"),
             process_handle: 501 + i,
             space_handle: 601 + i,
             thread_handle: 701 + i,

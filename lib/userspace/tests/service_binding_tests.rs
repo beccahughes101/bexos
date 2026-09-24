@@ -12,6 +12,7 @@ fn service_binding_parses_allowed_methods_and_permissions() {
     assert_eq!(binding.caller_package, None);
     assert_eq!(binding.caller_uid, None);
     assert!(binding.caller_foreground);
+    assert_eq!(binding.provider_instance_id, None);
     assert!(binding.allows(1));
     assert!(binding.allows(4));
     assert!(!binding.allows(2));
@@ -32,10 +33,11 @@ fn service_binding_rejects_malformed_methods() {
 
 #[test]
 fn service_binding_parses_caller_identity() {
-    let binding = ServiceBinding::parse("svc|Protocol|Public|1|READ|com.example|42|bg")
+    let binding = ServiceBinding::parse("svc|Protocol|Public|1|READ|com.example|42|bg|vpn-a")
         .expect("metadata should parse");
 
     assert_eq!(binding.caller_package.as_deref(), Some("com.example"));
     assert_eq!(binding.caller_uid, Some(42));
     assert!(!binding.caller_foreground);
+    assert_eq!(binding.provider_instance_id.as_deref(), Some("vpn-a"));
 }

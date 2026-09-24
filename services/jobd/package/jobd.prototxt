@@ -68,6 +68,15 @@ services_consumed {
  }
 }
 services_consumed {
+ name: "bexos.net.SocketProvider"
+ link_type: REQUIRED
+ capabilities {
+  capability: "Public"
+  methods { ordinal: 5 link_type: REQUIRED }
+  methods { ordinal: 6 link_type: REQUIRED }
+ }
+}
+services_consumed {
  name: "bexos.net.Netstack"
  link_type: OPTIONAL
  capabilities {

@@ -1,0 +1,26 @@
+package_name: "bexos.service.vswitchd"
+name: "Virtual Ethernet switch"
+processes {
+  name: "vswitchd" runner: "elf" service: true wave: 4 resource_group: "system"
+  lifecycle { update_strategy: HEART_TRANSPLANT preparation_timeout_ms: 30000 migration_timeout_ms: 5000 }
+  runner_options { [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/vswitchd" } }
+}
+services_exposed {
+  name: "bexos.net.VirtualSwitchController"
+  protocol: "VirtualSwitchController"
+  lifecycle: SINGLETON
+  visibility: PUBLIC
+  bind_permission: "BEXOS_SYSTEM_PRIVILEGED"
+  capabilities { capability: "Control" method_ordinals: 1 method_ordinals: 2 method_ordinals: 3 method_ordinals: 4 }
+}
+services_consumed {
+  name: "bexos.hardware.ethernet.Device"
+  link_type: REQUIRED
+  capabilities {
+    capability: "Public"
+    methods { ordinal: 1 link_type: REQUIRED }
+    methods { ordinal: 2 link_type: REQUIRED }
+    methods { ordinal: 4 link_type: REQUIRED }
+    methods { ordinal: 5 link_type: REQUIRED }
+  }
+}

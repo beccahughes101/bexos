@@ -1,0 +1,54 @@
+load("//build/platforms:architecture.bzl", "guest_select")
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "networkd",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_name = "bexos_networkd",
+    edition = "2024",
+    rustc_flags = guest_select([], ["--cfg=bexos_arch_x86_64"]),
+    deps = [
+        "//idl:kernel_fidl_rust",
+        "//idl:net_fidl_rust",
+        "//lib/migration",
+        "//lib/net:net_secure",
+        "//lib/network_policy",
+        "//lib/userspace",
+    ],
+)
+
+std_service_binary(
+    name = "networkd_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "networkd_elf",
+    deps = [":networkd"],
+)
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "networkd_replacement_elf",
+    deps = [":networkd"],
+)
+
+rust_test(name = "internal_tests", crate = ":networkd")
+
+app_manifest(name = "package_manifest", src = "package/networkd.prototxt")
+
+app_archive(
+    name = "networkd_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/networkd": ":networkd_elf"},
+    compression = "zstd",
+)
+
+app_archive(
+    name = "replacement_archive",
+    manifest = ":package_manifest",
+    entries = {"bin/networkd": ":replacement_elf"},
+    compression = "zstd",
+)

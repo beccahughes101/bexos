@@ -1,0 +1,22 @@
+load("//build/platforms:architecture.bzl", "guest_select")
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "vswitchd",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_name = "bexos_vswitchd",
+    edition = "2024",
+    rustc_flags = guest_select([], ["--cfg=bexos_arch_x86_64"]),
+    deps = ["//idl:ethernet_fidl_rust", "//idl:kernel_fidl_rust", "//idl:net_fidl_rust", "//lib/migration", "//lib/network_policy", "//lib/userspace"],
+)
+
+std_service_binary(name = "vswitchd_elf", srcs = ["src/main.rs"], crate_name = "vswitchd_elf", deps = [":vswitchd"])
+std_service_binary(name = "replacement_elf", srcs = ["src/main.rs"], crate_name = "vswitchd_replacement_elf", deps = [":vswitchd"])
+rust_test(name = "internal_tests", crate = ":vswitchd")
+app_manifest(name = "package_manifest", src = "package/vswitchd.prototxt")
+app_archive(name = "vswitchd_archive", manifest = ":package_manifest", entries = {"bin/vswitchd": ":vswitchd_elf"}, compression = "zstd")
+app_archive(name = "replacement_archive", manifest = ":package_manifest", entries = {"bin/vswitchd": ":replacement_elf"}, compression = "zstd")

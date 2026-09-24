@@ -53,6 +53,7 @@ const DEVICE_RECORD_MAGIC_V3: u64 = 0x4452_5633;
 pub struct ManagedService {
     pub package: String,
     pub process: String,
+    pub instance_id: String,
     pub process_handle: u64,
     pub space_handle: u64,
     pub thread_handle: u64,
@@ -62,6 +63,8 @@ pub struct ManagedService {
     pub generation: u64,
     pub archive: u64,
     pub archive_len: u64,
+    pub resource_group_id: u32,
+    pub resource_job: u64,
 }
 impl ManagedService {
     fn encode(&self) -> Vec<u8> {
@@ -81,11 +84,14 @@ impl ManagedService {
         ] {
             w.word(n);
         }
+        w.text(&self.instance_id);
+        w.word(self.resource_group_id as u64);
+        w.word(self.resource_job);
         w.finish()
     }
     fn decode(bytes: &[u8]) -> Result<Self, Error> {
         let mut r = Decoder::new(bytes);
-        let s = Self {
+        let mut s = Self {
             package: r.text(128)?.to_string(),
             process: r.text(64)?.to_string(),
             process_handle: r.word()?,
@@ -97,7 +103,18 @@ impl ManagedService {
             generation: r.word()?,
             archive: r.word()?,
             archive_len: r.word()?,
+            instance_id: String::new(),
+            resource_group_id: 1,
+            resource_job: 0,
         };
+        if let Ok(instance_id) = r.text(128) {
+            s.instance_id = instance_id.to_string();
+        }
+        if let Ok(resource_group_id) = r.word() {
+            s.resource_group_id =
+                u32::try_from(resource_group_id).map_err(|_| Error::InvalidData)?;
+            s.resource_job = r.word()?;
+        }
         r.finish()?;
         if s.hardware > 2 || s.migration == 0 {
             return Err(Error::InvalidData);
@@ -469,15 +486,17 @@ impl AppdState {
         }
         if let Some(record) = self.pending_record.take() {
             let replacing_appd = record.package_id == APPD_PACKAGE;
-            if let Some(service) = self
-                .services
-                .iter_mut()
-                .find(|s| s.package == record.package_id)
-            {
-                if service.archive != 0 {
-                    let _ = bexos_userspace::Memory::close(service.archive);
+            if self.pending_archive.0 != 0 {
+                if let Some(service) = self
+                    .services
+                    .iter_mut()
+                    .find(|s| s.package == record.package_id)
+                {
+                    if service.archive != 0 {
+                        let _ = bexos_userspace::Memory::close(service.archive);
+                    }
+                    (service.archive, service.archive_len) = self.pending_archive;
                 }
-                (service.archive, service.archive_len) = self.pending_archive;
             }
             self.pending_archive = (0, 0);
             self.registry.replace_checkpoint_record(record)?;
@@ -1645,7 +1664,7 @@ impl State for AppdState {
             if s.package != APPD_PACKAGE {
                 handles.extend([s.process_handle, s.space_handle, s.thread_handle]);
             }
-            handles.extend([s.manager, s.migration, s.archive]);
+            handles.extend([s.manager, s.migration, s.archive, s.resource_job]);
         }
         for route in self.permission_routes.routes() {
             handles.extend([

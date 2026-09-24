@@ -13,6 +13,7 @@ const STATUS_BUFFER_TOO_SMALL: i32 = -3;
 
 #[derive(Clone, Copy, Default)]
 pub struct NetworkServices {
+    pub socket_provider: Option<Channel>,
     pub netstack: Option<Channel>,
     pub tls_trust: Option<Channel>,
 }
@@ -36,6 +37,7 @@ pub fn services_from_startup(startup: &Startup) -> NetworkServices {
     let mut services = NetworkServices::default();
     for grant in &startup.service_grants {
         match grant.service.as_str() {
+            "bexos.net.SocketProvider" => services.socket_provider = Some(Channel(grant.endpoint)),
             "bexos.net.Netstack" => services.netstack = Some(Channel(grant.endpoint)),
             "bexos.security.trust.TlsTrustManager" => {
                 services.tls_trust = Some(Channel(grant.endpoint))

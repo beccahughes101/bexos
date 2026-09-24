@@ -122,6 +122,12 @@ bexos/
   pins the Trusty driver and fails closed on ABI/probe/transport failure; the
   software driver is selected only by explicit emulated products/tests.
 
+  Networking is capability-scoped: appd assigns a named network domain,
+  networkd applies RFC 61 routing and split DNS, netstackd enforces the VRF
+  table and transport state, and vswitchd multiplexes the physical NIC into
+  isolated MAC/VLAN virtual ports. The default networkd instance retains the
+  additive legacy `Netstack` API; new clients prefer `SocketProvider`.
+
 
 * **`drivers/`**: Split cleanly by execution tier and domain/vendor/device so performance-critical D1 drivers compile natively with zero-copy shared memory, while D2 peripherals compile to `wasm32-unknown-unknown`.
 

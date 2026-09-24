@@ -10,6 +10,90 @@ message PlatformConfig {
   UpdatePolicy update_policy = 5;
   AppLifecyclePolicy app_lifecycle_policy = 6;
   repeated InterfaceDefault interface_defaults = 7;
+  NetworkPolicy network_policy = 8;
+}
+
+// Authoritative RFC 68 boot topology. Runtime mutations are intentionally
+// absent from this message and therefore disappear after reboot.
+message NetworkPolicy {
+  repeated NetworkIsolationGroup isolation_groups = 1;
+  repeated NetworkDomain domains = 2;
+  repeated NetworkVirtualPort virtual_ports = 3;
+  repeated NetworkRoute routes = 4;
+  repeated NetworkDnsUpstream dns_upstreams = 5;
+  repeated NetworkResourceTemplate resource_templates = 6;
+  uint32 max_dynamic_providers = 7;
+}
+
+message NetworkIsolationGroup {
+  string name = 1;
+  string networkd_package = 2;
+  string networkd_process = 3;
+  string netstackd_package = 4;
+  string netstackd_process = 5;
+  string resource_template = 6;
+  repeated uint32 table_ids = 7;
+}
+
+message NetworkDomain {
+  string name = 1;
+  string isolation_group = 2;
+  uint32 table_id = 3;
+  bool system_default = 4;
+  repeated string authorized_packages = 5;
+}
+
+message NetworkResourceTemplate {
+  string name = 1;
+  uint32 max_instances = 2;
+  uint32 cpu_weight = 3;
+  uint64 memory_high_bytes = 4;
+}
+
+message NetworkVirtualPort {
+  uint64 port_id = 1;
+  string isolation_group = 2;
+  uint32 table_id = 3;
+  string physical_selector = 4;
+  bytes source_mac = 5;
+  uint32 vlan_id = 6;
+  bool tagged = 7;
+  uint32 rx_queue_depth = 8;
+  uint32 tx_queue_depth = 9;
+}
+
+message NetworkIpPrefix {
+  bytes address = 1;
+  uint32 prefix_len = 2;
+}
+
+message NetworkRoute {
+  string isolation_group = 1;
+  uint32 table_id = 2;
+  NetworkIpPrefix destination = 3;
+  bytes gateway = 4;
+  uint64 interface_id = 5;
+  uint32 metric = 6;
+}
+
+enum NetworkDnsTransport {
+  NETWORK_DNS_TRANSPORT_UNSPECIFIED = 0;
+  NETWORK_DNS_UDP53 = 1;
+  NETWORK_DNS_DOT = 2;
+  NETWORK_DNS_DOH = 3;
+}
+
+message NetworkDnsUpstream {
+  string isolation_group = 1;
+  uint32 table_id = 2;
+  string provider = 3;
+  string domain_suffix = 4;
+  bytes bootstrap_address = 5;
+  uint32 port = 6;
+  NetworkDnsTransport transport = 7;
+  string tls_server_name = 8;
+  string doh_path = 9;
+  uint32 priority = 10;
 }
 
 message PlatformMetadata {

@@ -10,7 +10,7 @@ QEMU implements external BootFS bootstrap, encrypted BexFS SYS_STATE/STORAGE, an
 
 ## Implemented behavior
 
-- Image tooling emits ESP, BOOT_A, BOOT_B, SYS_STATE, and STORAGE GPT entries. The compact SYS_STATE and STORAGE sizes are 32 MiB and 256 MiB.
+- Image tooling emits ESP, BOOT_A, BOOT_B, SYS_STATE, and STORAGE GPT entries. The current QEMU SYS_STATE and STORAGE sizes are 32 MiB and 512 MiB; STORAGE reserves two complete BexFS namespace snapshots and fits the larger x86_64 service/replacement archives with runtime-write headroom.
 - The kernel validates handoff/BootFS inputs; appd waits for storage readiness, mounts through the storage stack, retains required launch inputs, and reclaims BootFS when the pivot succeeds.
 - Signed v2 package archives, durable app-registry replacement selections, and accepted generations are now implemented. These supersede the RFC’s earlier claims that package verification and live-update persistence were only future work.
 - Boot drivers have heart transplant adapters; boot-state persistence and service archive selection are distinct from rewriting every cold-boot image.

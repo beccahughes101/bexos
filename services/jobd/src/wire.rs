@@ -24,6 +24,8 @@ use job_fidl::{
 use kernel_fidl::{ClockGetTimeRequest, ClockPublicClient, ClockType, Status as KernelStatus};
 use net_fidl::{
     NetstackGetLinkStatusRequest, NetstackPublicClient, NetstackWatchLinkStatusRequest,
+    SocketProviderGetLinkStatusRequest, SocketProviderPublicClient,
+    SocketProviderWatchLinkStatusRequest,
 };
 use power_fidl::{
     PowerManagerAcquireWakeLeaseRequest, PowerManagerGetPowerSnapshotRequest,
@@ -286,23 +288,36 @@ fn ensure_provider_watchers(runtime: &mut Runtime) -> bool {
     if runtime.link_watcher.is_none() {
         if let Some(netstack) = runtime.netstack {
             if let Ok((local, remote)) = Channel::pair() {
-                let mut client = NetstackPublicClient::new(Rpc(netstack));
                 let mut request_bytes = [0; 64];
                 let mut response_bytes = [0; 32];
                 let mut request_handles = [net_fidl::HandleRef { raw: 0 }; 1];
                 let mut response_handles = [net_fidl::HandleRef { raw: 0 }; 1];
-                if client
-                    .watch_link_status(
-                        &NetstackWatchLinkStatusRequest {
-                            watcher: net_fidl::HandleRef { raw: remote.0 },
-                        },
-                        &mut request_bytes,
-                        &mut request_handles,
-                        &mut response_bytes,
-                        &mut response_handles,
-                    )
-                    .is_ok()
-                {
+                let watched = if runtime.scoped_network {
+                    SocketProviderPublicClient::new(Rpc(netstack))
+                        .watch_link_status(
+                            &SocketProviderWatchLinkStatusRequest {
+                                watcher: net_fidl::HandleRef { raw: remote.0 },
+                            },
+                            &mut request_bytes,
+                            &mut request_handles,
+                            &mut response_bytes,
+                            &mut response_handles,
+                        )
+                        .is_ok()
+                } else {
+                    NetstackPublicClient::new(Rpc(netstack))
+                        .watch_link_status(
+                            &NetstackWatchLinkStatusRequest {
+                                watcher: net_fidl::HandleRef { raw: remote.0 },
+                            },
+                            &mut request_bytes,
+                            &mut request_handles,
+                            &mut response_bytes,
+                            &mut response_handles,
+                        )
+                        .is_ok()
+                };
+                if watched {
                     runtime.link_watcher = Some(local);
                     changed = true;
                 }
@@ -660,21 +675,37 @@ fn runtime_conditions(runtime: &Runtime) -> RuntimeConditions {
         }
     }
     if let Some(netstack) = runtime.netstack {
-        let mut client = NetstackPublicClient::new(Rpc(netstack));
         let mut request_bytes = [0; 16];
         let mut response_bytes = [0; 64];
         let mut request_handles = [net_fidl::HandleRef { raw: 0 }; 1];
         let mut response_handles = [net_fidl::HandleRef { raw: 0 }; 1];
-        if let Ok(response) = client.get_link_status(
-            &NetstackGetLinkStatusRequest {},
-            &mut request_bytes,
-            &mut request_handles,
-            &mut response_bytes,
-            &mut response_handles,
-        ) {
-            conditions.network_available = response.link.available;
-            conditions.network_unmetered = !response.link.metered;
-            net_available = response.status == net_fidl::Status::Ok;
+        let response = if runtime.scoped_network {
+            SocketProviderPublicClient::new(Rpc(netstack))
+                .get_link_status(
+                    &SocketProviderGetLinkStatusRequest {},
+                    &mut request_bytes,
+                    &mut request_handles,
+                    &mut response_bytes,
+                    &mut response_handles,
+                )
+                .ok()
+                .map(|response| (response.status, response.link))
+        } else {
+            NetstackPublicClient::new(Rpc(netstack))
+                .get_link_status(
+                    &NetstackGetLinkStatusRequest {},
+                    &mut request_bytes,
+                    &mut request_handles,
+                    &mut response_bytes,
+                    &mut response_handles,
+                )
+                .ok()
+                .map(|response| (response.status, response.link))
+        };
+        if let Some((status, link)) = response {
+            conditions.network_available = link.available;
+            conditions.network_unmetered = !link.metered;
+            net_available = status == net_fidl::Status::Ok;
         }
     }
     conditions.available = power_available && net_available;

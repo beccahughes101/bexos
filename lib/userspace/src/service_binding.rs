@@ -11,6 +11,7 @@ pub struct ServiceBinding {
     pub caller_package: Option<String>,
     pub caller_uid: Option<u64>,
     pub caller_foreground: bool,
+    pub provider_instance_id: Option<String>,
 }
 
 impl ServiceBinding {
@@ -30,6 +31,7 @@ impl ServiceBinding {
             .next()
             .map(|value| value == "fg" || value == "1")
             .unwrap_or(true);
+        let provider_instance_id = fields.next().and_then(empty_to_none).map(str::to_string);
         if fields.next().is_some()
             || service.is_empty()
             || protocol.is_empty()
@@ -58,6 +60,7 @@ impl ServiceBinding {
             caller_package,
             caller_uid,
             caller_foreground,
+            provider_instance_id,
         })
     }
 

@@ -9,9 +9,10 @@ use kernel_fidl::{
 use net_fidl::{
     FidlDecode as NetDecode, FidlEncode as NetEncode, HandleRef, IpAddress, Ipv4Address,
     NetstackCreateUdpSocketRequest, NetstackResolveHostRequest, NetstackResolveHostResponse,
-    SocketAddress, SocketOptions, Status as NetStatus, UdpSocketBindRequest, UdpSocketBindResponse,
-    UdpSocketRecvFromRequest, UdpSocketRecvFromResponse, UdpSocketSendToRequest,
-    UdpSocketSendToResponse,
+    SocketAddress, SocketOptions, SocketProviderCreateUdpSocketRequest,
+    SocketProviderResolveHostRequest, Status as NetStatus, UdpSocketBindRequest,
+    UdpSocketBindResponse, UdpSocketRecvFromRequest, UdpSocketRecvFromResponse,
+    UdpSocketSendToRequest, UdpSocketSendToResponse,
 };
 use time_fidl::{
     FidlDecode, FidlEncode, RtcHardwarePublicClient, RtcHardwareReadUtcRequest,
@@ -27,7 +28,7 @@ use time_fidl::{
 use crate::config::TimedConfig;
 use crate::migration::Runtime;
 use crate::{nts, sntp, state};
-use bexos_net::secure::{NetstackConnector, RootConfigCache};
+use bexos_net::secure::{NetstackConnector, RootConfigCache, SocketProviderConnector};
 
 const NTP_PORT: u16 = 123;
 const UTC_2020_NS: i64 = 1_577_836_800_000_000_000;
@@ -66,6 +67,7 @@ pub struct TimedService {
     pub(crate) data: Channel,
     pub(crate) quality: TimeQuality,
     pub(crate) netstack: Option<Channel>,
+    pub(crate) scoped_network: bool,
     pub(crate) tls_trust: Option<Channel>,
     pub(crate) rtc: Option<Channel>,
     pub(crate) nts_state: nts::NtsCookieState,
@@ -96,6 +98,7 @@ impl TimedService {
                 state::default_quality()
             },
             netstack: None,
+            scoped_network: false,
             tls_trust: None,
             rtc: None,
             nts_state: nts::NtsCookieState::default(),
@@ -110,7 +113,13 @@ impl TimedService {
         };
         for grant in grants {
             match grant.service.as_str() {
-                "bexos.net.Netstack" => service.netstack = Some(Channel(grant.endpoint)),
+                "bexos.net.SocketProvider" => {
+                    service.netstack = Some(Channel(grant.endpoint));
+                    service.scoped_network = true;
+                }
+                "bexos.net.Netstack" if service.netstack.is_none() => {
+                    service.netstack = Some(Channel(grant.endpoint))
+                }
                 "bexos.security.trust.TlsTrustManager" => {
                     service.tls_trust = Some(Channel(grant.endpoint))
                 }
@@ -132,6 +141,7 @@ impl TimedService {
             data: Channel(0),
             quality: state::default_quality(),
             netstack: None,
+            scoped_network: false,
             tls_trust: None,
             rtc: None,
             nts_state: nts::NtsCookieState::default(),
@@ -370,6 +380,7 @@ impl TimedService {
             data: self.data,
             quality: self.quality,
             netstack: self.netstack,
+            scoped_network: self.scoped_network,
             tls_trust: self.tls_trust,
             rtc: self.rtc,
             nts_state: nts::NtsCookieState::default(),
@@ -529,22 +540,40 @@ impl TimedService {
         };
         let mut request = Vec::new();
         nts::encode_ke_request(&mut request);
-        let mut connector = NetstackConnector::new(netstack);
         let mut roots = RootConfigCache::new(tls_trust);
-        let stream = bexos_net::secure::TlsConnector::connect(
-            &mut connector,
-            &self.config.primary_server,
-            nts::NTS_KE_PORT,
-        )
-        .map_err(|_| Status::ErrNetworkUnreachable)?;
-        let (response, c2s, s2c) = bexos_net::secure::tls_exchange_with_exporters(
-            stream,
-            &mut roots,
-            &self.config.primary_server,
-            &[nts::NTS_ALPN],
-            &request,
-            8192,
-        )
+        let (response, c2s, s2c) = if self.scoped_network {
+            let mut connector = SocketProviderConnector::new(netstack);
+            let stream = bexos_net::secure::TlsConnector::connect(
+                &mut connector,
+                &self.config.primary_server,
+                nts::NTS_KE_PORT,
+            )
+            .map_err(|_| Status::ErrNetworkUnreachable)?;
+            bexos_net::secure::tls_exchange_with_exporters(
+                stream,
+                &mut roots,
+                &self.config.primary_server,
+                &[nts::NTS_ALPN],
+                &request,
+                8192,
+            )
+        } else {
+            let mut connector = NetstackConnector::new(netstack);
+            let stream = bexos_net::secure::TlsConnector::connect(
+                &mut connector,
+                &self.config.primary_server,
+                nts::NTS_KE_PORT,
+            )
+            .map_err(|_| Status::ErrNetworkUnreachable)?;
+            bexos_net::secure::tls_exchange_with_exporters(
+                stream,
+                &mut roots,
+                &self.config.primary_server,
+                &[nts::NTS_ALPN],
+                &request,
+                8192,
+            )
+        }
         .map_err(|_| Status::ErrNetworkUnreachable)?;
         self.nts_state = nts::adopt_ke_response(&response, &self.config.primary_server, c2s, s2c)?;
         Ok(())
@@ -558,24 +587,38 @@ impl TimedService {
         let Some(netstack) = self.netstack else {
             return Err(Status::ErrNetworkUnreachable);
         };
-        let mut client = net_fidl::NetstackPublicClient::new(Rpc(netstack));
         let mut request_bytes = [0; 512];
         let mut response_bytes = [0; 512];
         let mut request_handles = [HandleRef { raw: 0 }; 1];
         let mut response_handles = [HandleRef { raw: 0 }; 1];
-        let response: NetstackResolveHostResponse = client
-            .resolve_host(
-                &NetstackResolveHostRequest { hostname },
-                &mut request_bytes,
-                &mut request_handles,
-                &mut response_bytes,
-                &mut response_handles,
-            )
-            .map_err(|_| Status::ErrNetworkUnreachable)?;
-        if response.status != NetStatus::Ok {
+        let (status, address) = if self.scoped_network {
+            let response = net_fidl::SocketProviderPublicClient::new(Rpc(netstack))
+                .resolve_host(
+                    &SocketProviderResolveHostRequest { hostname },
+                    &mut request_bytes,
+                    &mut request_handles,
+                    &mut response_bytes,
+                    &mut response_handles,
+                )
+                .map_err(|_| Status::ErrNetworkUnreachable)?;
+            (response.status, response.addresses.get(0))
+        } else {
+            let response: NetstackResolveHostResponse =
+                net_fidl::NetstackPublicClient::new(Rpc(netstack))
+                    .resolve_host(
+                        &NetstackResolveHostRequest { hostname },
+                        &mut request_bytes,
+                        &mut request_handles,
+                        &mut response_bytes,
+                        &mut response_handles,
+                    )
+                    .map_err(|_| Status::ErrNetworkUnreachable)?;
+            (response.status, response.addresses.get(0))
+        };
+        if status != NetStatus::Ok {
             return Err(Status::ErrNetworkUnreachable);
         }
-        response.addresses.get(0).map_err(|_| Status::ErrNotFound)
+        address.map_err(|_| Status::ErrNotFound)
     }
 
     async fn open_udp_socket(&self) -> Result<UdpChannel, Status> {
@@ -584,29 +627,46 @@ impl TimedService {
         };
         let (client_end, server_end) = Channel::pair().map_err(|_| Status::ErrInvalidArgs)?;
         let client_end = UdpChannel(client_end);
-        let mut client = net_fidl::NetstackPublicClient::new(Rpc(netstack));
         let mut request_bytes = [0; 64];
         let mut response_bytes = [0; 16];
         let mut request_handles = [HandleRef { raw: 0 }; 1];
         let mut response_handles = [HandleRef { raw: 0 }; 1];
-        let response = client
-            .create_udp_socket(
-                &NetstackCreateUdpSocketRequest {
-                    options: SocketOptions {
-                        non_blocking: Some(true),
-                        keep_alive_ms: None,
-                        rx_buffer_size: Some(8192),
-                        tx_buffer_size: Some(8192),
+        let options = SocketOptions {
+            non_blocking: Some(true),
+            keep_alive_ms: None,
+            rx_buffer_size: Some(8192),
+            tx_buffer_size: Some(8192),
+        };
+        let status = if self.scoped_network {
+            net_fidl::SocketProviderPublicClient::new(Rpc(netstack))
+                .create_udp_socket(
+                    &SocketProviderCreateUdpSocketRequest {
+                        options,
+                        socket: HandleRef { raw: server_end.0 },
                     },
-                    socket: HandleRef { raw: server_end.0 },
-                },
-                &mut request_bytes,
-                &mut request_handles,
-                &mut response_bytes,
-                &mut response_handles,
-            )
-            .map_err(|_| Status::ErrNetworkUnreachable)?;
-        if response.status == NetStatus::Ok {
+                    &mut request_bytes,
+                    &mut request_handles,
+                    &mut response_bytes,
+                    &mut response_handles,
+                )
+                .map_err(|_| Status::ErrNetworkUnreachable)?
+                .status
+        } else {
+            net_fidl::NetstackPublicClient::new(Rpc(netstack))
+                .create_udp_socket(
+                    &NetstackCreateUdpSocketRequest {
+                        options,
+                        socket: HandleRef { raw: server_end.0 },
+                    },
+                    &mut request_bytes,
+                    &mut request_handles,
+                    &mut response_bytes,
+                    &mut response_handles,
+                )
+                .map_err(|_| Status::ErrNetworkUnreachable)?
+                .status
+        };
+        if status == NetStatus::Ok {
             Ok(client_end)
         } else {
             Err(Status::ErrNetworkUnreachable)

@@ -107,6 +107,44 @@ impl Netstack {
         Status::Ok
     }
 
+    pub fn connect_backend_tcp(
+        &mut self,
+        connection_id: u64,
+        remote: SocketAddress,
+        stream: u64,
+        link: Option<&mut PacketLink>,
+    ) -> Status {
+        let status = self.connect_tcp(connection_id, remote);
+        if status != Status::Ok {
+            let _ = bexos_userspace::Memory::close(stream);
+            return status;
+        }
+        if let Some(endpoint) = self.tcp_mut(connection_id) {
+            endpoint.stream = Some(bexos_userspace::Socket(stream));
+        }
+        let status = self.attach_tcp_to_link(connection_id, link);
+        if status != Status::Ok {
+            self.remove_backend_tcp(connection_id);
+        }
+        status
+    }
+
+    pub fn remove_backend_tcp(&mut self, connection_id: u64) -> bool {
+        let Some(index) = self
+            .tcp
+            .iter()
+            .position(|socket| socket.control == connection_id)
+        else {
+            return false;
+        };
+        let mut endpoint = self.tcp.remove(index);
+        if let (Some(runtime), Some(handle)) = (&mut self.smoltcp, endpoint.smoltcp_handle.take()) {
+            runtime.retire_tcp(handle);
+        }
+        endpoint.close();
+        true
+    }
+
     pub fn attach_tcp_to_link(&mut self, control: u64, link: Option<&mut PacketLink>) -> Status {
         let Some(link) = link else {
             return Status::ErrNetworkUnreachable;
@@ -165,6 +203,15 @@ impl Netstack {
         }
         self.udp.push(UdpEndpoint::new(control));
         Status::Ok
+    }
+
+    pub fn bind_udp(&mut self, control: u64, mut local: SocketAddress) -> Status {
+        if local.port == 0 {
+            local.port = self.allocate_port();
+        }
+        self.udp_mut(control)
+            .map(|udp| udp.bind(local))
+            .unwrap_or(Status::ErrNotFound)
     }
 
     pub fn tcp_mut(&mut self, control: u64) -> Option<&mut TcpEndpoint> {

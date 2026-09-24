@@ -153,6 +153,10 @@ message Process {
   repeated IntentFilter handles = 11;
   // Shell entrypoints are launched by the session broker, never boot waves.
   ShellRole shell_role = 12;
+  // Capability-selected RFC 68 network domain. An omitted value binds the
+  // process to the platform's system_default domain. Applications never
+  // receive or submit the backing routing table identifier.
+  optional string network_domain = 13;
 }
 
 enum ShellRole {

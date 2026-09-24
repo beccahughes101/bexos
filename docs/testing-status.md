@@ -19,6 +19,97 @@ successful GitHub-hosted run. Cache archive size/restoration, the 178-job
 runner fan-out, Trusty artifact reuse, and total main-branch duration remain to
 be measured by the first hosted main or manual run.
 
+## RFC 0068 networking and RFC 0061 routing (2026-09-24)
+
+The tree contains the multi-instance appd launch model, networkd routing and
+split resolver, netstackd VRF router/recovery journal, vswitchd virtual-port
+isolation, scoped client migrations, product archives, and QEMU topology
+described in the RFC current-state documents.
+
+The following host validation passed after the final networking, recovery,
+storage-capacity, and secure-monitor layout changes:
+
+```sh
+bazel test //tools/fidlc:fidlc_tests \
+  //lib/bexos_libc:bexos_libc_tests //lib/bexos_libc:internal_tests \
+  //lib/net:net_tests //lib/net_client:net_client_tests \
+  //lib/wasm_runtime:wasm_runtime_tests \
+  //services/wasm_runner:wasm_runner_tests //services/pkgd:tests \
+  //services/pkgd:migration_tests //services/timed:timed_tests \
+  //services/jobd:jobd_tests //services/jobd:migration_tests \
+  //services/appd:appd_tests //services/networkd:internal_tests \
+  //services/netstack:internal_tests //services/vswitchd:internal_tests \
+  //lib/network_policy:tests //:heart_transplant_coverage_test
+bazel test //secure/monitor:monitor_tests \
+  //secure/monitor:boot_verify_test //secure/monitor:nucleus_layout_test
+bazel test //tools/image:generate_gpt_disk_test
+bazel build //services/networkd:networkd_archive \
+  //services/networkd:replacement_archive \
+  //services/netstack:netstackd_archive \
+  //services/netstack:replacement_archive \
+  //services/vswitchd:vswitchd_archive \
+  //services/vswitchd:replacement_archive \
+  //testing/e2e/qemu/elf:probe_archive
+bazel build --config=x86_64 //services/networkd:networkd_archive \
+  //services/networkd:replacement_archive \
+  //services/netstack:netstackd_archive \
+  //services/netstack:replacement_archive \
+  //services/vswitchd:vswitchd_archive \
+  //services/vswitchd:replacement_archive \
+  //testing/e2e/qemu/elf:probe_archive
+bazel build //device/virtual/qemu/nongui:virtual_aarch64 \
+  //device/virtual/qemu/workstation:virtual_aarch64 \
+  //testing/e2e/qemu/elf:network_transplant_test_aarch64
+bazel build --config=x86_64 \
+  //device/virtual/qemu/nongui:virtual_x86_64 \
+  //device/virtual/qemu/workstation:virtual_x86_64 \
+  //testing/e2e/qemu/elf:network_transplant_test_x86_64
+bazel run @rules_rust//:rustfmt
+```
+
+The larger x86_64 service and replacement archives exposed that the previous
+320 MiB QEMU STORAGE partition could not retain two complete BexFS namespace
+snapshots. The QEMU-only STORAGE partition is now 512 MiB. The assembled x86
+BootFS also exceeded the monitor's former 160 MiB authenticated snapshot bound;
+the bound is now 168 MiB, the fixed firmware workspace moved upward by the same
+8 MiB without changing its size, and the independent resident-layout verifier
+passes for the resulting product ELF.
+
+The extended fixture prefers `SocketProvider` and replaces the physical VirtIO
+NIC, vswitchd, netstackd, and networkd while retaining one TCP stream. Its
+executables, replacement disk, and complete product images build for both
+architectures. The AArch64 live guest command
+
+```sh
+bazel test --test_tag_filters=requires-qemu \
+  //testing/e2e/qemu/elf:network_transplant_test_aarch64
+```
+
+does not reach BexOS: the current source-built Trusty/TF-A image asserts in
+`bl1/aarch64/bl1_context_mgmt.c:24`, and the harness reports its 120-second
+generation-1 boot stall. This is a pre-kernel firmware failure; no networking
+guest result is claimed.
+
+The gitignored x86 Trusty cache was refreshed successfully with
+`bazel run //third_party/trusty:refresh_x86_64_image`. The x86 live guest was
+then run with the normal watchdog and again with its supported 600-second stall
+override:
+
+```sh
+bazel test --config=x86_64 --test_tag_filters=requires-qemu \
+  //testing/e2e/qemu/elf:network_transplant_test_x86_64
+bazel test --config=x86_64 --test_tag_filters=requires-qemu \
+  --test_env=BEXOS_QEMU_STALL_TIMEOUT_SECONDS=600 \
+  //testing/e2e/qemu/elf:network_transplant_test_x86_64
+```
+
+Both runs passed UEFI Secure Boot and entered the authenticated resident
+monitor, then remained at `monitor-runtime: entering assigned Trusty domain`.
+The extended run exhausted the 600-second debug-boot deadline before the BexOS
+kernel started. This is the known cross-architecture x86 TCG boot limitation on
+this Apple Silicon host; no networking guest result is claimed. Guest acceptance
+still needs a host that can boot the corresponding secure firmware stack.
+
 ## E2E harness redesign (2026-09-24)
 
 The QEMU matrix now has required `presubmit`, `extended`, `focused`, or

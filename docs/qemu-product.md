@@ -21,6 +21,10 @@ Their image outputs and product names (`nongui_<arch>` / `workstation_<arch>`)
 are separate. Board identity refers to `base/<arch>`. Assembly and image
 helpers preserve the existing package contents and security configuration;
 workstation adds the portable `graphics` and QEMU `qemu_graphics` bundles.
+The base system image also includes networkd, netstackd, and vswitchd normal
+and replacement archives. Architecture-selected platform prototxt maps the
+current QEMU NIC through the `qemu-default` selector to virtual port 1, table
+zero, the `system_default` domain, a default FIB route, and QEMU DNS.
 The graphics bundle contains `splashd` and CPU `scened`; the QEMU graphics bundle
 contains the D1 VirtIO-GPU driver. These boot from BootFS and include replacement
 archives in graphical update storage.

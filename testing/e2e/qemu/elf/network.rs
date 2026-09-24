@@ -5,15 +5,23 @@ pub fn verify(startup: &Startup) {
     let grant = startup
         .service_grants
         .iter()
-        .find(|grant| grant.service == "bexos.net.Netstack")
+        .find(|grant| grant.service == "bexos.net.SocketProvider")
+        .or_else(|| {
+            startup
+                .service_grants
+                .iter()
+                .find(|grant| grant.service == "bexos.net.Netstack")
+        })
         .expect("network fixture grant");
-    let socket = bexos_net::secure::connect_tcp_addr(
-        Channel(grant.endpoint),
-        net_fidl::IpAddress::Ipv4(net_fidl::Ipv4Address {
-            octets: [10, 0, 2, 2],
-        }),
-        u16::try_from(startup.arg0 & 0xffff).unwrap(),
-    )
+    let address = net_fidl::IpAddress::Ipv4(net_fidl::Ipv4Address {
+        octets: [10, 0, 2, 2],
+    });
+    let port = u16::try_from(startup.arg0 & 0xffff).unwrap();
+    let socket = if grant.service == "bexos.net.SocketProvider" {
+        bexos_net::secure::connect_scoped_tcp_addr(Channel(grant.endpoint), address, port)
+    } else {
+        bexos_net::secure::connect_tcp_addr(Channel(grant.endpoint), address, port)
+    }
     .expect("connect to host echo fixture");
     let mut stream = bexos_net::secure::BexosSocketIo::new(socket);
     for block in 0..if startup.arg0 >> 32 == 1 { 16u8 } else { 8u8 } {

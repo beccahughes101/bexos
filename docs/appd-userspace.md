@@ -369,14 +369,31 @@ The current QEMU order is:
 - wave 1: NVMe;
 - wave 2: BexFS and archivefs;
 - wave 3: diskimage, vfsd, debugd, updated;
-- wave 4: powerd and usersd;
-- wave 5: netstackd and prefsd when storage preinstalls are available;
-- wave 6: timed when storage preinstalls are available;
+- wave 4: powerd, usersd, and vswitchd;
+- wave 5: per-isolation-group netstackd instances and prefsd when storage preinstalls are available;
+- wave 6: per-isolation-group networkd instances and timed when storage preinstalls are available;
 - wave 7: jobd.
 
 Keychaind is published as a dormant lazy provider instead of launching in a boot
 wave. Appd retains its package and capability records, and the first authorized
 Keychain service connection activates the `keychaind` singleton.
+
+## Network domains and instances
+
+Platform prototxt is authoritative for isolation groups, named domains, table
+ownership, resource templates, virtual ports, routes, and DNS upstreams. Appd
+creates a separate resource job and address space for every configured
+networkd/netstackd instance. Managed-service and watchdog identity is
+package/process/instance, so restart, update, cleanup, migration, and provider
+publication operate independently for each instance.
+
+An app process may declare `network_domain` in its prototxt manifest. Omission
+selects `system_default`; unknown or unauthorized domains and conflicting
+service filters fail launch without fallback. Appd binds `SocketProvider` to
+the selected domain in retained capability metadata. Only the default domain
+may consume the legacy `Netstack` service. Retained provider endpoints are
+replayed to the matching instance after restart, keeping client capabilities
+open while a provider is absent.
 
 ## Lifecycle And Debug
 

@@ -152,3 +152,55 @@ interface_defaults {
   package_name: "bexos.app.brush_shell"
   process_name: "terminal"
 }
+
+network_policy {
+  max_dynamic_providers: 64
+  resource_templates {
+    name: "system_network"
+    max_instances: 8
+    cpu_weight: 100
+    memory_high_bytes: 134217728
+  }
+  isolation_groups {
+    name: "system_default"
+    networkd_package: "bexos.service.networkd"
+    networkd_process: "networkd"
+    netstackd_package: "bexos.service.netstackd"
+    netstackd_process: "netstackd"
+    resource_template: "system_network"
+    table_ids: 0
+  }
+  domains {
+    name: "system_default"
+    isolation_group: "system_default"
+    table_id: 0
+    system_default: true
+  }
+  virtual_ports {
+    port_id: 1
+    isolation_group: "system_default"
+    table_id: 0
+    physical_selector: "qemu-default"
+    source_mac: "\x02\x00\x00\x00\x00\x01"
+    rx_queue_depth: 256
+    tx_queue_depth: 256
+  }
+  routes {
+    isolation_group: "system_default"
+    table_id: 0
+    destination { address: "\x00\x00\x00\x00" prefix_len: 0 }
+    gateway: "\x0a\x00\x02\x02"
+    interface_id: 1
+    metric: 100
+  }
+  dns_upstreams {
+    isolation_group: "system_default"
+    table_id: 0
+    provider: "system_default"
+    domain_suffix: "."
+    bootstrap_address: "\x0a\x00\x02\x03"
+    port: 53
+    transport: NETWORK_DNS_UDP53
+    priority: 100
+  }
+}

@@ -1,7 +1,13 @@
 load("//testing/e2e/qemu:qemu_e2e.bzl", "qemu_e2e_test", "qemu_development_e2e_test")
 
 def network_transplant_test(name, boot_data, development):
-    archives = ["//drivers/d1/nic/virtio/net:replacement_archive", "//services/netstack:replacement_archive", "//services/keychaind:replacement_archive"]
+    archives = [
+        "//drivers/d1/nic/virtio/net:replacement_archive",
+        "//services/vswitchd:replacement_archive",
+        "//services/netstack:replacement_archive",
+        "//services/networkd:replacement_archive",
+        "//services/keychaind:replacement_archive",
+    ]
     native.genrule(
         name = name + "_disk",
         srcs = [boot_data["disk"], boot_data["key"]] + archives,

@@ -95,6 +95,26 @@ impl TlsConnector for NetstackConnector {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct SocketProviderConnector {
+    provider: Channel,
+}
+
+impl SocketProviderConnector {
+    pub fn new(provider: Channel) -> Self {
+        Self { provider }
+    }
+}
+
+impl TlsConnector for SocketProviderConnector {
+    type Stream = BexosSocketIo;
+
+    fn connect(&mut self, host: &str, port: u16) -> Result<Self::Stream, NetError> {
+        let socket = connect_scoped_tcp(self.provider, host, port)?;
+        Ok(BexosSocketIo::new(socket))
+    }
+}
+
 pub fn connect_tls<S: Read + Write>(
     transport: S,
     host: &str,
@@ -355,6 +375,37 @@ fn connect_tcp(netstack: Channel, host: &str, port: u16) -> Result<Socket, NetEr
     connect_tcp_addr(netstack, address, port)
 }
 
+fn connect_scoped_tcp(provider: Channel, host: &str, port: u16) -> Result<Socket, NetError> {
+    let mut client = net_fidl::SocketProviderPublicClient::new(Rpc(provider));
+    let mut req = [0; 512];
+    let mut resp = [0; 512];
+    let mut req_handles = [NetHandleRef { raw: 0 }; 2];
+    let mut resp_handles = [NetHandleRef { raw: 0 }; 2];
+    let (client_end, server_end) = Channel::pair().map_err(|_| NetError::Network)?;
+    let connected = client
+        .connect_tcp(
+            &net_fidl::SocketProviderConnectTcpRequest {
+                target: net_fidl::Endpoint::Domain(net_fidl::DomainEndpoint { host, port }),
+                options: SocketOptions {
+                    non_blocking: Some(false),
+                    keep_alive_ms: Some(0),
+                    rx_buffer_size: Some(64 * 1024),
+                    tx_buffer_size: Some(64 * 1024),
+                },
+                socket: NetHandleRef { raw: server_end.0 },
+            },
+            &mut req,
+            &mut req_handles,
+            &mut resp,
+            &mut resp_handles,
+        )
+        .map_err(|_| NetError::Network)?;
+    if connected.status != NetStatus::Ok {
+        return Err(NetError::Network);
+    }
+    tcp_get_stream(client_end)
+}
+
 pub fn connect_tcp_addr(
     netstack: Channel,
     address: IpAddress,
@@ -382,6 +433,44 @@ pub fn connect_tcp_addr(
     let connected = client
         .connect_tcp(
             &request,
+            &mut req,
+            &mut req_handles,
+            &mut resp,
+            &mut resp_handles,
+        )
+        .map_err(|_| NetError::Network)?;
+    if connected.status != NetStatus::Ok {
+        return Err(NetError::Network);
+    }
+    tcp_get_stream(client_end)
+}
+
+pub fn connect_scoped_tcp_addr(
+    provider: Channel,
+    address: IpAddress,
+    port: u16,
+) -> Result<Socket, NetError> {
+    let mut client = net_fidl::SocketProviderPublicClient::new(Rpc(provider));
+    let mut req = [0; 512];
+    let mut resp = [0; 512];
+    let mut req_handles = [NetHandleRef { raw: 0 }; 2];
+    let mut resp_handles = [NetHandleRef { raw: 0 }; 2];
+    let (client_end, server_end) = Channel::pair().map_err(|_| NetError::Network)?;
+    let connected = client
+        .connect_tcp(
+            &net_fidl::SocketProviderConnectTcpRequest {
+                target: net_fidl::Endpoint::Ip(SocketAddress {
+                    addr: address,
+                    port,
+                }),
+                options: SocketOptions {
+                    non_blocking: Some(false),
+                    keep_alive_ms: Some(0),
+                    rx_buffer_size: Some(64 * 1024),
+                    tx_buffer_size: Some(64 * 1024),
+                },
+                socket: NetHandleRef { raw: server_end.0 },
+            },
             &mut req,
             &mut req_handles,
             &mut resp,

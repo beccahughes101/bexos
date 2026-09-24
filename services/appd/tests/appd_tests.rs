@@ -21,14 +21,15 @@ use bexos_appd::{
     DriverRecoveryBudget, ElfError, ExposedService, FakeKernelOps, FidlCapability,
     HardwareAccessTier, HardwareResourceKind, HardwareResourceLease, ImmediateReadiness,
     InterfaceQuery, KernelHandle, KernelOperation, LaunchError, LaunchRequest, Lifecycle, LinkType,
-    Manifest, Metadata, MethodDependency, MultiVersionPolicy, PackageIdentity, PackageImage,
-    PackageImageError, PackageImageResolver, PackageKind, PackageLibrary, PackageLibraryDependency,
-    PackageLibraryKind, PackageTrustTier, ParsedElf, PermissionDecision, PermissionDeclaration,
-    PermissionRequirement, PermissionRoute, PermissionRouteTable, PermissionValueGrant,
-    PlatformConfig, ProcessRunnerOptions, ReadinessError, ReadinessGate, RecoveryDecision,
-    RegisteredDeviceNode, RegistryError, ResourceGroup, RunnerPolicyDecision, RunnerRegistry,
-    SYSTEM_PRIVILEGED_PERMISSION, SemVer, ServiceActivation, ServiceContract, SnapshotError,
-    StartupClass, StartupError, Visibility, allowed_capabilities, publish_kernel_services,
+    Manifest, Metadata, MethodDependency, MultiVersionPolicy, NetworkDomain, NetworkPolicy,
+    PackageIdentity, PackageImage, PackageImageError, PackageImageResolver, PackageKind,
+    PackageLibrary, PackageLibraryDependency, PackageLibraryKind, PackageTrustTier, ParsedElf,
+    PermissionDecision, PermissionDeclaration, PermissionRequirement, PermissionRoute,
+    PermissionRouteTable, PermissionValueGrant, PlatformConfig, ProcessRunnerOptions,
+    ReadinessError, ReadinessGate, RecoveryDecision, RegisteredDeviceNode, RegistryError,
+    ResourceGroup, RunnerPolicyDecision, RunnerRegistry, SYSTEM_PRIVILEGED_PERMISSION, SemVer,
+    ServiceActivation, ServiceContract, SnapshotError, StartupClass, StartupError, Visibility,
+    allowed_capabilities, publish_kernel_services,
 };
 use bexos_kernel_core::ipc::Capability;
 use bexos_userspace::live_migration::State;
@@ -66,6 +67,50 @@ const TEST_TLS_BASE: u64 = 0xbe00_0000;
 const TEST_LIBRARY_BASE: u64 = 0xc000_0000;
 
 struct FailingBundleFetcher;
+
+#[test]
+fn network_domain_authorization_is_fail_closed() {
+    let policy = NetworkPolicy {
+        domains: vec![
+            NetworkDomain {
+                name: "system_default".into(),
+                isolation_group: "system_default".into(),
+                table_id: 0,
+                system_default: true,
+                authorized_packages: Vec::new(),
+            },
+            NetworkDomain {
+                name: "corp".into(),
+                isolation_group: "isolated".into(),
+                table_id: 7,
+                system_default: false,
+                authorized_packages: vec!["bexos.app.allowed".into()],
+            },
+        ],
+        ..NetworkPolicy::default()
+    };
+
+    assert!(
+        policy
+            .authorize_domain("bexos.app.any", "system_default")
+            .is_some()
+    );
+    assert!(
+        policy
+            .authorize_domain("bexos.app.allowed", "corp")
+            .is_some()
+    );
+    assert!(
+        policy
+            .authorize_domain("bexos.app.denied", "corp")
+            .is_none()
+    );
+    assert!(
+        policy
+            .authorize_domain("bexos.app.allowed", "unknown")
+            .is_none()
+    );
+}
 
 impl bexos_appd::WellKnownFetcher for FailingBundleFetcher {
     fn fetch_well_known(&mut self, _domain: &str) -> Result<Vec<u8>, bexos_appd::WebInstallError> {
@@ -147,6 +192,7 @@ fn watchdog_promotes_after_probation_survival() {
     let mut record = bexos_appd::watchdog::WatchdogRecord::new(
         "com.example:demo".into(),
         "main".into(),
+        String::new(),
         1,
         semver(1, 0, 0),
         0,
@@ -167,6 +213,7 @@ fn watchdog_rolls_back_on_probation_exit_or_third_healthy_exit() {
     let mut probation = bexos_appd::watchdog::WatchdogRecord::new(
         "com.example:demo".into(),
         "main".into(),
+        String::new(),
         1,
         semver(1, 1, 0),
         0,
@@ -180,6 +227,7 @@ fn watchdog_rolls_back_on_probation_exit_or_third_healthy_exit() {
     let mut healthy = bexos_appd::watchdog::WatchdogRecord::new(
         "com.example:demo".into(),
         "main".into(),
+        String::new(),
         1,
         semver(1, 1, 0),
         0,
@@ -205,6 +253,7 @@ fn watchdog_resets_counter_after_full_crash_free_window_and_checkpoints() {
     let mut record = bexos_appd::watchdog::WatchdogRecord::new(
         "com.example:demo".into(),
         "main".into(),
+        String::new(),
         1,
         semver(1, 1, 0),
         0,
@@ -4303,6 +4352,7 @@ fn launch_manifest() -> Manifest {
                 ..Default::default()
             },
             resource_group: None,
+            network_domain: None,
             shell_role: Default::default(),
             handles: Vec::new(),
         }],
@@ -4435,6 +4485,7 @@ fn wave_manifest(package_name: &str, processes: &[(&str, Option<u32>)]) -> Manif
                 wave: *wave,
                 lifecycle: Default::default(),
                 resource_group: None,
+                network_domain: None,
                 shell_role: Default::default(),
                 handles: Vec::new(),
             })
@@ -4502,6 +4553,7 @@ fn nvme_driver_manifest(package_name: &str, wave: u32, vendor_specific: bool) ->
             wave: Some(wave),
             lifecycle: Default::default(),
             resource_group: None,
+            network_domain: None,
             shell_role: Default::default(),
             handles: Vec::new(),
         }],
@@ -4562,6 +4614,7 @@ fn peripheral_driver_manifest(
                 ..Default::default()
             },
             resource_group: None,
+            network_domain: None,
             shell_role: Default::default(),
             handles: Vec::new(),
         }],

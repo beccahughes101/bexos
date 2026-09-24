@@ -69,7 +69,23 @@ pub fn connect_with_timeout(
     // Construct the owner before returning the future, including for callers
     // that cancel without ever polling it.
     let channel = OwnedChannel(channel);
-    crate::async_http::with_deadline(connect_inner(channel, host, port, timeout_ms), timeout_ms)
+    crate::async_http::with_deadline(
+        connect_inner(channel, host, port, timeout_ms, false),
+        timeout_ms,
+    )
+}
+
+pub fn connect_scoped_with_timeout(
+    channel: Channel,
+    host: &str,
+    port: u16,
+    timeout_ms: u64,
+) -> impl core::future::Future<Output = Result<BexosSocketIo, NetError>> + '_ {
+    let channel = OwnedChannel(channel);
+    crate::async_http::with_deadline(
+        connect_inner(channel, host, port, timeout_ms, true),
+        timeout_ms,
+    )
 }
 
 async fn connect_inner(
@@ -77,63 +93,92 @@ async fn connect_inner(
     host: &str,
     port: u16,
     timeout_ms: u64,
+    scoped: bool,
 ) -> Result<BexosSocketIo, NetError> {
-    let address = if let Ok(ip) = host.parse::<std::net::Ipv4Addr>() {
-        net_fidl::IpAddress::Ipv4(net_fidl::Ipv4Address {
+    let address = if scoped {
+        None
+    } else if let Ok(ip) = host.parse::<std::net::Ipv4Addr>() {
+        Some(net_fidl::IpAddress::Ipv4(net_fidl::Ipv4Address {
             octets: ip.octets(),
-        })
+        }))
     } else {
-        crate::async_http::with_deadline(
-            async {
-                loop {
-                    let reply = call(
-                        channel.0,
-                        4,
-                        &net_fidl::NetstackResolveHostRequest { hostname: host },
-                        timeout_ms,
-                    )
-                    .await?;
-                    if !reply.0.handles.is_empty() {
-                        return Err(NetError::Network);
+        Some(
+            crate::async_http::with_deadline(
+                async {
+                    loop {
+                        let reply = call(
+                            channel.0,
+                            4,
+                            &net_fidl::NetstackResolveHostRequest { hostname: host },
+                            timeout_ms,
+                        )
+                        .await?;
+                        if !reply.0.handles.is_empty() {
+                            return Err(NetError::Network);
+                        }
+                        let resolved =
+                            net_fidl::NetstackResolveHostResponse::decode(&reply.0.bytes, &[])
+                                .map_err(|_| NetError::Network)?;
+                        if resolved.status == Status::ErrShouldWait {
+                            continue;
+                        }
+                        if resolved.status != Status::Ok {
+                            return Err(NetError::Network);
+                        }
+                        return resolved.addresses.get(0).map_err(|_| NetError::Network);
                     }
-                    let resolved =
-                        net_fidl::NetstackResolveHostResponse::decode(&reply.0.bytes, &[])
-                            .map_err(|_| NetError::Network)?;
-                    if resolved.status == Status::ErrShouldWait {
-                        continue;
-                    }
-                    if resolved.status != Status::Ok {
-                        return Err(NetError::Network);
-                    }
-                    return resolved.addresses.get(0).map_err(|_| NetError::Network);
-                }
+                },
+                timeout_ms,
+            )
+            .await?,
+        )
+    };
+    let (control, server) = Channel::pair().map_err(|_| NetError::Network)?;
+    let mut control = OwnedChannel(control);
+    let options = net_fidl::SocketOptions {
+        non_blocking: Some(true),
+        keep_alive_ms: Some(0),
+        rx_buffer_size: Some(64 * 1024),
+        tx_buffer_size: Some(64 * 1024),
+    };
+    let reply = if scoped {
+        call(
+            channel.0,
+            1,
+            &net_fidl::SocketProviderConnectTcpRequest {
+                target: net_fidl::Endpoint::Domain(net_fidl::DomainEndpoint { host, port }),
+                options,
+                socket: HandleRef { raw: server.0 },
+            },
+            timeout_ms,
+        )
+        .await?
+    } else {
+        call(
+            channel.0,
+            1,
+            &net_fidl::NetstackConnectTcpRequest {
+                remote_addr: net_fidl::SocketAddress {
+                    addr: address.expect("legacy resolution produced address"),
+                    port,
+                },
+                options,
+                socket: HandleRef { raw: server.0 },
             },
             timeout_ms,
         )
         .await?
     };
-    let (control, server) = Channel::pair().map_err(|_| NetError::Network)?;
-    let mut control = OwnedChannel(control);
-    let request = net_fidl::NetstackConnectTcpRequest {
-        remote_addr: net_fidl::SocketAddress {
-            addr: address,
-            port,
-        },
-        options: net_fidl::SocketOptions {
-            non_blocking: Some(true),
-            keep_alive_ms: Some(0),
-            rx_buffer_size: Some(64 * 1024),
-            tx_buffer_size: Some(64 * 1024),
-        },
-        socket: HandleRef { raw: server.0 },
-    };
-    let reply = call(channel.0, 1, &request, timeout_ms).await?;
-    if !reply.0.handles.is_empty()
-        || net_fidl::NetstackConnectTcpResponse::decode(&reply.0.bytes, &[])
+    let status = if scoped {
+        net_fidl::SocketProviderConnectTcpResponse::decode(&reply.0.bytes, &[])
             .map_err(|_| NetError::Network)?
             .status
-            != Status::Ok
-    {
+    } else {
+        net_fidl::NetstackConnectTcpResponse::decode(&reply.0.bytes, &[])
+            .map_err(|_| NetError::Network)?
+            .status
+    };
+    if !reply.0.handles.is_empty() || status != Status::Ok {
         return Err(NetError::Network);
     }
     let mut reply = call(

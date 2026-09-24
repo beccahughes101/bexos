@@ -38,6 +38,7 @@ pub async fn main(channel: u64) -> ! {
         grants.vfsd,
         grants.power,
         grants.netstack,
+        grants.scoped_network,
         grants.timed,
         grants.usersd,
         grants.clock,
@@ -204,6 +205,7 @@ struct StartupGrants {
     vfsd: Option<Channel>,
     power: Option<Channel>,
     netstack: Option<Channel>,
+    scoped_network: bool,
     timed: Option<Channel>,
     usersd: Option<Channel>,
     clock: bool,
@@ -216,6 +218,7 @@ impl StartupGrants {
             vfsd: None,
             power: None,
             netstack: None,
+            scoped_network: false,
             timed: None,
             usersd: None,
             clock: false,
@@ -225,7 +228,13 @@ impl StartupGrants {
                 "WorkerLauncher" => grants.worker_launcher = Some(Channel(grant.endpoint)),
                 "bexos.service.vfsd" => grants.vfsd = Some(Channel(grant.endpoint)),
                 "bexos.power.PowerManager" => grants.power = Some(Channel(grant.endpoint)),
-                "bexos.net.Netstack" => grants.netstack = Some(Channel(grant.endpoint)),
+                "bexos.net.SocketProvider" => {
+                    grants.netstack = Some(Channel(grant.endpoint));
+                    grants.scoped_network = true;
+                }
+                "bexos.net.Netstack" if !grants.scoped_network => {
+                    grants.netstack = Some(Channel(grant.endpoint));
+                }
                 "bexos.time.TimeManager" => grants.timed = Some(Channel(grant.endpoint)),
                 "bexos.user.UserManager" => grants.usersd = Some(Channel(grant.endpoint)),
                 "bexos.kernel.Clock" => grants.clock = true,
@@ -245,8 +254,17 @@ impl StartupGrants {
         if runtime.power.is_none() {
             runtime.power = self.power;
         }
-        if runtime.netstack.is_none() {
+        if self.scoped_network {
+            if let Some(previous) = runtime
+                .netstack
+                .replace(self.netstack.expect("scoped grant"))
+            {
+                let _ = bexos_userspace::Memory::close(previous.0);
+            }
+            runtime.scoped_network = true;
+        } else if runtime.netstack.is_none() {
             runtime.netstack = self.netstack;
+            runtime.scoped_network = false;
         }
         if runtime.timed.is_none() {
             runtime.timed = self.timed;

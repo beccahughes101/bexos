@@ -127,12 +127,13 @@ config_schema {
  }
 }
 services_exposed {
- name: "bexos.net.Netstack"
+ name: "bexos.net.NetstackBackend"
  protocol: "Netstack"
- lifecycle: SINGLETON
+ lifecycle: MULTIPLE_INSTANCE
  visibility: PUBLIC
+ metadata { key: "network.instance" value: "system_default" }
  capabilities {
-  capability: "Public"
+  capability: "Backend"
   method_ordinals: 1
   method_ordinals: 2
   method_ordinals: 3
@@ -141,15 +142,41 @@ services_exposed {
   method_ordinals: 6
  }
 }
-services_consumed {
- name: "bexos.hardware.ethernet.Device"
- link_type: REQUIRED
+services_exposed {
+ name: "bexos.net.StackBackend"
+ protocol: "StackBackend"
+ lifecycle: MULTIPLE_INSTANCE
+ visibility: PUBLIC
+ bind_permission: "BEXOS_SYSTEM_PRIVILEGED"
+ metadata { key: "network.instance" value: "system_default" }
  capabilities {
-  capability: "Public"
-  methods { ordinal: 1 link_type: REQUIRED }
-  methods { ordinal: 2 link_type: REQUIRED }
-  methods { ordinal: 4 link_type: REQUIRED }
-  methods { ordinal: 5 link_type: REQUIRED }
+  capability: "Backend"
+  method_ordinals: 1
+  method_ordinals: 2
+  method_ordinals: 3
+  method_ordinals: 4
+  method_ordinals: 5
+  method_ordinals: 6
+  method_ordinals: 7
+  method_ordinals: 8
+  method_ordinals: 9
+ }
+}
+services_exposed {
+ name: "bexos.net.StackController"
+ protocol: "StackController"
+ lifecycle: MULTIPLE_INSTANCE
+ visibility: PUBLIC
+ bind_permission: "BEXOS_SYSTEM_PRIVILEGED"
+ metadata { key: "network.instance" value: "system_default" }
+ capabilities {
+  capability: "Control"
+  method_ordinals: 1
+  method_ordinals: 2
+  method_ordinals: 3
+  method_ordinals: 4
+  method_ordinals: 5
+  method_ordinals: 6
  }
 }
 services_consumed {

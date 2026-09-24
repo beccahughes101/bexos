@@ -2,20 +2,35 @@ use alloc::format;
 use alloc::vec::Vec;
 use bexos_userspace::live_migration::Source;
 use bexos_userspace::service_binding::{BoundServiceEndpoint, ServiceBinding};
-use bexos_userspace::{Channel, Startup, log};
+use bexos_userspace::{Channel, Memory, Startup, log};
 use net_fidl::{
-    FidlDecode, FidlEncode, HandleRef, IpAddress, Ipv4Address, Ipv6Address, LinkStatus,
-    LinkWatcherOnLinkStatusRequest, LinkWatcherPublicClient, NetstackConnectTcpRequest,
+    BackendControlKind, FidlDecode, FidlEncode, HandleRef, IpAddress, Ipv4Address, Ipv6Address,
+    LinkStatus, LinkWatcherOnLinkStatusRequest, LinkWatcherPublicClient, NetstackConnectTcpRequest,
     NetstackConnectTcpResponse, NetstackCreateUdpSocketRequest, NetstackCreateUdpSocketResponse,
     NetstackGetLinkStatusRequest, NetstackGetLinkStatusResponse, NetstackListenTcpRequest,
     NetstackListenTcpResponse, NetstackResolveHostRequest, NetstackResolveHostResponse,
-    NetstackWatchLinkStatusRequest, NetstackWatchLinkStatusResponse, Status,
-    TcpListenerAcceptRequest, TcpListenerAcceptResponse, TcpListenerCloseRequest,
-    TcpListenerGetInfoRequest, TcpListenerGetInfoResponse, TcpSocketCloseRequest,
-    TcpSocketGetLocalAddressRequest, TcpSocketGetLocalAddressResponse,
-    TcpSocketGetPeerAddressRequest, TcpSocketGetPeerAddressResponse, TcpSocketGetStreamRequest,
-    TcpSocketGetStreamResponse, TcpSocketShutdownRequest, TcpSocketShutdownResponse,
-    UdpSocketBindRequest, UdpSocketBindResponse, UdpSocketCloseRequest, UdpSocketGetInfoRequest,
+    NetstackWatchLinkStatusRequest, NetstackWatchLinkStatusResponse,
+    StackBackendAdoptRecoveryRequest, StackBackendAdoptRecoveryResponse,
+    StackBackendCheckpointRecoveryRequest, StackBackendCheckpointRecoveryResponse,
+    StackBackendCloseRequest, StackBackendCloseResponse, StackBackendConnectTcpRequest,
+    StackBackendConnectTcpResponse, StackBackendCreateUdpSocketRequest,
+    StackBackendCreateUdpSocketResponse, StackBackendListenTcpRequest,
+    StackBackendListenTcpResponse, StackBackendRecoverConnectionRequest,
+    StackBackendRecoverConnectionResponse, StackBackendRecoverControlRequest,
+    StackBackendRecoverControlResponse, StackBackendResolveHostRequest,
+    StackBackendResolveHostResponse, StackControllerAddRouteRequest,
+    StackControllerAddRouteResponse, StackControllerAttachInterfaceRequest,
+    StackControllerAttachInterfaceResponse, StackControllerCreateTableRequest,
+    StackControllerCreateTableResponse, StackControllerDetachInterfaceRequest,
+    StackControllerDetachInterfaceResponse, StackControllerRemoveRouteRequest,
+    StackControllerRemoveRouteResponse, StackControllerRemoveTableRequest,
+    StackControllerRemoveTableResponse, Status, TcpListenerAcceptRequest,
+    TcpListenerAcceptResponse, TcpListenerCloseRequest, TcpListenerGetInfoRequest,
+    TcpListenerGetInfoResponse, TcpSocketCloseRequest, TcpSocketGetLocalAddressRequest,
+    TcpSocketGetLocalAddressResponse, TcpSocketGetPeerAddressRequest,
+    TcpSocketGetPeerAddressResponse, TcpSocketGetStreamRequest, TcpSocketGetStreamResponse,
+    TcpSocketShutdownRequest, TcpSocketShutdownResponse, UdpSocketBindRequest,
+    UdpSocketBindResponse, UdpSocketCloseRequest, UdpSocketGetInfoRequest,
     UdpSocketGetInfoResponse, UdpSocketRecvFromRequest, UdpSocketRecvFromResponse,
     UdpSocketSendToRequest, UdpSocketSendToResponse,
 };
@@ -25,6 +40,7 @@ use crate::dns::DnsRecord;
 use crate::ethernet;
 use crate::link::PacketLink;
 use crate::migration::{NodeLink, Runtime};
+use crate::router::{FibRoute as RouterFibRoute, InterfaceState, Router, TableQuota};
 use crate::stack::{Netstack, empty_addr};
 
 pub async fn main(channel: u64) -> ! {
@@ -83,6 +99,7 @@ pub async fn main(channel: u64) -> ! {
                 .ok()
         })
         .collect();
+    let active = config.clone().choose_active(None);
     let stack = Netstack::new(config, None);
     log_ready(
         &stack,
@@ -96,8 +113,13 @@ pub async fn main(channel: u64) -> ! {
         migration: startup.migration,
         tls_trust,
         clients: Vec::new(),
+        backend_clients: Vec::new(),
+        controller_clients: Vec::new(),
+        backend_connections: alloc::collections::BTreeMap::new(),
+        backend_controls: alloc::collections::BTreeMap::new(),
         link_watchers: Vec::new(),
         stack,
+        router: Router::new(active),
         links,
         generation: 0,
     })
@@ -137,6 +159,7 @@ async fn serve(mut runtime: Runtime) -> ! {
                     .poll_secondary_packet_plane(&mut node_link.link);
             }
         }
+        runtime.router.poll_packet_planes();
         if had_links != runtime.links.len() {
             notify_link_watchers(
                 &mut runtime.link_watchers,
@@ -164,6 +187,30 @@ async fn serve(mut runtime: Runtime) -> ! {
                             binding.method_ordinals,
                         ));
                         source.changed(0);
+                    } else if binding.protocol_is("StackBackend")
+                        && binding.caller_package.as_deref() == Some("bexos.service.networkd")
+                    {
+                        runtime
+                            .backend_clients
+                            .push(BoundServiceEndpoint::new_with_protocol(
+                                Channel(endpoint),
+                                binding.method_ordinals,
+                                "StackBackend",
+                            ));
+                        source.changed(0);
+                    } else if binding.protocol_is("StackController")
+                        && binding.caller_package.as_deref() == Some("bexos.service.networkd")
+                    {
+                        runtime
+                            .controller_clients
+                            .push(BoundServiceEndpoint::new_with_protocol(
+                                Channel(endpoint),
+                                binding.method_ordinals,
+                                "StackController",
+                            ));
+                        source.changed(0);
+                    } else {
+                        let _ = bexos_userspace::Memory::close(endpoint);
                     }
                 } else if metadata_protocol(metadata) == Some("Netstack") {
                     let _ = bexos_userspace::Memory::close(endpoint);
@@ -173,22 +220,28 @@ async fn serve(mut runtime: Runtime) -> ! {
         // Every class must be polled even when another one made progress.
         // Short-circuiting here lets repeated directory/DNS activity starve
         // TCP setup, stream control and cancellation indefinitely.
-        let Runtime {
-            clients,
-            link_watchers,
-            stack,
-            links,
-            ..
-        } = &mut runtime;
-        let mut changed = poll_netstack_clients(
-            clients,
-            link_watchers,
-            stack,
-            links.first_mut().map(|link| &mut link.link),
-        );
-        changed |= poll_tcp_clients(&mut runtime.stack);
-        changed |= poll_listener_clients(&mut runtime.stack);
-        changed |= poll_udp_clients(&mut runtime.stack);
+        let mut changed = {
+            let Runtime {
+                clients,
+                link_watchers,
+                router,
+                ..
+            } = &mut runtime;
+            let default_table = router.tables.get_mut(&0).expect("default VRF table");
+            poll_netstack_clients(
+                clients,
+                link_watchers,
+                &mut default_table.stack,
+                default_table.links.values_mut().next(),
+            )
+        };
+        changed |= poll_backend_clients(&mut runtime);
+        changed |= poll_controller_clients(&mut runtime);
+        for table in runtime.router.tables.values_mut() {
+            changed |= poll_tcp_clients(&mut table.stack);
+            changed |= poll_listener_clients(&mut table.stack);
+            changed |= poll_udp_clients(&mut table.stack);
+        }
         if changed {
             source.changed(0);
         }
@@ -310,6 +363,412 @@ fn poll_netstack_clients(
         Err(_) => true,
     });
     changed
+}
+
+fn poll_backend_clients(runtime: &mut Runtime) -> bool {
+    let mut changed = false;
+    let mut clients = core::mem::take(&mut runtime.backend_clients);
+    clients.retain(|client| match client.channel.try_recv() {
+        Ok(message) => {
+            changed = true;
+            let (ordinal, req) = envelope(&message.bytes);
+            let handles = handle_refs(&message.handles);
+            if !client.allows(ordinal) {
+                close_handles(&message.handles);
+                return true;
+            }
+            match ordinal {
+                1 => {
+                    let response = StackBackendConnectTcpRequest::decode(req, &handles)
+                        .map(|request| {
+                            let status = runtime.router.connect_tcp_with_stream(
+                                request.table.value,
+                                request.connection_id,
+                                request.remote_addr,
+                                request.stream.raw,
+                            );
+                            if status == Status::Ok {
+                                runtime
+                                    .backend_connections
+                                    .insert(request.connection_id, request.table.value);
+                            }
+                            StackBackendConnectTcpResponse { status }
+                        })
+                        .unwrap_or(StackBackendConnectTcpResponse {
+                            status: Status::ErrInvalidArgs,
+                        });
+                    reply(client.channel, &response);
+                }
+                2 => {
+                    let response = StackBackendListenTcpRequest::decode(req, &handles)
+                        .map(|request| {
+                            let status = runtime.router.listen_tcp(
+                                request.table.value,
+                                request.listener.raw,
+                                request.local_addr,
+                            );
+                            if status == Status::Ok {
+                                runtime
+                                    .backend_connections
+                                    .insert(request.listener_id, request.table.value);
+                                runtime
+                                    .backend_controls
+                                    .insert(request.listener_id, (1, request.listener.raw));
+                            } else {
+                                let _ = bexos_userspace::Memory::close(request.listener.raw);
+                            }
+                            StackBackendListenTcpResponse { status }
+                        })
+                        .unwrap_or(StackBackendListenTcpResponse {
+                            status: Status::ErrInvalidArgs,
+                        });
+                    reply(client.channel, &response);
+                }
+                3 => {
+                    let response = StackBackendCloseRequest::decode(req, &handles)
+                        .map(|request| {
+                            let known = runtime.backend_connections.remove(&request.object_id);
+                            runtime.backend_controls.remove(&request.object_id);
+                            let mut status = if runtime.stack.remove_backend_tcp(request.object_id)
+                            {
+                                Status::Ok
+                            } else {
+                                runtime.router.close_object(request.object_id)
+                            };
+                            if status == Status::ErrNotFound && known.is_some() {
+                                status = Status::Ok;
+                            }
+                            StackBackendCloseResponse { status }
+                        })
+                        .unwrap_or(StackBackendCloseResponse {
+                            status: Status::ErrInvalidArgs,
+                        });
+                    reply(client.channel, &response);
+                }
+                4 => {
+                    let response = match StackBackendAdoptRecoveryRequest::decode(req, &handles) {
+                        Ok(request) => {
+                            let adopted = crate::recovery::adopt(
+                                runtime,
+                                request.journal.raw,
+                                request.journal_len,
+                                request.expected_generation,
+                            );
+                            let status = adopted.map_or_else(|status| status, |_| Status::Ok);
+                            let _ = bexos_userspace::Memory::close(request.journal.raw);
+                            StackBackendAdoptRecoveryResponse {
+                                status,
+                                adopted_generation: adopted.unwrap_or(0),
+                            }
+                        }
+                        Err(_) => StackBackendAdoptRecoveryResponse {
+                            status: Status::ErrInvalidArgs,
+                            adopted_generation: 0,
+                        },
+                    };
+                    reply(client.channel, &response);
+                }
+                5 => {
+                    let response = StackBackendCreateUdpSocketRequest::decode(req, &handles)
+                        .map(|request| {
+                            let status = runtime
+                                .router
+                                .create_udp(request.table.value, request.socket.raw);
+                            if status == Status::Ok {
+                                runtime
+                                    .backend_connections
+                                    .insert(request.object_id, request.table.value);
+                                runtime
+                                    .backend_controls
+                                    .insert(request.object_id, (2, request.socket.raw));
+                            } else {
+                                let _ = bexos_userspace::Memory::close(request.socket.raw);
+                            }
+                            StackBackendCreateUdpSocketResponse { status }
+                        })
+                        .unwrap_or(StackBackendCreateUdpSocketResponse {
+                            status: Status::ErrInvalidArgs,
+                        });
+                    reply(client.channel, &response);
+                }
+                6 => match StackBackendResolveHostRequest::decode(req, &handles) {
+                    Ok(request) => {
+                        let response = runtime
+                            .router
+                            .table_mut(request.table.value)
+                            .map(|table| {
+                                let mut interfaces =
+                                    table.links.keys().copied().collect::<Vec<_>>();
+                                interfaces.sort_unstable();
+                                let link = interfaces
+                                    .first()
+                                    .and_then(|interface| table.links.get_mut(interface));
+                                resolve_host(&mut table.stack, link, request.hostname)
+                            })
+                            .unwrap_or_else(|| (Status::ErrNotFound, Vec::new()));
+                        reply(
+                            client.channel,
+                            &StackBackendResolveHostResponse {
+                                status: response.0,
+                                addresses: net_fidl::WireVector::from_slice(&response.1),
+                            },
+                        );
+                    }
+                    Err(_) => reply(
+                        client.channel,
+                        &StackBackendResolveHostResponse {
+                            status: Status::ErrInvalidArgs,
+                            addresses: net_fidl::WireVector::from_slice(&[]),
+                        },
+                    ),
+                },
+                7 => {
+                    let response =
+                        match StackBackendCheckpointRecoveryRequest::decode(req, &handles) {
+                            Ok(request) if runtime.generation >= request.minimum_generation => {
+                                let previous = runtime.generation;
+                                runtime.generation = runtime.generation.saturating_add(1);
+                                match crate::recovery::checkpoint(runtime, runtime.generation) {
+                                    Ok((journal, journal_len)) => {
+                                        StackBackendCheckpointRecoveryResponse {
+                                            status: Status::Ok,
+                                            journal: HandleRef { raw: journal },
+                                            journal_len,
+                                            generation: runtime.generation,
+                                        }
+                                    }
+                                    Err(status) => {
+                                        runtime.generation = previous;
+                                        StackBackendCheckpointRecoveryResponse {
+                                            status,
+                                            journal: HandleRef { raw: 0 },
+                                            journal_len: 0,
+                                            generation: previous,
+                                        }
+                                    }
+                                }
+                            }
+                            Ok(_) => StackBackendCheckpointRecoveryResponse {
+                                status: Status::ErrShouldWait,
+                                journal: HandleRef { raw: 0 },
+                                journal_len: 0,
+                                generation: runtime.generation,
+                            },
+                            Err(_) => StackBackendCheckpointRecoveryResponse {
+                                status: Status::ErrInvalidArgs,
+                                journal: HandleRef { raw: 0 },
+                                journal_len: 0,
+                                generation: runtime.generation,
+                            },
+                        };
+                    reply(client.channel, &response);
+                }
+                8 => {
+                    let response = StackBackendRecoverConnectionRequest::decode(req, &handles)
+                        .map(|request| {
+                            let status = runtime.router.recover_connection(
+                                request.table.value,
+                                request.connection_id,
+                                request.stream.raw,
+                            );
+                            if status == Status::Ok {
+                                runtime
+                                    .backend_connections
+                                    .insert(request.connection_id, request.table.value);
+                            } else {
+                                let _ = Memory::close(request.stream.raw);
+                            }
+                            StackBackendRecoverConnectionResponse { status }
+                        })
+                        .unwrap_or(StackBackendRecoverConnectionResponse {
+                            status: Status::ErrInvalidArgs,
+                        });
+                    reply(client.channel, &response);
+                }
+                9 => {
+                    let response = StackBackendRecoverControlRequest::decode(req, &handles)
+                        .map(|request| {
+                            let expected_kind = match request.kind {
+                                BackendControlKind::TcpListener => 1,
+                                BackendControlKind::UdpSocket => 2,
+                            };
+                            let status = match (
+                                runtime.backend_connections.get(&request.object_id).copied(),
+                                runtime.backend_controls.get(&request.object_id).copied(),
+                            ) {
+                                (Some(table), Some((kind, old_control)))
+                                    if table == request.table.value && kind == expected_kind =>
+                                {
+                                    runtime.router.recover_control(
+                                        table,
+                                        old_control,
+                                        kind,
+                                        request.control.raw,
+                                    )
+                                }
+                                _ => Status::ErrNotFound,
+                            };
+                            if status == Status::Ok {
+                                runtime.backend_controls.insert(
+                                    request.object_id,
+                                    (expected_kind, request.control.raw),
+                                );
+                            } else {
+                                let _ = Memory::close(request.control.raw);
+                            }
+                            StackBackendRecoverControlResponse { status }
+                        })
+                        .unwrap_or(StackBackendRecoverControlResponse {
+                            status: Status::ErrInvalidArgs,
+                        });
+                    reply(client.channel, &response);
+                }
+                _ => close_handles(&message.handles),
+            }
+            true
+        }
+        Err(kernel_fidl::Status::ErrPeerClosed) => {
+            changed = true;
+            let _ = bexos_userspace::Memory::close(client.channel.0);
+            false
+        }
+        Err(_) => true,
+    });
+    runtime.backend_clients = clients;
+    changed
+}
+
+fn poll_controller_clients(runtime: &mut Runtime) -> bool {
+    let mut changed = false;
+    let mut clients = core::mem::take(&mut runtime.controller_clients);
+    clients.retain(|client| match client.channel.try_recv() {
+        Ok(message) => {
+            changed = true;
+            let (ordinal, req) = envelope(&message.bytes);
+            let handles = handle_refs(&message.handles);
+            if !client.allows(ordinal) {
+                close_handles(&message.handles);
+                return true;
+            }
+            match ordinal {
+                1 => {
+                    let response = StackControllerCreateTableRequest::decode(req, &handles)
+                        .map(|request| StackControllerCreateTableResponse {
+                            status: runtime
+                                .router
+                                .create_table(request.table.value, TableQuota::default()),
+                        })
+                        .unwrap_or(StackControllerCreateTableResponse {
+                            status: Status::ErrInvalidArgs,
+                        });
+                    reply(client.channel, &response);
+                }
+                2 => {
+                    let response = StackControllerRemoveTableRequest::decode(req, &handles)
+                        .map(|request| StackControllerRemoveTableResponse {
+                            status: runtime.router.remove_table(request.table.value),
+                        })
+                        .unwrap_or(StackControllerRemoveTableResponse {
+                            status: Status::ErrInvalidArgs,
+                        });
+                    reply(client.channel, &response);
+                }
+                3 => {
+                    let response = StackControllerAddRouteRequest::decode(req, &handles)
+                        .map(|request| StackControllerAddRouteResponse {
+                            status: runtime
+                                .router
+                                .add_route(request.route.table.value, router_route(request.route)),
+                        })
+                        .unwrap_or(StackControllerAddRouteResponse {
+                            status: Status::ErrInvalidArgs,
+                        });
+                    reply(client.channel, &response);
+                }
+                4 => {
+                    let response = StackControllerRemoveRouteRequest::decode(req, &handles)
+                        .map(|request| StackControllerRemoveRouteResponse {
+                            status: runtime.router.remove_route(
+                                request.route.table.value,
+                                router_route(request.route),
+                            ),
+                        })
+                        .unwrap_or(StackControllerRemoveRouteResponse {
+                            status: Status::ErrInvalidArgs,
+                        });
+                    reply(client.channel, &response);
+                }
+                5 => {
+                    let response =
+                        match StackControllerAttachInterfaceRequest::decode(req, &handles) {
+                            Ok(request) => {
+                                let link = ethernet::connect(request.device.raw)
+                                    .map_err(|_| Status::ErrInvalidArgs)
+                                    .and_then(PacketLink::new);
+                                let status = link
+                                    .map(|link| {
+                                        runtime.router.attach_link(
+                                            request.table.value,
+                                            InterfaceState {
+                                                id: request.interface_id,
+                                                name: request.interface_name.into(),
+                                                up: true,
+                                                neighbor_generation: 0,
+                                                packet_generation: runtime.generation,
+                                            },
+                                            link,
+                                        )
+                                    })
+                                    .unwrap_or(Status::ErrInvalidArgs);
+                                StackControllerAttachInterfaceResponse { status }
+                            }
+                            Err(_) => StackControllerAttachInterfaceResponse {
+                                status: Status::ErrInvalidArgs,
+                            },
+                        };
+                    reply(client.channel, &response);
+                }
+                6 => {
+                    let response = StackControllerDetachInterfaceRequest::decode(req, &handles)
+                        .map(|request| StackControllerDetachInterfaceResponse {
+                            status: runtime
+                                .router
+                                .detach_interface(request.table.value, request.interface_id),
+                        })
+                        .unwrap_or(StackControllerDetachInterfaceResponse {
+                            status: Status::ErrInvalidArgs,
+                        });
+                    reply(client.channel, &response);
+                }
+                _ => close_handles(&message.handles),
+            }
+            true
+        }
+        Err(kernel_fidl::Status::ErrPeerClosed) => {
+            changed = true;
+            let _ = bexos_userspace::Memory::close(client.channel.0);
+            false
+        }
+        Err(_) => true,
+    });
+    runtime.controller_clients = clients;
+    changed
+}
+
+fn router_route(route: net_fidl::FibRoute) -> RouterFibRoute {
+    RouterFibRoute {
+        destination: route.destination.network,
+        prefix_len: route.destination.prefix_len,
+        gateway: route.has_gateway.then_some(route.gateway),
+        interface_id: route.interface_id,
+        metric: route.metric,
+    }
+}
+
+fn close_handles(handles: &[u64]) {
+    for handle in handles {
+        let _ = bexos_userspace::Memory::close(*handle);
+    }
 }
 
 fn notify_link_watchers(watchers: &mut Vec<u64>, link: Option<&PacketLink>) {
@@ -461,47 +920,55 @@ fn poll_listener_clients(stack: &mut Netstack) -> bool {
         .collect::<Vec<_>>();
     for control in controls {
         let channel = Channel(control);
-        if let Ok(message) = channel.try_recv() {
-            changed = true;
-            let (ordinal, req) = envelope(&message.bytes);
-            let handles = handle_refs(&message.handles);
-            match ordinal {
-                1 => {
-                    let response = if TcpListenerAcceptRequest::decode(req, &handles).is_ok() {
-                        match stack
-                            .listener_mut(control)
-                            .and_then(|listener| listener.accept().ok())
-                        {
-                            Some(client) => TcpListenerAcceptResponse {
-                                status: Status::Ok,
-                                client: HandleRef {
-                                    raw: client.client_control.unwrap_or(client.control),
+        match channel.try_recv() {
+            Err(kernel_fidl::Status::ErrPeerClosed) => {
+                stack.remove_listener(control);
+                let _ = bexos_userspace::Memory::close(control);
+                changed = true;
+            }
+            Err(_) => {}
+            Ok(message) => {
+                changed = true;
+                let (ordinal, req) = envelope(&message.bytes);
+                let handles = handle_refs(&message.handles);
+                match ordinal {
+                    1 => {
+                        let response = if TcpListenerAcceptRequest::decode(req, &handles).is_ok() {
+                            match stack
+                                .listener_mut(control)
+                                .and_then(|listener| listener.accept().ok())
+                            {
+                                Some(client) => TcpListenerAcceptResponse {
+                                    status: Status::Ok,
+                                    client: HandleRef {
+                                        raw: client.client_control.unwrap_or(client.control),
+                                    },
+                                    peer_addr: client.peer,
                                 },
-                                peer_addr: client.peer,
-                            },
-                            None => TcpListenerAcceptResponse {
-                                status: Status::ErrShouldWait,
+                                None => TcpListenerAcceptResponse {
+                                    status: Status::ErrShouldWait,
+                                    client: HandleRef { raw: 0 },
+                                    peer_addr: empty_addr(),
+                                },
+                            }
+                        } else {
+                            TcpListenerAcceptResponse {
+                                status: Status::ErrInvalidArgs,
                                 client: HandleRef { raw: 0 },
                                 peer_addr: empty_addr(),
-                            },
-                        }
-                    } else {
-                        TcpListenerAcceptResponse {
-                            status: Status::ErrInvalidArgs,
-                            client: HandleRef { raw: 0 },
-                            peer_addr: empty_addr(),
-                        }
-                    };
-                    reply(channel, &response);
-                }
-                2 => {
-                    if TcpListenerCloseRequest::decode(req, &handles).is_ok() {
-                        stack.remove_listener(control);
+                            }
+                        };
+                        reply(channel, &response);
                     }
-                }
-                3 => {
-                    let (status, readable) =
-                        if TcpListenerGetInfoRequest::decode(req, &handles).is_err() {
+                    2 => {
+                        if TcpListenerCloseRequest::decode(req, &handles).is_ok() {
+                            stack.remove_listener(control);
+                        }
+                    }
+                    3 => {
+                        let (status, readable) = if TcpListenerGetInfoRequest::decode(req, &handles)
+                            .is_err()
+                        {
                             (Status::ErrInvalidArgs, false)
                         } else {
                             stack
@@ -511,9 +978,10 @@ fn poll_listener_clients(stack: &mut Netstack) -> bool {
                                 })
                                 .unwrap_or((Status::ErrNotFound, false))
                         };
-                    reply(channel, &TcpListenerGetInfoResponse { status, readable });
+                        reply(channel, &TcpListenerGetInfoResponse { status, readable });
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
     }
@@ -529,74 +997,79 @@ fn poll_udp_clients(stack: &mut Netstack) -> bool {
         .collect::<Vec<_>>();
     for control in controls {
         let channel = Channel(control);
-        if let Ok(message) = channel.try_recv() {
-            changed = true;
-            let (ordinal, req) = envelope(&message.bytes);
-            let handles = handle_refs(&message.handles);
-            match ordinal {
-                1 => {
-                    let response = match UdpSocketSendToRequest::decode(req, &handles) {
-                        Ok(request) => {
-                            let (status, actual) = stack
-                                .udp_mut(control)
-                                .map(|udp| udp.send_to(request.data, request.destination))
-                                .unwrap_or((Status::ErrNotFound, 0));
-                            UdpSocketSendToResponse { status, actual }
-                        }
-                        Err(_) => UdpSocketSendToResponse {
-                            status: Status::ErrInvalidArgs,
-                            actual: 0,
-                        },
-                    };
-                    reply(channel, &response);
-                }
-                2 => reply_udp_recv_from(channel, stack, control, req, &handles),
-                3 => {
-                    let response = match UdpSocketBindRequest::decode(req, &handles) {
-                        Ok(request) => UdpSocketBindResponse {
-                            status: stack
-                                .udp_mut(control)
-                                .map(|udp| udp.bind(request.local_addr))
-                                .unwrap_or(Status::ErrNotFound),
-                        },
-                        Err(_) => UdpSocketBindResponse {
-                            status: Status::ErrInvalidArgs,
-                        },
-                    };
-                    reply(channel, &response);
-                }
-                4 => {
-                    if UdpSocketCloseRequest::decode(req, &handles).is_ok() {
-                        stack.remove_udp(control);
-                    }
-                }
-                5 => {
-                    let (status, readable, writable) =
-                        if UdpSocketGetInfoRequest::decode(req, &handles).is_err() {
-                            (Status::ErrInvalidArgs, false, false)
-                        } else {
-                            stack
-                                .udp_mut(control)
-                                .map(|udp| {
-                                    (
-                                        Status::Ok,
-                                        udp.closed || !udp.queue.is_empty(),
-                                        udp.closed
-                                            || (udp.local.is_some() && udp.outbound.len() < 64),
-                                    )
-                                })
-                                .unwrap_or((Status::ErrNotFound, false, false))
+        match channel.try_recv() {
+            Err(kernel_fidl::Status::ErrPeerClosed) => {
+                stack.remove_udp(control);
+                let _ = bexos_userspace::Memory::close(control);
+                changed = true;
+            }
+            Err(_) => {}
+            Ok(message) => {
+                changed = true;
+                let (ordinal, req) = envelope(&message.bytes);
+                let handles = handle_refs(&message.handles);
+                match ordinal {
+                    1 => {
+                        let response = match UdpSocketSendToRequest::decode(req, &handles) {
+                            Ok(request) => {
+                                let (status, actual) = stack
+                                    .udp_mut(control)
+                                    .map(|udp| udp.send_to(request.data, request.destination))
+                                    .unwrap_or((Status::ErrNotFound, 0));
+                                UdpSocketSendToResponse { status, actual }
+                            }
+                            Err(_) => UdpSocketSendToResponse {
+                                status: Status::ErrInvalidArgs,
+                                actual: 0,
+                            },
                         };
-                    reply(
-                        channel,
-                        &UdpSocketGetInfoResponse {
-                            status,
-                            readable,
-                            writable,
-                        },
-                    );
+                        reply(channel, &response);
+                    }
+                    2 => reply_udp_recv_from(channel, stack, control, req, &handles),
+                    3 => {
+                        let response = match UdpSocketBindRequest::decode(req, &handles) {
+                            Ok(request) => UdpSocketBindResponse {
+                                status: stack.bind_udp(control, request.local_addr),
+                            },
+                            Err(_) => UdpSocketBindResponse {
+                                status: Status::ErrInvalidArgs,
+                            },
+                        };
+                        reply(channel, &response);
+                    }
+                    4 => {
+                        if UdpSocketCloseRequest::decode(req, &handles).is_ok() {
+                            stack.remove_udp(control);
+                        }
+                    }
+                    5 => {
+                        let (status, readable, writable) =
+                            if UdpSocketGetInfoRequest::decode(req, &handles).is_err() {
+                                (Status::ErrInvalidArgs, false, false)
+                            } else {
+                                stack
+                                    .udp_mut(control)
+                                    .map(|udp| {
+                                        (
+                                            Status::Ok,
+                                            udp.closed || !udp.queue.is_empty(),
+                                            udp.closed
+                                                || (udp.local.is_some() && udp.outbound.len() < 64),
+                                        )
+                                    })
+                                    .unwrap_or((Status::ErrNotFound, false, false))
+                            };
+                        reply(
+                            channel,
+                            &UdpSocketGetInfoResponse {
+                                status,
+                                readable,
+                                writable,
+                            },
+                        );
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
     }
@@ -623,8 +1096,23 @@ fn reply_resolve_host(
             return;
         }
     };
+    let (status, owned) = resolve_host(stack, link, request.hostname);
+    reply(
+        channel,
+        &NetstackResolveHostResponse {
+            status,
+            addresses: net_fidl::WireVector::from_slice(&owned),
+        },
+    );
+}
+
+fn resolve_host(
+    stack: &mut Netstack,
+    link: Option<&mut PacketLink>,
+    hostname: &str,
+) -> (Status, Vec<IpAddress>) {
     let mut owned = Vec::new();
-    if let Some(records) = stack.resolve_cached(request.hostname) {
+    if let Some(records) = stack.resolve_cached(hostname) {
         for record in records {
             match record {
                 DnsRecord::A(address) => {
@@ -635,29 +1123,16 @@ fn reply_resolve_host(
                 }
             }
         }
-    } else if request.hostname == "localhost" {
-        let _ = stack.cache_dns(request.hostname, &[[127, 0, 0, 1]]);
+    } else if hostname == "localhost" {
+        let _ = stack.cache_dns(hostname, &[[127, 0, 0, 1]]);
         owned.push(IpAddress::Ipv4(Ipv4Address {
             octets: [127, 0, 0, 1],
         }));
     }
     if owned.is_empty() {
-        let status = stack.query_dns(request.hostname, link);
-        reply(
-            channel,
-            &NetstackResolveHostResponse {
-                status,
-                addresses: net_fidl::WireVector::from_slice(&[]),
-            },
-        );
+        (stack.query_dns(hostname, link), owned)
     } else {
-        reply(
-            channel,
-            &NetstackResolveHostResponse {
-                status: Status::Ok,
-                addresses: net_fidl::WireVector::from_slice(&owned),
-            },
-        );
+        (Status::Ok, owned)
     }
 }
 

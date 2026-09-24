@@ -1,0 +1,105 @@
+package_name: "bexos.service.networkd"
+name: "Scoped network service"
+processes {
+  name: "networkd"
+  runner: "elf"
+  service: true
+  wave: 6
+  resource_group: "system"
+  lifecycle {
+    update_strategy: HEART_TRANSPLANT
+    preparation_timeout_ms: 30000
+    migration_timeout_ms: 5000
+  }
+  runner_options {
+    [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/networkd" }
+  }
+}
+config_schema {
+  fields { name: "instance_id" type: CONFIG_STRING max_size: 64 default_value { string_value: "system_default" } }
+  fields { name: "domains" type: CONFIG_STRING max_size: 4096 default_value { string_value: "system_default:0" } }
+  fields { name: "max_dynamic_providers" type: CONFIG_UINT32 default_value { uint32_value: 64 } }
+  fields { name: "dns_cache_capacity" type: CONFIG_UINT32 default_value { uint32_value: 256 } }
+  fields { name: "boot_policy" type: CONFIG_BYTES max_size: 65500 default_value { bytes_value: "" } }
+}
+services_exposed {
+  name: "bexos.net.SocketProvider"
+  protocol: "SocketProvider"
+  lifecycle: MULTIPLE_INSTANCE
+  visibility: PUBLIC
+  metadata { key: "network.domain" value: "system_default" }
+  capabilities { capability: "Public" method_ordinals: 1 method_ordinals: 2 method_ordinals: 3 method_ordinals: 4 method_ordinals: 5 method_ordinals: 6 }
+}
+services_exposed {
+  name: "bexos.net.Netstack"
+  protocol: "Netstack"
+  lifecycle: SINGLETON
+  visibility: PUBLIC
+  metadata { key: "network.domain" value: "system_default" }
+  capabilities { capability: "Public" method_ordinals: 1 method_ordinals: 2 method_ordinals: 3 method_ordinals: 4 method_ordinals: 5 method_ordinals: 6 }
+}
+services_exposed {
+  name: "bexos.net.NetworkRoutingManager"
+  protocol: "NetworkRoutingManager"
+  lifecycle: MULTIPLE_INSTANCE
+  visibility: PRIVATE
+  capabilities { capability: "Manage" method_ordinals: 1 method_ordinals: 2 method_ordinals: 3 method_ordinals: 4 method_ordinals: 5 }
+}
+services_consumed {
+  name: "bexos.net.NetstackBackend"
+  link_type: REQUIRED
+  capabilities {
+    capability: "Backend"
+    methods { ordinal: 1 link_type: REQUIRED }
+    methods { ordinal: 2 link_type: REQUIRED }
+    methods { ordinal: 3 link_type: REQUIRED }
+    methods { ordinal: 4 link_type: REQUIRED }
+    methods { ordinal: 5 link_type: REQUIRED }
+    methods { ordinal: 6 link_type: REQUIRED }
+  }
+}
+services_consumed {
+  name: "bexos.net.StackBackend"
+  link_type: REQUIRED
+  capabilities {
+    capability: "Backend"
+    methods { ordinal: 1 link_type: REQUIRED }
+    methods { ordinal: 2 link_type: REQUIRED }
+    methods { ordinal: 3 link_type: REQUIRED }
+    methods { ordinal: 4 link_type: REQUIRED }
+    methods { ordinal: 5 link_type: REQUIRED }
+    methods { ordinal: 6 link_type: REQUIRED }
+    methods { ordinal: 7 link_type: REQUIRED }
+    methods { ordinal: 8 link_type: REQUIRED }
+    methods { ordinal: 9 link_type: REQUIRED }
+  }
+}
+services_consumed {
+  name: "bexos.net.StackController"
+  link_type: REQUIRED
+  capabilities {
+    capability: "Control"
+    methods { ordinal: 1 link_type: REQUIRED }
+    methods { ordinal: 2 link_type: REQUIRED }
+    methods { ordinal: 3 link_type: REQUIRED }
+    methods { ordinal: 4 link_type: REQUIRED }
+    methods { ordinal: 5 link_type: REQUIRED }
+    methods { ordinal: 6 link_type: REQUIRED }
+  }
+}
+services_consumed {
+  name: "bexos.net.VirtualSwitchController"
+  link_type: REQUIRED
+  capabilities {
+    capability: "Control"
+    methods { ordinal: 1 link_type: REQUIRED }
+    methods { ordinal: 2 link_type: REQUIRED }
+    methods { ordinal: 3 link_type: REQUIRED }
+    methods { ordinal: 4 link_type: REQUIRED }
+  }
+}
+services_consumed {
+  name: "bexos.security.trust.TlsTrustManager"
+  link_type: REQUIRED
+  capabilities { capability: "Public" methods { ordinal: 1 link_type: REQUIRED } }
+}

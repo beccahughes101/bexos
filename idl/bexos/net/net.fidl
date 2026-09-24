@@ -39,6 +39,87 @@ struct SocketAddress {
     port uint16;
 };
 
+/// A routing table inside one netstack instance. Table zero is reserved for
+/// the platform default table, but it is never accepted from an unscoped app.
+struct TableId {
+    value uint32;
+};
+
+struct DomainEndpoint {
+    host string:255;
+    port uint16;
+};
+
+type Endpoint = strict union {
+    1: ip SocketAddress;
+    2: domain DomainEndpoint;
+};
+
+struct IpSubnet {
+    network IpAddress;
+    prefix_len uint8;
+};
+
+type DnsTransport = strict enum : uint8 {
+    UDP53 = 1;
+    DOT = 2;
+    DOH = 3;
+};
+
+struct DnsUpstream {
+    endpoint SocketAddress;
+    transport DnsTransport;
+    tls_server_name string:128;
+    doh_path string:255;
+};
+
+type RouteTargetKind = strict enum : uint8 {
+    DEVICE = 1;
+    PROXY = 2;
+};
+
+type BackendControlKind = strict enum : uint8 {
+    TCP_LISTENER = 1;
+    UDP_SOCKET = 2;
+};
+
+/// Resource-bearing route target. `proxy_channel` is zero for DEVICE routes;
+/// device fields are ignored for PROXY routes.
+resource struct RouteTarget {
+    kind RouteTargetKind;
+    stack_instance string:64;
+    table TableId;
+    interface_id uint64;
+    proxy_channel handle:CHANNEL;
+};
+
+resource struct ProviderRouteConfig {
+    target RouteTarget;
+    ip_routes vector<IpSubnet>:32;
+    domain_routes vector<string:128>:32;
+    dns_servers vector<DnsUpstream>:8;
+    priority uint32;
+    default_route bool;
+};
+
+struct ProviderInfo {
+    token uint64;
+    name string:64;
+    table TableId;
+    kind RouteTargetKind;
+    priority uint32;
+    active bool;
+};
+
+struct FibRoute {
+    table TableId;
+    destination IpSubnet;
+    gateway IpAddress;
+    has_gateway bool;
+    interface_id uint64;
+    metric uint32;
+};
+
 table SocketOptions {
     1: non_blocking bool;
     2: keep_alive_ms uint32;
@@ -152,6 +233,179 @@ protocol Netstack {
     6: WatchLinkStatus(resource struct {
         watcher client_end:LinkWatcher;
     }) -> (struct {
+        status Status;
+    });
+};
+
+/// Domain-aware, capability-scoped socket provider. The provider channel is
+/// permanently bound to one network domain and routing table by appd/networkd.
+@discoverable
+protocol SocketProvider {
+    1: ConnectTcp(resource struct {
+        target Endpoint;
+        options SocketOptions;
+        socket server_end:TcpSocket;
+    }) -> (struct { status Status; });
+
+    2: ListenTcp(resource struct {
+        local_addr SocketAddress;
+        options SocketOptions;
+        listener server_end:TcpListener;
+    }) -> (struct { status Status; });
+
+    3: CreateUdpSocket(resource struct {
+        options SocketOptions;
+        socket server_end:UdpSocket;
+    }) -> (struct { status Status; });
+
+    4: ResolveHost(struct { hostname string:255; }) -> (struct {
+        status Status;
+        addresses vector<IpAddress>:8;
+    });
+
+    5: GetLinkStatus() -> (struct { status Status; link LinkStatus; });
+
+    6: WatchLinkStatus(resource struct { watcher client_end:LinkWatcher; }) -> (struct {
+        status Status;
+    });
+};
+
+/// Privileged dynamic RFC 61 provider registry hosted by networkd.
+@discoverable
+protocol NetworkRoutingManager {
+    1: RegisterEgressProvider(resource struct {
+        name string:64;
+        config ProviderRouteConfig;
+    }) -> (struct { status Status; provider_token uint64; });
+
+    2: UpdateEgressProvider(resource struct {
+        provider_token uint64;
+        config ProviderRouteConfig;
+    }) -> (struct { status Status; });
+
+    3: UnregisterEgressProvider(struct { provider_token uint64; }) -> (struct {
+        status Status;
+    });
+
+    4: ListEgressProviders() -> (struct {
+        status Status;
+        providers vector<ProviderInfo>:64;
+    });
+
+    5: GetScopedSocketProvider(resource struct {
+        domain string:64;
+        provider server_end:SocketProvider;
+    }) -> (struct { status Status; });
+};
+
+/// A proxy provider receives the original domain endpoint. networkd performs
+/// no DNS lookup before invoking this protocol.
+protocol ProxyStreamHandler {
+    1: Connect(resource struct {
+        target Endpoint;
+        options SocketOptions;
+    }) -> (resource struct { status Status; socket handle:SOCKET; });
+};
+
+/// Private networkd -> netstackd data/control boundary.
+protocol StackBackend {
+    1: ConnectTcp(resource struct {
+        connection_id uint64;
+        table TableId;
+        remote_addr SocketAddress;
+        stream handle:SOCKET;
+    }) -> (struct { status Status; });
+
+    2: ListenTcp(resource struct {
+        listener_id uint64;
+        table TableId;
+        local_addr SocketAddress;
+        listener server_end:TcpListener;
+    }) -> (struct { status Status; });
+
+    3: Close(struct { object_id uint64; }) -> (struct { status Status; });
+
+    4: AdoptRecovery(resource struct {
+        journal handle:VMO;
+        journal_len uint64;
+        expected_generation uint64;
+    }) -> (struct { status Status; adopted_generation uint64; });
+
+    5: CreateUdpSocket(resource struct {
+        object_id uint64;
+        table TableId;
+        socket server_end:UdpSocket;
+    }) -> (struct { status Status; });
+
+    6: ResolveHost(struct {
+        table TableId;
+        hostname string:255;
+    }) -> (struct {
+        status Status;
+        addresses vector<IpAddress>:8;
+    });
+
+    /// Produces a committed, checksummed recovery journal.  A replacement
+    /// whose generation is behind minimum_generation returns SHOULD_WAIT so
+    /// its controller can replay the last escrowed journal before use.
+    7: CheckpointRecovery(struct { minimum_generation uint64; }) -> (resource struct {
+        status Status;
+        journal handle:VMO;
+        journal_len uint64;
+        generation uint64;
+    });
+
+    /// Reattaches a networkd-escrowed stream endpoint after journal adoption.
+    8: RecoverConnection(resource struct {
+        connection_id uint64;
+        table TableId;
+        stream handle:SOCKET;
+    }) -> (struct { status Status; });
+
+    /// Reattaches an escrowed listener or UDP server endpoint after adoption.
+    9: RecoverControl(resource struct {
+        object_id uint64;
+        table TableId;
+        kind BackendControlKind;
+        control handle:CHANNEL;
+    }) -> (struct { status Status; });
+};
+
+/// Private privileged topology control boundary.
+protocol StackController {
+    1: CreateTable(struct { table TableId; }) -> (struct { status Status; });
+    2: RemoveTable(struct { table TableId; }) -> (struct { status Status; });
+    3: AddRoute(struct { route FibRoute; }) -> (struct { status Status; });
+    4: RemoveRoute(struct { route FibRoute; }) -> (struct { status Status; });
+    5: AttachInterface(resource struct {
+        table TableId;
+        interface_id uint64;
+        interface_name string:32;
+        device handle:CHANNEL;
+    }) -> (struct { status Status; });
+    6: DetachInterface(struct { table TableId; interface_id uint64; }) -> (struct {
+        status Status;
+    });
+};
+
+/// Private networkd -> vswitchd topology and transactional packet boundary.
+protocol VirtualSwitchController {
+    1: CreatePort(resource struct {
+        port_id uint64;
+        physical_interface uint64;
+        mac array<uint8, 6>;
+        vlan_id uint16;
+        tagged bool;
+        rx_queue_depth uint32;
+        tx_queue_depth uint32;
+    }) -> (resource struct { status Status; device handle:CHANNEL; });
+    2: RemovePort(struct { port_id uint64; }) -> (struct { status Status; });
+    3: CommitGeneration(struct { port_id uint64; generation uint64; }) -> (struct {
+        status Status;
+    });
+    /// Rewinds a port after backend recovery. Ingress delivered after the
+    /// committed journal is replayed and uncommitted egress is discarded.
+    4: RecoverGeneration(struct { port_id uint64; generation uint64; }) -> (struct {
         status Status;
     });
 };
