@@ -20,7 +20,8 @@ The build uses Bazel's LLVM compiler, a pinned source-built Ninja, QEMU's
 vendored Python wheels, and a pinned setuptools wheel. Configure runs offline.
 The host still supplies Python, pkg-config, the platform SDK, and development
 libraries including GLib, libfdt, pixman and libslirp. The current Darwin build
-uses the Apple Silicon Homebrew development-library paths.
+uses the Apple Silicon Homebrew development-library paths. Ubuntu builds require
+`libglib2.0-dev`, `libfdt-dev`, `libpixman-1-dev`, and `libslirp-dev`.
 
 `bazel test -c opt //secure/platform:memory_probe_test
 --test_tag_filters=requires-qemu --nocache_test_results` builds and runs a

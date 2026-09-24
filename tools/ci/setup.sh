@@ -14,7 +14,8 @@ printf 'ANDROID_HOME=\nANDROID_SDK_ROOT=\n' >> "$GITHUB_ENV"
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
   build-essential bison flex device-tree-compiler xxd libclang-dev llvm-dev \
-  libssl-dev pkg-config python3 python3-cryptography python3-pyelftools \
+  libssl-dev libglib2.0-dev libpixman-1-dev libslirp-dev libfdt-dev pkg-config \
+  python3 python3-cryptography python3-pyelftools \
   git curl ca-certificates unzip zip zstd qemu-system-arm qemu-system-x86 qemu-utils
 # Use the distro Python together with its installed modules in repository rules,
 # build actions, and tests, independently of the runner's hosted toolcache.
