@@ -247,7 +247,11 @@ impl AppManager for LifecycleAppManager {
                 archive: lifecycle::HandleRef { raw: archive },
                 archive_len: upload.archive.len() as u64,
             },
-            360_000,
+            // Appd performs the package VFS transaction and then persists its
+            // registry/lifecycle state. Both can include a bounded durable
+            // checkpoint, so this aggregate transport deadline must cover two
+            // slow storage phases and remain below the host client deadline.
+            1_800_000,
         );
         let Ok((response_bytes, response_handles)) = response else {
             return debug_status(-6, "app lifecycle install transport failed");

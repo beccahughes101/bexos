@@ -76,6 +76,8 @@ pub(crate) fn attributes(a: NodeAttributes) -> FileAttributes {
         creation_time_nanos: a.creation_time_nanos,
         modification_time_nanos: a.modification_time_nanos,
         mode: a.mode,
+        uid: a.uid,
+        gid: a.gid,
     }
 }
 pub(crate) fn empty_attrs() -> FileAttributes {
@@ -85,6 +87,8 @@ pub(crate) fn empty_attrs() -> FileAttributes {
         creation_time_nanos: 0,
         modification_time_nanos: 0,
         mode: 0,
+        uid: 0,
+        gid: 0,
     }
 }
 impl Drop for Volume {

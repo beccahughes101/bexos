@@ -1,0 +1,26 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "oci_bexfs",
+    srcs = ["src/lib.rs"],
+    crate_name = "bexos_oci_bexfs",
+    edition = "2024",
+    deps = [
+        "//drivers/d1/storage/bexos/bexfs:bexfs",
+        "//lib/oci:oci",
+    ],
+)
+
+rust_test(
+    name = "tests",
+    srcs = ["tests/tests.rs"],
+    crate_name = "oci_bexfs_tests",
+    edition = "2024",
+    deps = [
+        ":oci_bexfs",
+        "//drivers/d1/storage/bexos/bexfs:bexfs",
+        "//lib/oci:oci",
+    ],
+)

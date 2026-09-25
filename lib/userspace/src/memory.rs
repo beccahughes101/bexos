@@ -65,6 +65,21 @@ impl Memory {
         check(r.status)?;
         Ok(r.vmo.raw)
     }
+    /// Creates a copy-on-write VMO snapshot of a page-aligned parent range.
+    pub fn clone_vmo(parent: u64, offset: u64, size: u64) -> Result<u64, Status> {
+        let r: VirtualMemoryCloneVmoResponse = kernel_call(
+            2,
+            "CloneVmo",
+            VIRTUAL_MEMORY_PUBLIC_METHODS,
+            &VirtualMemoryCloneVmoRequest {
+                parent_vmo: HandleRef { raw: parent },
+                offset,
+                size_bytes: size,
+            },
+        )?;
+        check(r.status)?;
+        Ok(r.cloned_vmo.raw)
+    }
     pub fn map(h: u64, size: u64, rights: u32) -> Result<u64, Status> {
         Self::map_at(h, 0, size, 0, rights)
     }

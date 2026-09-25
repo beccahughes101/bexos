@@ -66,6 +66,12 @@ protocol Opener {
 
 struct CommandProcess { process_id uint64; package_name string:128; process_name string:64; exited bool; suspended bool; exit_code int32; };
 
+struct ContainerResourceLimits {
+    cpu_shares uint32;
+    memory_limit_bytes uint64;
+    process_limit uint32;
+};
+
 // Bound to the same authenticated identity as the Opener that created it.
 protocol CommandLauncher {
     3: ListProcesses() -> (struct { status OpenerStatus; processes vector<CommandProcess>:128; });
@@ -83,6 +89,27 @@ protocol CommandLauncher {
         arguments vector<string:1024>:64;
         environment vector<string:1024>:64;
         cwd handle:CHANNEL;
+        stdin_stream handle;
+        stdout_stream handle;
+        stderr_stream handle;
+    }) -> (resource struct {
+        status OpenerStatus;
+        process_control handle:OPTIONAL;
+    });
+    // Private bridge for the system container manager. The supplied rootfs is
+    // already verified and unpacked; appd keeps process creation authority.
+    5: LaunchContainer(resource struct {
+        container_id string:64;
+        rootfs handle:CHANNEL;
+        executable string:1024;
+        arguments vector<string:4096>:256;
+        environment vector<string:4096>:256;
+        working_directory string:4096;
+        uid uint32;
+        gid uint32;
+        hostname string:64;
+        readonly_rootfs bool;
+        resources ContainerResourceLimits;
         stdin_stream handle;
         stdout_stream handle;
         stderr_stream handle;

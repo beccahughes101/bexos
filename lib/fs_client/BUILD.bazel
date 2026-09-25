@@ -1,0 +1,15 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "fs_client",
+    srcs = ["src/lib.rs"],
+    crate_name = "bexos_fs_client",
+    edition = "2024",
+    deps = [
+        "//idl:fs_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//lib/userspace",
+    ],
+)

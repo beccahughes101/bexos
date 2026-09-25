@@ -1,0 +1,76 @@
+library bexos.container;
+
+type ContainerStatus = strict enum : int32 {
+    OK = 0;
+    NOT_FOUND = -1;
+    ALREADY_EXISTS = -2;
+    INVALID_ARGS = -8;
+    BUSY = -11;
+    STORAGE = -20;
+    VERIFY_FAILED = -21;
+    LAUNCH_FAILED = -22;
+    UNAVAILABLE = -95;
+};
+
+type ContainerState = strict enum : uint8 {
+    CREATED = 1;
+    RUNNING = 2;
+    STOPPED = 3;
+};
+
+struct ImageReference {
+    registry_host string:128;
+    repository string:128;
+    tag string:64;
+    expected_sha256 vector<uint8>:32;
+};
+
+struct ResourceLimits {
+    cpu_shares uint32;
+    memory_limit_bytes uint64;
+    process_limit uint32;
+};
+
+struct ContainerInfo {
+    container_id string:64;
+    state ContainerState;
+    manifest_digest array<uint8, 32>;
+    exit_code int32;
+};
+
+@discoverable
+protocol ContainerManager {
+    1: Create(struct {
+        container_id string:64;
+        image ImageReference;
+        arguments vector<string:4096>:256;
+        environment vector<string:4096>:256;
+        working_directory string:4096;
+        uid uint32;
+        gid uint32;
+        hostname string:64;
+        resources ResourceLimits;
+        readonly_rootfs bool;
+    }) -> (struct { status ContainerStatus; });
+
+    2: Start(resource struct {
+        container_id string:64;
+        stdin_stream handle:OPTIONAL;
+        stdout_stream handle:OPTIONAL;
+        stderr_stream handle:OPTIONAL;
+    }) -> (resource struct {
+        status ContainerStatus;
+        process_control handle:OPTIONAL;
+    });
+
+    3: Signal(struct { container_id string:64; signal uint32; })
+        -> (struct { status ContainerStatus; });
+    4: Delete(struct { container_id string:64; force bool; })
+        -> (struct { status ContainerStatus; });
+    5: Inspect(struct { container_id string:64; })
+        -> (struct { status ContainerStatus; info vector<ContainerInfo>:1; });
+    6: List() -> (struct {
+        status ContainerStatus;
+        containers vector<ContainerInfo>:256;
+    });
+};

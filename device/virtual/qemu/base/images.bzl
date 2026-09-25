@@ -11,6 +11,10 @@ QEMU_STORAGE_SIZE_BYTES = 536870912
 QEMU_STORAGE_PREINSTALLS = [
     {"archive": "//services/pkgd:pkgd_archive", "path": "pkg/bexos.service.pkgd.bex"},
     {"archive": "//services/pkgd:replacement_archive", "path": "updates/bexos.service.pkgd.replacement.bex"},
+    {"archive": "//services/starnix_runner:starnix_runner_archive", "path": "pkg/bexos.platform.starnix_runner.bex"},
+    {"archive": "//services/containerd:containerd_archive", "path": "pkg/bexos.service.containerd.bex"},
+    {"archive": "//services/containerd:replacement_archive", "path": "updates/bexos.service.containerd.replacement.bex"},
+    {"archive": "//apps/container_cli:container_cli", "path": "pkg/bexos.app.container_cli.bex"},
     {"archive": "//apps/brush_shell", "path": "pkg/bexos.app.brush_shell.bex"},
     {"archive": "//apps/brush_shell:replacement_archive", "path": "updates/bexos.app.brush_shell.replacement.bex"},
     {"archive": "//testing/wasm:file_service_archive", "path": "pkg/bexos.test.wasm.file_service.bex"},

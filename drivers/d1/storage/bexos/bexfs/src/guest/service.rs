@@ -450,13 +450,23 @@ fn dispatch_endpoint_message(
         }
         2 => {
             let request = NodeSetAttrRequest::decode(request, &handles).unwrap();
+            let set_metadata = |fs: &mut crate::BexFs| {
+                fs.set_metadata(
+                    endpoint.inode,
+                    request.attr.mode,
+                    request.attr.uid,
+                    request.attr.gid,
+                    request.attr.modification_time_nanos,
+                )
+            };
             let result = match endpoint.file.as_ref() {
                 Ok(Some(file)) => volume
                     .fs
                     .set_len(file, request.attr.size_bytes)
+                    .and_then(|()| set_metadata(&mut volume.fs))
                     .map_err(status),
+                Ok(None) => set_metadata(&mut volume.fs).map_err(status),
                 Err(status) => Err(*status),
-                _ => Err(FsStatus::IsDirectory),
             };
             reply(
                 channel,
@@ -466,6 +476,59 @@ fn dispatch_endpoint_message(
             );
         }
         3 => return DispatchResult::Close,
+        4 => {
+            let request = NodeGetXattrRequest::decode(request, &handles).unwrap();
+            let result = volume
+                .fs
+                .get_xattr(endpoint.inode, request.name)
+                .map_err(status);
+            reply(
+                channel,
+                &NodeGetXattrResponse {
+                    status: result.as_ref().err().copied().unwrap_or(FsStatus::Ok),
+                    value: &result.unwrap_or_default(),
+                },
+            );
+        }
+        5 => {
+            let request = NodeSetXattrRequest::decode(request, &handles).unwrap();
+            let result = volume
+                .fs
+                .set_xattr(endpoint.inode, request.name, request.value, request.flags)
+                .map_err(status);
+            reply(
+                channel,
+                &NodeSetXattrResponse {
+                    status: result.err().unwrap_or(FsStatus::Ok),
+                },
+            );
+        }
+        6 => {
+            let result = volume.fs.list_xattrs(endpoint.inode).map_err(status);
+            let status = result.as_ref().err().copied().unwrap_or(FsStatus::Ok);
+            let names = result.unwrap_or_default();
+            let names = names.iter().map(|name| name.as_str()).collect::<Vec<_>>();
+            reply(
+                channel,
+                &NodeListXattrsResponse {
+                    status,
+                    names: WireStringVector::from_slice(&names),
+                },
+            );
+        }
+        7 => {
+            let request = NodeRemoveXattrRequest::decode(request, &handles).unwrap();
+            let result = volume
+                .fs
+                .remove_xattr(endpoint.inode, request.name)
+                .map_err(status);
+            reply(
+                channel,
+                &NodeRemoveXattrResponse {
+                    status: result.err().unwrap_or(FsStatus::Ok),
+                },
+            );
+        }
         10 => {
             let request = FileReadRequest::decode(request, &handles).unwrap();
             let result = match endpoint.file.as_mut() {
@@ -578,10 +641,10 @@ fn dispatch_endpoint_message(
                 .iter()
                 .map(|entry| DirEntry {
                     name: &entry.name,
-                    kind: if entry.kind == crate::NodeKind::File {
-                        NodeKind::File
-                    } else {
-                        NodeKind::Directory
+                    kind: match entry.kind {
+                        crate::NodeKind::File => NodeKind::File,
+                        crate::NodeKind::Directory => NodeKind::Directory,
+                        crate::NodeKind::Symlink => NodeKind::Symlink,
                     },
                     attr: attributes(entry.attributes),
                 })
@@ -604,6 +667,59 @@ fn dispatch_endpoint_message(
                 channel,
                 &DirectoryUnlinkResponse {
                     status: result.err().unwrap_or(FsStatus::Ok),
+                },
+            );
+        }
+        23 => {
+            let request = DirectoryRenameRequest::decode(request, &handles).unwrap();
+            let result = volume
+                .fs
+                .rename(endpoint.inode, request.source, request.target)
+                .map_err(status);
+            reply(
+                channel,
+                &DirectoryRenameResponse {
+                    status: result.err().unwrap_or(FsStatus::Ok),
+                },
+            );
+        }
+        24 => {
+            let request = DirectoryLinkRequest::decode(request, &handles).unwrap();
+            let result = volume
+                .fs
+                .link(endpoint.inode, request.source, request.target)
+                .map_err(status);
+            reply(
+                channel,
+                &DirectoryLinkResponse {
+                    status: result.err().unwrap_or(FsStatus::Ok),
+                },
+            );
+        }
+        25 => {
+            let request = DirectorySymlinkRequest::decode(request, &handles).unwrap();
+            let result = volume
+                .fs
+                .symlink(endpoint.inode, request.target, request.link_path)
+                .map_err(status);
+            reply(
+                channel,
+                &DirectorySymlinkResponse {
+                    status: result.err().unwrap_or(FsStatus::Ok),
+                },
+            );
+        }
+        26 => {
+            let request = DirectoryReadLinkRequest::decode(request, &handles).unwrap();
+            let result = volume
+                .fs
+                .readlink(endpoint.inode, request.path)
+                .map_err(status);
+            reply(
+                channel,
+                &DirectoryReadLinkResponse {
+                    status: result.as_ref().err().copied().unwrap_or(FsStatus::Ok),
+                    target: result.as_deref().unwrap_or(""),
                 },
             );
         }

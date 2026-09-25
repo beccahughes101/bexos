@@ -30,11 +30,19 @@ struct PackageStore {
     root: Channel,
     users: Vec<UserMount>,
     mounted_packages: Vec<MountedPackage>,
+    cached_package_archives: Vec<CachedPackageArchive>,
 }
 
 struct MountedPackage {
     package_id: String,
     root: Channel,
+}
+
+struct CachedPackageArchive {
+    package_id: String,
+    archive: u64,
+    logical_size_bytes: u64,
+    storage_allocated_bytes: u64,
 }
 
 struct UserMount {
@@ -194,7 +202,7 @@ async fn serve(mut state: Runtime) -> ! {
                 52 => {
                     bexos_trace::trace_scope!(bexos_trace::CATEGORY_VFS_IO, "vfsd:mount_archive");
                     let q = VfsManagerReadPackageArchiveRequest::decode(req, &hs).unwrap();
-                    let result = package_archive_backing(&state.store, q.package_id);
+                    let result = package_archive_backing(&mut state.store, q.package_id);
                     let status = result.as_ref().err().copied().unwrap_or(FsStatus::Ok);
                     let (archive, archive_len) = match result {
                         Ok((handle, len)) => (handle, len),
@@ -458,6 +466,7 @@ fn initialize_package_store(
         root,
         users: Vec::new(),
         mounted_packages: Vec::new(),
+        cached_package_archives: Vec::new(),
     });
     FsStatus::Ok
 }
@@ -539,10 +548,19 @@ fn get_package_directory(
     log(&alloc::format!(
         "vfsd: package directory open package={package_id} path={archive_path}\n"
     ));
-    let archive_file = fs::open(store.root, &archive_path, 1)?;
-    let mounted = fs::mount_archive(store.archivefs, archive_file, None);
-    let _ = Memory::close(archive_file.0);
-    let mounted = mounted?;
+    // Appd reads every signed archive while importing the package registry.
+    // Keep that immutable backing VMO so a later package launch does not queue
+    // behind an unrelated mutable-data commit in the shared STORAGE BexFS
+    // service. Package writes and deletes invalidate both this cache and the
+    // mounted ArchiveFS root below.
+    let (archive, archive_len) = package_archive_backing_from_store(store, package_id)?;
+    let mount = fs::mount_archive_memory(store.archivefs, archive, archive_len);
+    let close = Memory::close(archive).map_err(|_| FsStatus::Io);
+    let mounted = mount?;
+    if let Err(error) = close {
+        let _ = Memory::close(mounted.0);
+        return Err(error);
+    }
     let returned = fs::open(mounted, "", 1 | 32).map_err(|error| {
         let _ = Memory::close(mounted.0);
         error
@@ -555,17 +573,63 @@ fn get_package_directory(
 }
 
 fn package_archive_backing(
-    store: &Option<PackageStore>,
+    store: &mut Option<PackageStore>,
     package_id: &str,
 ) -> Result<(u64, u64), FsStatus> {
-    let store = store.as_ref().ok_or(FsStatus::BadState)?;
+    let store = store.as_mut().ok_or(FsStatus::BadState)?;
+    package_archive_backing_from_store(store, package_id)
+}
+
+fn package_archive_backing_from_store(
+    store: &mut PackageStore,
+    package_id: &str,
+) -> Result<(u64, u64), FsStatus> {
     let archive_path = package_archive_path(package_id)?;
+    if let Some(cached) = store
+        .cached_package_archives
+        .iter()
+        .find(|cached| cached.package_id == package_id)
+    {
+        let archive =
+            Memory::duplicate(cached.archive, 1 | 2 | 16 | 32).map_err(|_| FsStatus::NoSpace)?;
+        return Ok((archive, cached.logical_size_bytes));
+    }
     let archive_file = fs::open(store.root, &archive_path, 1)?;
+    let attributes = match fs::attributes(archive_file) {
+        Ok(attributes) => attributes,
+        Err(error) => {
+            let _ = Memory::close(archive_file.0);
+            return Err(error);
+        }
+    };
     let backing = fs::backing(archive_file);
     let close = Memory::close(archive_file.0).map_err(|_| FsStatus::Io);
-    let backing = backing?;
-    close?;
-    Ok(backing)
+    let (archive, archive_len) = backing?;
+    if let Err(error) = close {
+        let _ = Memory::close(archive);
+        return Err(error);
+    }
+    if archive_len == 0 || archive_len != attributes.size_bytes {
+        let _ = Memory::close(archive);
+        return Err(FsStatus::Corrupt);
+    }
+    let returned = match Memory::duplicate(archive, 1 | 2 | 16 | 32) {
+        Ok(returned) => returned,
+        Err(_) => {
+            let _ = Memory::close(archive);
+            return Err(FsStatus::NoSpace);
+        }
+    };
+    store.cached_package_archives.push(CachedPackageArchive {
+        package_id: package_id.into(),
+        archive,
+        logical_size_bytes: archive_len,
+        storage_allocated_bytes: attributes.storage_allocated_bytes,
+    });
+    log(&alloc::format!(
+        "vfsd: package archive cached package={package_id} bytes={archive_len}\n"
+    ));
+    Ok((returned, archive_len))
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -580,6 +644,16 @@ fn package_archive_attributes(
 ) -> Result<PackageArchiveAttributes, FsStatus> {
     let store = store.as_ref().ok_or(FsStatus::BadState)?;
     let archive_path = package_archive_path(package_id)?;
+    if let Some(cached) = store
+        .cached_package_archives
+        .iter()
+        .find(|cached| cached.package_id == package_id)
+    {
+        return Ok(PackageArchiveAttributes {
+            logical_size_bytes: cached.logical_size_bytes,
+            storage_allocated_bytes: cached.storage_allocated_bytes,
+        });
+    }
     let archive_file = fs::open(store.root, &archive_path, 1)?;
     let attrs = fs::attributes(archive_file);
     let close = Memory::close(archive_file.0).map_err(|_| FsStatus::Io);
@@ -710,6 +784,15 @@ fn invalidate_package_mount(store: &mut PackageStore, package_id: &str) {
         if store.mounted_packages[index].package_id == package_id {
             let mounted = store.mounted_packages.remove(index);
             let _ = Memory::close(mounted.root.0);
+        } else {
+            index += 1;
+        }
+    }
+    let mut index = 0;
+    while index < store.cached_package_archives.len() {
+        if store.cached_package_archives[index].package_id == package_id {
+            let cached = store.cached_package_archives.remove(index);
+            let _ = Memory::close(cached.archive);
         } else {
             index += 1;
         }

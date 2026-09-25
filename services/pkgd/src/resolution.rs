@@ -129,6 +129,7 @@ pub async fn download<T: Transport + Clone + 'static>(
         ArtifactKind::Font => "font",
         ArtifactKind::Firmware => "firmware",
         ArtifactKind::NetworkExtension => "network_extension",
+        ArtifactKind::Container => "container",
     };
     if target.kind.as_deref() != Some(kind)
         || target.length == 0

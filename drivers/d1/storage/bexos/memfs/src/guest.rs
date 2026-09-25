@@ -164,13 +164,26 @@ fn dispatch_endpoint_message(
         }
         2 => {
             let request = NodeSetAttrRequest::decode(request, &handles).unwrap();
+            let metadata = crate::NodeAttributes {
+                size_bytes: request.attr.size_bytes,
+                storage_allocated_bytes: request.attr.storage_allocated_bytes,
+                creation_time_nanos: request.attr.creation_time_nanos,
+                modification_time_nanos: request.attr.modification_time_nanos,
+                mode: request.attr.mode,
+                uid: request.attr.uid,
+                gid: request.attr.gid,
+            };
             let result = match endpoint.opened.as_ref() {
                 Ok(Some(opened)) => instance
                     .fs
                     .set_len(opened, request.attr.size_bytes)
+                    .and_then(|()| instance.fs.set_metadata(endpoint.inode, metadata))
+                    .map_err(status),
+                Ok(None) => instance
+                    .fs
+                    .set_metadata(endpoint.inode, metadata)
                     .map_err(status),
                 Err(status) => Err(*status),
-                _ => Err(FsStatus::IsDirectory),
             };
             fs_reply(
                 channel,
@@ -180,6 +193,59 @@ fn dispatch_endpoint_message(
             );
         }
         3 => return DispatchResult::Close,
+        4 => {
+            let request = NodeGetXattrRequest::decode(request, &handles).unwrap();
+            let result = instance
+                .fs
+                .get_xattr(endpoint.inode, request.name)
+                .map_err(status);
+            fs_reply(
+                channel,
+                &NodeGetXattrResponse {
+                    status: result.as_ref().err().copied().unwrap_or(FsStatus::Ok),
+                    value: &result.unwrap_or_default(),
+                },
+            );
+        }
+        5 => {
+            let request = NodeSetXattrRequest::decode(request, &handles).unwrap();
+            let result = instance
+                .fs
+                .set_xattr(endpoint.inode, request.name, request.value, request.flags)
+                .map_err(status);
+            fs_reply(
+                channel,
+                &NodeSetXattrResponse {
+                    status: result.err().unwrap_or(FsStatus::Ok),
+                },
+            );
+        }
+        6 => {
+            let result = instance.fs.list_xattrs(endpoint.inode).map_err(status);
+            let status = result.as_ref().err().copied().unwrap_or(FsStatus::Ok);
+            let names = result.unwrap_or_default();
+            let names = names.iter().map(|name| name.as_str()).collect::<Vec<_>>();
+            fs_reply(
+                channel,
+                &NodeListXattrsResponse {
+                    status,
+                    names: WireStringVector::from_slice(&names),
+                },
+            );
+        }
+        7 => {
+            let request = NodeRemoveXattrRequest::decode(request, &handles).unwrap();
+            let result = instance
+                .fs
+                .remove_xattr(endpoint.inode, request.name)
+                .map_err(status);
+            fs_reply(
+                channel,
+                &NodeRemoveXattrResponse {
+                    status: result.err().unwrap_or(FsStatus::Ok),
+                },
+            );
+        }
         10 => {
             let request = FileReadRequest::decode(request, &handles).unwrap();
             let result = match endpoint.opened.as_mut() {
@@ -280,10 +346,10 @@ fn dispatch_endpoint_message(
                 .iter()
                 .map(|entry| DirEntry {
                     name: &entry.name,
-                    kind: if entry.kind == NodeKind::File {
-                        fs_fidl::NodeKind::File
-                    } else {
-                        fs_fidl::NodeKind::Directory
+                    kind: match entry.kind {
+                        NodeKind::File => fs_fidl::NodeKind::File,
+                        NodeKind::Directory => fs_fidl::NodeKind::Directory,
+                        NodeKind::Symlink => fs_fidl::NodeKind::Symlink,
                     },
                     attr: attributes(entry.attributes),
                 })
@@ -306,6 +372,59 @@ fn dispatch_endpoint_message(
                 channel,
                 &DirectoryUnlinkResponse {
                     status: result.err().unwrap_or(FsStatus::Ok),
+                },
+            );
+        }
+        23 => {
+            let request = DirectoryRenameRequest::decode(request, &handles).unwrap();
+            let result = instance
+                .fs
+                .rename(endpoint.inode, request.source, request.target)
+                .map_err(status);
+            fs_reply(
+                channel,
+                &DirectoryRenameResponse {
+                    status: result.err().unwrap_or(FsStatus::Ok),
+                },
+            );
+        }
+        24 => {
+            let request = DirectoryLinkRequest::decode(request, &handles).unwrap();
+            let result = instance
+                .fs
+                .link(endpoint.inode, request.source, request.target)
+                .map_err(status);
+            fs_reply(
+                channel,
+                &DirectoryLinkResponse {
+                    status: result.err().unwrap_or(FsStatus::Ok),
+                },
+            );
+        }
+        25 => {
+            let request = DirectorySymlinkRequest::decode(request, &handles).unwrap();
+            let result = instance
+                .fs
+                .symlink(endpoint.inode, request.target, request.link_path)
+                .map_err(status);
+            fs_reply(
+                channel,
+                &DirectorySymlinkResponse {
+                    status: result.err().unwrap_or(FsStatus::Ok),
+                },
+            );
+        }
+        26 => {
+            let request = DirectoryReadLinkRequest::decode(request, &handles).unwrap();
+            let result = instance
+                .fs
+                .readlink(endpoint.inode, request.path)
+                .map_err(status);
+            fs_reply(
+                channel,
+                &DirectoryReadLinkResponse {
+                    status: result.as_ref().err().copied().unwrap_or(FsStatus::Ok),
+                    target: result.as_deref().unwrap_or(""),
                 },
             );
         }
@@ -362,6 +481,8 @@ pub(crate) fn attributes(a: NodeAttributes) -> FileAttributes {
         creation_time_nanos: a.creation_time_nanos,
         modification_time_nanos: a.modification_time_nanos,
         mode: a.mode,
+        uid: a.uid,
+        gid: a.gid,
     }
 }
 
@@ -372,6 +493,8 @@ pub(crate) fn empty_attrs() -> FileAttributes {
         creation_time_nanos: 0,
         modification_time_nanos: 0,
         mode: 0,
+        uid: 0,
+        gid: 0,
     }
 }
 

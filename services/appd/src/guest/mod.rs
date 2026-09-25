@@ -490,6 +490,7 @@ async fn boot(initial: Channel) -> Result<(), String> {
             &dependency_roots,
             vfsd,
             &app_registry,
+            None,
         ) {
             Ok(resolver) => resolver,
             Err(error) => {
@@ -1353,6 +1354,7 @@ fn bind_preinstalled_drivers(
             &dependency_roots,
             vfsd,
             registry,
+            None,
         ) {
             Ok(resolver) => resolver,
             Err(error) => {
@@ -1493,6 +1495,7 @@ fn launch_preinstalled_storage_services(
                 Vec::new(),
                 0,
                 false,
+                None,
             );
             if status != lifecycle::AppLifecycleStatus::Ok {
                 return Err(format!(
@@ -2885,6 +2888,7 @@ fn poll_lifecycle_watchdog(
                     initial,
                     lazy_idle_timeout_ms,
                     false,
+                    None,
                 );
             }
             changed = true;
@@ -3011,6 +3015,7 @@ fn poll_lifecycle_watchdog(
             Vec::new(),
             0,
             false,
+            None,
         );
     }
     if changed {
@@ -4059,6 +4064,7 @@ fn activate_lazy_bindings(
                     initial,
                     binding.idle_timeout_ms,
                     false,
+                    None,
                 );
                 if status != lifecycle::AppLifecycleStatus::Ok {
                     let failed = lazy.failed_launch(
@@ -5235,6 +5241,7 @@ fn launch_lifecycle_app(
         Vec::new(),
         0,
         false,
+        None,
     )
 }
 
@@ -5268,6 +5275,7 @@ fn launch_application(
     initial_incoming_bindings: Vec<BoundCapability>,
     lazy_idle_timeout_ms: u32,
     internal_shell: bool,
+    container: Option<&command_runtime::ContainerLaunch>,
 ) -> lifecycle::AppLifecycleStatus {
     log(&alloc::format!(
         "appd: launch request package={package_id} uid={uid}\n"
@@ -5327,6 +5335,19 @@ fn launch_application(
             return lifecycle::AppLifecycleStatus::InvalidArgs;
         }
     };
+    if let Some(container) = container {
+        let Some(process) = manifest
+            .processes
+            .iter_mut()
+            .find(|process| process.name == process_name)
+        else {
+            let _ = Memory::close(archive_root.0);
+            return lifecycle::AppLifecycleStatus::NotFound;
+        };
+        process.runner = "nix".into();
+        process.runner_options = Some(crate::ProcessRunnerOptions::Nix(container.options.clone()));
+        process.service = false;
+    }
     if let Some(command) = command {
         if let Some(process) = manifest
             .processes
@@ -5575,6 +5596,7 @@ fn launch_application(
         &dependency_roots,
         vfsd,
         registry,
+        container.map(|container| (process_name, Channel(container.rootfs))),
     ) {
         Ok(resolver) => resolver,
         Err(error) => {
@@ -5607,7 +5629,10 @@ fn launch_application(
             return status;
         }
     };
-    let resource_group_id = network_resource_job.as_ref().map_or(1, |job| job.id);
+    let resource_group_id = container.map_or_else(
+        || network_resource_job.as_ref().map_or(1, |job| job.id),
+        |container| container.resource_group_id,
+    );
     let launched = RunnerRegistry::new().launch(
         &LaunchRequest {
             manifest: &manifest,
@@ -5690,11 +5715,17 @@ fn launch_application(
         }
         _ => record.package_id.clone(),
     };
-    let data_root = match if uid == SYSTEM_UID {
+    let selected_data_root = if let Some(container) = container {
+        Memory::object_info(container.rootfs)
+            .and_then(|(_, rights)| Memory::duplicate(container.rootfs, rights))
+            .map(Channel)
+            .map_err(|_| fs_fidl::FsStatus::AccessDenied)
+    } else if uid == SYSTEM_UID {
         vfs::get_system_data_directory(vfsd, &data_package)
     } else {
         vfs::get_user_data_directory(vfsd, uid, &data_package)
-    } {
+    };
+    let data_root = match selected_data_root {
         Ok(root) => root,
         Err(error) => {
             log(&alloc::format!(
@@ -5768,10 +5799,10 @@ fn launch_application(
         }
     };
     let mut namespace_entries = startup_namespace_entries(&namespace);
-    if let Some(command) = command {
-        match Memory::object_info(command.cwd)
-            .and_then(|(_, rights)| Memory::duplicate(command.cwd, rights))
-        {
+    if let Some(command) = command
+        && let Some(cwd) = command.cwd
+    {
+        match Memory::object_info(cwd).and_then(|(_, rights)| Memory::duplicate(cwd, rights)) {
             Ok(directory) => namespace_entries.push(bexos_userspace::NamespaceEntry {
                 path: "/cwd".into(),
                 directory,

@@ -35,6 +35,12 @@ impl Vmo {
         self.0.duplicate(rights).map(Self)
     }
 
+    pub fn snapshot(&self, offset: u64, size: u64) -> Result<Self> {
+        Memory::clone_vmo(self.as_handle_ref().raw_handle(), offset, size)
+            .map(|raw| Self(unsafe { Handle::from_raw(raw) }))
+            .map_err(Status::from)
+    }
+
     pub fn into_raw(self) -> u64 {
         self.0.into_raw()
     }

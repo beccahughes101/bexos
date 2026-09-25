@@ -1,0 +1,8 @@
+load("@rules_rust//rust:defs.bzl", "rust_test")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("//build/rules:app_archive.bzl", "app_archive")
+package(default_visibility=["//visibility:public"])
+std_service_binary(name="container_elf",srcs=glob(["src/*.rs"]),crate_name="bexos_container_cli",deps=["//idl:app_opener_fidl_rust","//idl:container_fidl_rust"])
+app_manifest(name="manifest",src="package/manifest.prototxt")
+app_archive(name="container_cli",manifest=":manifest",entries={"bin/container":":container_elf"},compression="zstd")
+rust_test(name="tests",srcs=["src/parse.rs"],crate_name="container_cli_tests",edition="2024")

@@ -23,6 +23,11 @@ pub(crate) struct Endpoint {
     file: Result<Option<FileHandle>, FsStatus>,
 }
 
+// Keep memory-backed mounts aligned with pkgd's maximum accepted package and
+// OCI object size.  The previous 16 MiB guard rejected valid service packages
+// after their executable was stored uncompressed for predictable boot time.
+const MAX_MEMORY_ARCHIVE_BYTES: u64 = 256 * 1024 * 1024;
+
 pub async fn main(channel: u64) -> ! {
     let control = Channel(channel);
     let start = Startup::receive(control).unwrap();
@@ -78,7 +83,7 @@ pub(crate) async fn serve_inner(mut state: migration::Runtime) -> ! {
                     ));
                     let result = (|| {
                         let rounded = bexos_boot::page_round(q.length)
-                            .filter(|_| q.length > 0 && q.length <= 16 * 1024 * 1024)
+                            .filter(|_| q.length > 0 && q.length <= MAX_MEMORY_ARCHIVE_BYTES)
                             .ok_or(ArchiveFsError::InvalidArgs)?;
                         let va = Memory::map(q.archive.raw, rounded, 2)
                             .map_err(|_| ArchiveFsError::AccessDenied)?;
@@ -105,7 +110,7 @@ pub(crate) async fn serve_inner(mut state: migration::Runtime) -> ! {
                             });
                             (FsStatus::Ok, client.0)
                         }
-                        Err(e) => (status(e), 0),
+                        Err(e) => error_root(status(e)),
                     };
                     archive_reply(
                         control,
@@ -142,7 +147,7 @@ pub(crate) async fn serve_inner(mut state: migration::Runtime) -> ! {
                             log(&alloc::format!(
                                 "archivefs: mount package failed {error:?}\n"
                             ));
-                            (status(error), 0)
+                            error_root(status(error))
                         }
                     };
                     archive_reply(
@@ -319,6 +324,12 @@ pub(crate) async fn serve_inner(mut state: migration::Runtime) -> ! {
                         status: FsStatus::ReadOnly,
                     },
                 ),
+                23 => fs_reply(
+                    channel,
+                    &DirectoryRenameResponse {
+                        status: FsStatus::ReadOnly,
+                    },
+                ),
                 _ => panic!("unknown archivefs file ordinal"),
             }
         }
@@ -451,6 +462,17 @@ fn status(error: ArchiveFsError) -> FsStatus {
     }
 }
 
+fn error_root(status: FsStatus) -> (FsStatus, u64) {
+    // Resource responses must carry a real handle even when the operation
+    // fails.  Sending handle zero makes the kernel reject the response and
+    // used to turn an ordinary mount error into an archivefs panic.  Return a
+    // deliberately peer-closed channel; the client consumes it with the
+    // status response and closes its endpoint below.
+    let (client, server) = Channel::pair().expect("archivefs error channel");
+    let _ = Memory::close(server.0);
+    (status, client.0)
+}
+
 fn attributes(a: NodeAttributes) -> FileAttributes {
     FileAttributes {
         size_bytes: a.size_bytes,
@@ -458,6 +480,8 @@ fn attributes(a: NodeAttributes) -> FileAttributes {
         creation_time_nanos: a.creation_time_nanos,
         modification_time_nanos: a.modification_time_nanos,
         mode: a.mode,
+        uid: 0,
+        gid: 0,
     }
 }
 
@@ -468,6 +492,8 @@ fn empty_attrs() -> FileAttributes {
         creation_time_nanos: 0,
         modification_time_nanos: 0,
         mode: 0,
+        uid: 0,
+        gid: 0,
     }
 }
 

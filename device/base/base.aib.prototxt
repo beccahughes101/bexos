@@ -25,8 +25,12 @@ packages { label: "//services/networkd:networkd_archive" package_id: "bexos.serv
 packages { label: "//services/vswitchd:vswitchd_archive" package_id: "bexos.service.vswitchd" placement: SYSTEM_IMAGE }
 packages { label: "//services/timed:timed_archive" package_id: "bexos.service.timed" placement: SYSTEM_IMAGE }
 packages { label: "//services/jobd:jobd_archive" package_id: "bexos.service.jobd" placement: SYSTEM_IMAGE }
+packages { label: "//services/pkgd:pkgd_archive" package_id: "bexos.service.pkgd" placement: SYSTEM_IMAGE }
 
 packages { label: "//services/wasm_runner:wasm_runner_archive" package_id: "bexos.platform.wasm_runner" placement: SYSTEM_IMAGE }
+packages { label: "//services/starnix_runner:starnix_runner_archive" package_id: "bexos.platform.starnix_runner" placement: SYSTEM_IMAGE }
+packages { label: "//services/containerd:containerd_archive" package_id: "bexos.service.containerd" placement: SYSTEM_IMAGE }
+packages { label: "//apps/container_cli:container_cli" package_id: "bexos.app.container_cli" placement: SYSTEM_IMAGE }
 
 packages { label: "//apps/brush_shell:brush_shell" package_id: "bexos.app.brush_shell" placement: SYSTEM_IMAGE }
 

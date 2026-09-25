@@ -15,6 +15,7 @@ pub struct ControlledProcess {
     pub uid: u64,
     pub watch_pending: bool,
     pub completion: Option<i32>,
+    pub resource_group: u64,
 }
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CommandState {
@@ -26,13 +27,13 @@ impl CommandState {
         self.bindings.iter().map(|b| b.channel).chain(
             self.processes
                 .iter()
-                .flat_map(|p| [p.channel, p.process])
+                .flat_map(|p| [p.channel, p.process, p.resource_group])
                 .filter(|h| *h != 0),
         )
     }
     pub fn encode(&self) -> Vec<u8> {
         let mut w = Encoder::new();
-        w.word(1);
+        w.word(2);
         w.word(self.bindings.len() as u64);
         for b in &self.bindings {
             w.word(b.channel);
@@ -49,12 +50,14 @@ impl CommandState {
             w.word(p.watch_pending as u64);
             w.word(p.completion.is_some() as u64);
             w.word(p.completion.unwrap_or(0) as i64 as u64);
+            w.word(p.resource_group);
         }
         w.finish()
     }
     pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
         let mut r = Decoder::new(bytes);
-        if r.word()? != 1 {
+        let version = r.word()?;
+        if !matches!(version, 1 | 2) {
             return Err(Error::InvalidData);
         }
         let mut state = Self::default();
@@ -81,6 +84,7 @@ impl CommandState {
             let watch_pending = r.flag()?;
             let completed = r.flag()?;
             let code = r.word()? as i64;
+            let resource_group = if version >= 2 { r.word()? } else { 0 };
             if (channel == 0 && watch_pending)
                 || process == 0
                 || code != code as i32 as i64
@@ -95,6 +99,7 @@ impl CommandState {
                 uid,
                 watch_pending,
                 completion: completed.then_some(code as i32),
+                resource_group,
             });
         }
         r.finish()?;

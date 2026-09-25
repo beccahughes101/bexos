@@ -1,6 +1,6 @@
 load("//build/rules:app_archive.bzl", "app_archive")
 load("//build/rules:userspace.bzl", "app_manifest")
-load("//build/platforms:architecture.bzl", "guest_platform")
+load("//build/platforms:architecture.bzl", "guest_platform", "guest_select")
 load("//testing/e2e/qemu:architecture_test.bzl", "qemu_suites")
 load("//testing/e2e/qemu:qemu_e2e.bzl", "qemu_e2e_test")
 load("@rules_rust//rust:defs.bzl", "rust_binary")
@@ -38,6 +38,74 @@ rust_binary(
     rustc_flags = LINUX_RUST_FLAGS,
 )
 
+MUSL_AARCH64 = "prebuilts/build-tools/sysroots/aarch64-unknown-linux-musl"
+MUSL_X86_64 = "prebuilts/build-tools/sysroots/x86_64-unknown-linux-musl"
+
+MUSL_LINK_INPUTS = [
+    "lib/crt1.o",
+    "lib/crti.o",
+    "lib/crtbeginS.o",
+    "lib/libc.so",
+    "lib/libc_musl.so",
+    "lib/libc_musl_linker_object.o",
+    "lib/relinterp.script",
+    "lib/crtendS.o",
+    "lib/crtn.o",
+]
+
+genrule(
+    name = "dynamic_musl",
+    srcs = [
+        "dynamic_musl.c",
+        "@trusty_src//:BUILD.bazel",
+    ] + guest_select(
+        ["@trusty_src//:" + MUSL_AARCH64 + "/" + path for path in MUSL_LINK_INPUTS],
+        ["@trusty_src//:" + MUSL_X86_64 + "/" + path for path in MUSL_LINK_INPUTS],
+    ),
+    outs = ["dynamic_musl.elf"],
+    cmd = guest_select(
+        "ROOT=$$(dirname $(location @trusty_src//:BUILD.bazel)); " +
+        "SYSROOT=$$ROOT/" + MUSL_AARCH64 + "; " +
+        "$(location @llvm//tools:clang) --target=aarch64-unknown-linux-musl -fPIE -c " +
+        "$(location dynamic_musl.c) -o $(@D)/dynamic_musl.o; " +
+        "$(location @llvm//tools:clang) --target=aarch64-unknown-linux-musl " +
+        "-fuse-ld=lld -nostdlib -pie " +
+        "-Wl,-L,$$ROOT/" + MUSL_AARCH64 + "/lib " +
+        "-Wl,--dynamic-linker,/lib/ld-musl.so.1 " +
+        "$$SYSROOT/lib/crt1.o $$SYSROOT/lib/crti.o $$SYSROOT/lib/crtbeginS.o " +
+        "$(@D)/dynamic_musl.o $$SYSROOT/lib/libc_musl.so " +
+        "$$SYSROOT/lib/crtendS.o $$SYSROOT/lib/crtn.o -o $@",
+        "ROOT=$$(dirname $(location @trusty_src//:BUILD.bazel)); " +
+        "SYSROOT=$$ROOT/" + MUSL_X86_64 + "; " +
+        "$(location @llvm//tools:clang) --target=x86_64-unknown-linux-musl -fPIE -c " +
+        "$(location dynamic_musl.c) -o $(@D)/dynamic_musl.o; " +
+        "$(location @llvm//tools:clang) --target=x86_64-unknown-linux-musl " +
+        "-fuse-ld=lld -nostdlib -pie " +
+        "-Wl,-L,$$ROOT/" + MUSL_X86_64 + "/lib " +
+        "-Wl,--dynamic-linker,/lib/ld-musl.so.1 " +
+        "$$SYSROOT/lib/crt1.o $$SYSROOT/lib/crti.o $$SYSROOT/lib/crtbeginS.o " +
+        "$(@D)/dynamic_musl.o $$SYSROOT/lib/libc_musl.so " +
+        "$$SYSROOT/lib/crtendS.o $$SYSROOT/lib/crtn.o -o $@",
+    ),
+    tools = ["@llvm//tools:clang"],
+)
+
+filegroup(
+    name = "musl_loader",
+    srcs = guest_select(
+        ["@trusty_src//:" + MUSL_AARCH64 + "/lib/ld-musl.so.1"],
+        ["@trusty_src//:" + MUSL_X86_64 + "/lib/ld-musl.so.1"],
+    ),
+)
+
+filegroup(
+    name = "musl_libc",
+    srcs = guest_select(
+        ["@trusty_src//:" + MUSL_AARCH64 + "/lib/libc_musl.so"],
+        ["@trusty_src//:" + MUSL_X86_64 + "/lib/libc_musl.so"],
+    ),
+)
+
 rust_binary(
     name = "looping_linux",
     srcs = ["looping.rs"],
@@ -54,8 +122,11 @@ app_archive(
     name = "archive",
     manifest = ":manifest",
     entries = {
+        "bin/dynamic_musl": ":dynamic_musl",
         "bin/hello": ":hello_linux",
         "bin/looping": ":looping_linux",
+        "lib/ld-musl.so.1": ":musl_loader",
+        "lib/libc_musl.so": ":musl_libc",
     },
     compression = "zstd",
 )
@@ -71,8 +142,13 @@ qemu_e2e_test(
         "//testing/e2e",
         "//tools/qemu:qemu_test",
     ],
+    # Integrated AArch64 boots source-built secure firmware under TCG before
+    # launching the complete service graph. Keep the 120-second no-progress
+    # watchdog, but allow active boots enough wall time to reach debugd.
+    env = {"BEXOS_QEMU_DEBUG_BOOT_TIMEOUT_SECONDS": "6000"},
     extra_data = [":archive"],
     extra_args = ["$(rootpath :archive)"],
+    x86_env_overrides = {"BEXOS_QEMU_DEBUG_BOOT_TIMEOUT_SECONDS": "600"},
 )
 
 qemu_suites()

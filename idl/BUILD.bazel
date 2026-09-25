@@ -9,11 +9,27 @@ filegroup(
     srcs = glob([
         "bexos/**/*.fidl",
         "bexos/app/manifest.proto",
+        "bexos/container/runtime.proto",
         "bexos/platform/assembly.proto",
         "bexos/sdk/metadata.proto",
         "bexos/version/version.proto",
     ]),
 )
+
+bexos_fidl_rust(
+    name = "container_fidl_rust_src",
+    src = "bexos/container/runtime.fidl",
+    out = "container_fidl.rs",
+)
+rust_library(
+    name = "container_fidl_rust",
+    srcs = [":container_fidl_rust_src"],
+    crate_name = "container_fidl",
+    edition = "2024",
+    deps = ["//idl:kernel_fidl_rust"],
+)
+filegroup(name = "container_runtime_proto_src", srcs = ["bexos/container/runtime.proto"])
+proto_library(name = "container_runtime_proto", srcs = ["bexos/container/runtime.proto"])
 
 bexos_fidl_rust(name = "pkg_fidl_rust_src", src = "bexos/pkg/resolver.fidl", out = "pkg_fidl.rs")
 rust_library(name = "pkg_fidl_rust", srcs = [":pkg_fidl_rust_src"], crate_name = "pkg_fidl", edition = "2024")

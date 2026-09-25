@@ -5,6 +5,13 @@
  * embedded Trusty image into bank A, installs secure stage two, and mediates
  * every SMC made by Trusty. The embedded payload path is supplied by Bazel.
  */
+.equ OWNER_L0_TABLE, BEXOS_OWNER_BASE + 0x100000
+.equ OWNER_L1_LOW_TABLE, BEXOS_OWNER_BASE + 0x101000
+.equ OWNER_L2_LOW_TABLE, BEXOS_OWNER_BASE + 0x102000
+.equ OWNER_L1_HIGH_TABLE, BEXOS_OWNER_BASE + 0x103000
+.equ OWNER_STACKS_BASE, BEXOS_OWNER_BASE + 0x200000
+.equ OWNER_BOOT_STACK, OWNER_STACKS_BASE + 0x10000
+
 .section .text.entry,"ax"
 .global _start
 _start:
@@ -89,10 +96,10 @@ owner_start:
     /* L0[0:1] cover the 40-bit S-EL1 IPA space. L1[0] descends to L2 so
      * the Trusty window can be redirected while all other low addresses keep
      * identity mappings for the GIC, UART, and shared-memory transports. */
-    ldr x10, =BEXOS_OWNER_BASE + 0x10000
-    ldr x11, =BEXOS_OWNER_BASE + 0x11000
-    ldr x12, =BEXOS_OWNER_BASE + 0x12000
-    ldr x13, =BEXOS_OWNER_BASE + 0x13000
+    ldr x10, =OWNER_L0_TABLE
+    ldr x11, =OWNER_L1_LOW_TABLE
+    ldr x12, =OWNER_L2_LOW_TABLE
+    ldr x13, =OWNER_L1_HIGH_TABLE
     mov x0, x10
     mov x1, #(4 * 512)
 3:  str xzr, [x0], #8
@@ -154,7 +161,7 @@ owner_start:
     /* Authenticate and recover the durable Trusty selection before the first
      * S-EL1 instruction. The Rust owner loads a non-embedded image into its
      * recorded bank and marks interrupted trials for rollback. */
-    ldr x0, =BEXOS_OWNER_BASE + 0x90000
+    ldr x0, =OWNER_BOOT_STACK
     mov sp, x0
     bl bexos_arm_owner_boot_select
     cbz x0, owner_failed
@@ -164,7 +171,7 @@ owner_start:
     b.eq 9f
     cmp x5, #2
     b.ne owner_failed
-    ldr x12, =BEXOS_OWNER_BASE + 0x12000
+    ldr x12, =OWNER_L2_LOW_TABLE
     movz x0, #(BEXOS_TRUSTY_B_BASE & 0xffff)
     movk x0, #((BEXOS_TRUSTY_B_BASE >> 16) & 0xffff), lsl #16
     movk x0, #((BEXOS_TRUSTY_B_BASE >> 32) & 0xffff), lsl #32
@@ -193,11 +200,11 @@ owner_secondary:
     and x9, x9, #0xff
     add x9, x9, #1
     lsl x9, x9, #16
-    ldr x0, =BEXOS_OWNER_BASE + 0x80000
+    ldr x0, =OWNER_STACKS_BASE
     add x0, x0, x9
     mov sp, x0
 
-    ldr x10, =BEXOS_OWNER_BASE + 0x10000
+    ldr x10, =OWNER_L0_TABLE
     ldr x0, =0x33598
     msr vtcr_el2, x0
     ldr x0, =0x80000098
@@ -517,7 +524,7 @@ launch_candidate:
     movk x0, #((BEXOS_TRUSTY_A_BASE >> 32) & 0xffff), lsl #32
     movk x0, #((BEXOS_TRUSTY_A_BASE >> 48) & 0xffff), lsl #48
 4:
-    ldr x1, =BEXOS_OWNER_BASE + 0x12000 + (113 * 8)
+    ldr x1, =OWNER_L2_LOW_TABLE + (113 * 8)
     mov x2, #7
     mov x3, #0x4fd
 5:  orr x4, x0, x3
@@ -600,7 +607,7 @@ restore_source:
     movk x0, #((BEXOS_TRUSTY_A_BASE >> 32) & 0xffff), lsl #32
     movk x0, #((BEXOS_TRUSTY_A_BASE >> 48) & 0xffff), lsl #48
 11:
-    ldr x1, =BEXOS_OWNER_BASE + 0x12000 + (113 * 8)
+    ldr x1, =OWNER_L2_LOW_TABLE + (113 * 8)
     mov x2, #7
     mov x3, #0x4fd
 12: orr x4, x0, x3

@@ -1,0 +1,20 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "oci",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "bexos_oci",
+    edition = "2024",
+    deps = [
+        "@crates//:ruzstd",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+    ],
+)
+
+rust_test(
+    name = "tests",
+    crate = ":oci",
+)

@@ -84,6 +84,7 @@ impl RepositoryState {
                     3 => ArtifactKind::Font,
                     4 => ArtifactKind::Firmware,
                     5 => ArtifactKind::NetworkExtension,
+                    6 => ArtifactKind::Container,
                     _ => return Err(bexos_migration::Error::InvalidData),
                 };
                 let tag = reader.text(64)?.into();

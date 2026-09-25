@@ -43,6 +43,28 @@ use bexos_kernel_core::bootfs::Bootfs;
 use sha2::{Digest, Sha256};
 
 const DEBUGD_READY: &[u8] = b"debugd: QEMU socket transport ready";
+const PACKAGE_STORE_MOUNT_BEGIN: &[u8] = b"vfsd: package store mount request begin";
+const PACKAGE_STORE_MOUNT_COMPLETE: &[u8] = b"bexfs: mount complete";
+// The guest-side package-store mount is bounded at 690 seconds on
+// source-emulated AArch64. Give that exact named phase a 60-second dispatch
+// margin while retaining the 120-second watchdog everywhere else.
+const PACKAGE_STORE_STALL_TIMEOUT: Duration = Duration::from_secs(750);
+const APP_LAUNCH_BEGIN: &[u8] = b"appd: launch request package=";
+const APP_LAUNCH_COMPLETE: &[u8] = b"appd: elf main thread started package=";
+const APP_LAUNCH_STALL_TIMEOUT: Duration = Duration::from_secs(720);
+const STORAGE_VERIFY_BEGIN: &[u8] = b"storage-verify: startup arg0=";
+const STORAGE_VERIFY_COMPLETE: &[u8] =
+    b"appd: registry launched signed app package=bexos.platform.storage_verify";
+// The verifier deliberately issues a durable File.Sync after pivot.  That RPC
+// is bounded at 690 seconds in the guest; allow the same 60-second harness
+// dispatch margin used for other nested boot phases.
+const STORAGE_VERIFY_STALL_TIMEOUT: Duration = Duration::from_secs(750);
+const PAGE_REUSE_PROOF_BEGIN: &[u8] = b"appd: proving reclaimed page reuse";
+const PAGE_REUSE_PROOF_COMPLETE: &[u8] = b"appd: reclaimed physical pages reused=";
+// The proof commits bounded batches until first-fit allocation reaches the
+// reclaimed BootFS span.  Source-emulated page-table and zeroing work can take
+// several minutes even though the loop is capped by the reported free pages.
+const PAGE_REUSE_PROOF_STALL_TIMEOUT: Duration = Duration::from_secs(600);
 const DEBUGD_SHELL_DEPENDENCIES: &[&[u8]] = &[
     b"debugd: app lifecycle proxy connected",
     b"debugd: user proxy connected",
@@ -1374,6 +1396,81 @@ mod tests {
             &markers,
         );
         assert!(two > one);
+        let mapping_one = super::named_boot_progress(
+            b"appd: elf library segment mapped package=one library=lib.one vaddr=0xc0000000\n",
+            &markers,
+        );
+        let mapping_two = super::named_boot_progress(
+            b"appd: elf library segment mapped package=one library=lib.one vaddr=0xc0000000\nappd: elf library segment mapped package=one library=lib.one vaddr=0xc0010000\n",
+            &markers,
+        );
+        assert!(mapping_two > mapping_one);
+    }
+
+    #[test]
+    fn package_store_mount_gets_a_bounded_slow_phase_watchdog() {
+        let default = std::time::Duration::from_secs(120);
+        assert_eq!(super::boot_stall_timeout(b"early boot", default), default);
+        assert_eq!(
+            super::boot_stall_timeout(super::PACKAGE_STORE_MOUNT_BEGIN, default),
+            super::PACKAGE_STORE_STALL_TIMEOUT
+        );
+        let completed = [
+            super::PACKAGE_STORE_MOUNT_BEGIN,
+            b"\n",
+            super::PACKAGE_STORE_MOUNT_COMPLETE,
+        ]
+        .concat();
+        assert_eq!(super::boot_stall_timeout(&completed, default), default);
+    }
+
+    #[test]
+    fn app_launch_gets_a_bounded_slow_phase_watchdog() {
+        let default = std::time::Duration::from_secs(120);
+        assert_eq!(
+            super::boot_stall_timeout(super::APP_LAUNCH_BEGIN, default),
+            super::APP_LAUNCH_STALL_TIMEOUT
+        );
+        let completed = [
+            super::APP_LAUNCH_BEGIN,
+            b"one\n",
+            super::APP_LAUNCH_COMPLETE,
+        ]
+        .concat();
+        assert_eq!(super::boot_stall_timeout(&completed, default), default);
+    }
+
+    #[test]
+    fn durable_storage_verification_gets_a_bounded_slow_phase_watchdog() {
+        let default = std::time::Duration::from_secs(120);
+        assert_eq!(
+            super::boot_stall_timeout(super::STORAGE_VERIFY_BEGIN, default),
+            super::STORAGE_VERIFY_STALL_TIMEOUT
+        );
+        let completed = [
+            super::STORAGE_VERIFY_BEGIN,
+            b"1 arg1=0\n",
+            super::STORAGE_VERIFY_COMPLETE,
+        ]
+        .concat();
+        assert_eq!(super::boot_stall_timeout(&completed, default), default);
+    }
+
+    #[test]
+    fn reclaimed_page_reuse_proof_gets_a_bounded_slow_phase_watchdog() {
+        let default = std::time::Duration::from_secs(120);
+        assert_eq!(
+            super::boot_stall_timeout(super::PAGE_REUSE_PROOF_BEGIN, default),
+            super::PAGE_REUSE_PROOF_STALL_TIMEOUT
+        );
+        let completed = [
+            super::PAGE_REUSE_PROOF_BEGIN,
+            b"\n",
+            super::PAGE_REUSE_PROOF_COMPLETE,
+            b"1\n",
+        ]
+        .concat();
+        assert_eq!(super::boot_stall_timeout(&completed, default), default);
     }
 
     #[test]
@@ -1723,9 +1820,10 @@ fn read_until_done_mode(
             {
                 break;
             }
-            if progressed_at.elapsed() >= stall_timeout {
+            let active_stall_timeout = boot_stall_timeout(output, stall_timeout);
+            if progressed_at.elapsed() >= active_stall_timeout {
                 stall_error = Some(format!(
-                    "QEMU boot stalled for {stall_timeout:?} at progress generation {progress}\n{}",
+                    "QEMU boot stalled for {active_stall_timeout:?} at progress generation {progress}\n{}",
                     diagnostic_tail(output)
                 ));
                 break;
@@ -1825,9 +1923,10 @@ fn read_debug_boot(
             progress = current_progress;
             progressed_at = Instant::now();
             eprintln!("e2e: boot progress generation={progress}");
-        } else if progressed_at.elapsed() >= stall_timeout {
+        } else if progressed_at.elapsed() >= boot_stall_timeout(output, stall_timeout) {
+            let active_stall_timeout = boot_stall_timeout(output, stall_timeout);
             let error = format!(
-                "QEMU boot stalled for {stall_timeout:?} at progress generation {progress}\n{}",
+                "QEMU boot stalled for {active_stall_timeout:?} at progress generation {progress}\n{}",
                 diagnostic_tail(output)
             );
             publish_failure_diagnostics("debug-boot-stall", output);
@@ -1914,6 +2013,10 @@ fn named_boot_progress(output: &[u8], markers: &[&[u8]]) -> usize {
         b"appd: persistent registry stores installed",
         b"appd: boot launch storage services",
         b"pivot complete; /boot removed",
+        STORAGE_VERIFY_BEGIN,
+        STORAGE_VERIFY_COMPLETE,
+        PAGE_REUSE_PROOF_BEGIN,
+        PAGE_REUSE_PROOF_COMPLETE,
         // These are durable appd state transitions, not arbitrary log
         // traffic. Slow TCG guests can spend more than two minutes bringing
         // up the complete dependency graph, so let each completed service
@@ -1944,6 +2047,54 @@ fn named_boot_progress(output: &[u8], markers: &[&[u8]]) -> usize {
     fixed
         + named_transition_count(output, b"appd: boot disk package imported package=")
         + named_transition_count(output, b"appd: launched preinstalled service package=")
+        // Large services can legitimately spend more than the watchdog period
+        // loading and mapping their libraries under AArch64 TCG. These exact
+        // appd state transitions prove forward movement without treating
+        // arbitrary log traffic as progress.
+        + named_transition_count(output, b"appd: elf library segment mapped package=")
+        + named_transition_count(output, b"appd: elf segment mapped package=")
+        + named_transition_count(output, b"appd: elf service channel ready package=")
+        + named_transition_count(output, APP_LAUNCH_BEGIN)
+        + named_transition_count(output, APP_LAUNCH_COMPLETE)
+        + named_transition_count(output, b"vfsd: package directory open package=")
+        + named_transition_count(output, b"kernel: process heap vmar ready package=")
+        + named_transition_count(output, PACKAGE_STORE_MOUNT_BEGIN)
+        + named_transition_count(output, PACKAGE_STORE_MOUNT_COMPLETE)
+}
+
+fn boot_stall_timeout(output: &[u8], default: Duration) -> Duration {
+    let mut timeout = default;
+    for (begin, complete, phase_timeout) in [
+        (
+            PACKAGE_STORE_MOUNT_BEGIN,
+            PACKAGE_STORE_MOUNT_COMPLETE,
+            PACKAGE_STORE_STALL_TIMEOUT,
+        ),
+        (
+            APP_LAUNCH_BEGIN,
+            APP_LAUNCH_COMPLETE,
+            APP_LAUNCH_STALL_TIMEOUT,
+        ),
+        (
+            STORAGE_VERIFY_BEGIN,
+            STORAGE_VERIFY_COMPLETE,
+            STORAGE_VERIFY_STALL_TIMEOUT,
+        ),
+        (
+            PAGE_REUSE_PROOF_BEGIN,
+            PAGE_REUSE_PROOF_COMPLETE,
+            PAGE_REUSE_PROOF_STALL_TIMEOUT,
+        ),
+    ] {
+        let last_begin = output.windows(begin.len()).rposition(|part| part == begin);
+        let last_complete = output
+            .windows(complete.len())
+            .rposition(|part| part == complete);
+        if last_begin.is_some_and(|begin| last_complete.is_none_or(|complete| begin > complete)) {
+            timeout = timeout.max(phase_timeout);
+        }
+    }
+    timeout
 }
 
 fn named_transition_count(output: &[u8], transition: &[u8]) -> usize {

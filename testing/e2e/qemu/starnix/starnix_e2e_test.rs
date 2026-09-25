@@ -80,6 +80,42 @@ fn run() -> Result<(), String> {
         Ok(())
     })?;
 
+    context.run_phase("dynamic-musl-process", || {
+        session.client.clear_received_trace();
+        if let Err(error) =
+            session
+                .client
+                .launch_app("bexos.platform.starnix_fixture", "dynamic_musl", 0, 0)
+        {
+            return Err(format!(
+                "launch dynamic musl fixture: {error:?}\n{}",
+                String::from_utf8_lossy(session.client.received_trace())
+            ));
+        }
+        context.wait_until(
+            "dynamic musl process completion",
+            Duration::from_secs(30),
+            Duration::from_millis(50),
+            Duration::from_secs(30),
+            || {
+                session
+                    .client
+                    .health_check()
+                    .map_err(|error| format!("dynamic musl health: {error:?}"))?;
+                let trace = String::from_utf8_lossy(session.client.received_trace());
+                if trace.contains("guest panic") || trace.contains("kernel panic") {
+                    return Err(format!("dynamic musl guest panic: {trace}"));
+                }
+                let output = trace.contains("dynamic musl process ok\n");
+                let exited = trace.contains("starnix_runner: guest exited 0");
+                Ok((
+                    (output && exited).then_some(()),
+                    output as u64 + exited as u64,
+                ))
+            },
+        )
+    })?;
+
     context.run_phase("looping-start", || {
         session.client.clear_received_trace();
         if let Err(error) =

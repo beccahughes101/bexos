@@ -1,0 +1,32 @@
+syntax = "proto3";
+package bexos.container;
+
+// Durable container configuration. The offline profile deliberately has no
+// network namespace or socket-provider field.
+message ContainerSpec {
+  uint32 version = 1;
+  string container_id = 2;
+  ImageReference image = 3;
+  repeated string arguments = 4;
+  repeated string environment = 5;
+  string working_directory = 6;
+  uint32 uid = 7;
+  uint32 gid = 8;
+  string hostname = 9;
+  Resources resources = 10;
+  bool readonly_rootfs = 11;
+  bytes manifest_digest = 12;
+}
+
+message ImageReference {
+  string registry_host = 1;
+  string repository = 2;
+  string tag = 3;
+  bytes expected_sha256 = 4;
+}
+
+message Resources {
+  uint32 cpu_shares = 1;
+  uint64 memory_limit_bytes = 2;
+  uint32 process_limit = 3;
+}

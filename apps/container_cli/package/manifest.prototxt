@@ -1,0 +1,14 @@
+package_name: "bexos.app.container_cli"
+name: "Container command"
+package_version { major: 0 minor: 1 patch: 0 }
+commands { command_name: "container" process_name: "container" }
+processes {
+  name: "container"
+  runner: "elf"
+  runner_options { [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/container" } }
+}
+services_consumed {
+  name: "bexos.container.ContainerManager"
+  link_type: REQUIRED
+  capabilities { capability: "Public" methods { ordinal: 1 link_type: REQUIRED } methods { ordinal: 2 link_type: REQUIRED } methods { ordinal: 3 link_type: REQUIRED } methods { ordinal: 4 link_type: REQUIRED } methods { ordinal: 5 link_type: REQUIRED } methods { ordinal: 6 link_type: REQUIRED } }
+}

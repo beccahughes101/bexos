@@ -111,9 +111,11 @@ const SEEK_SET: c_int = 0;
 const SEEK_CUR: c_int = 1;
 const SEEK_END: c_int = 2;
 const S_IFDIR: u32 = 0o040000;
+const S_IFLNK: u32 = 0o120000;
 const S_IFREG: u32 = 0o100000;
 const DT_DIR: u8 = 4;
 const DT_REG: u8 = 8;
+const DT_LNK: u8 = 10;
 const POLLIN: c_short = 0x001;
 const POLLOUT: c_short = 0x004;
 const POLLERR: c_short = 0x008;
@@ -1350,14 +1352,15 @@ fn file_attr_to_stat(attr: fs_fidl::FileAttributes, kind: fs_fidl::NodeKind) -> 
     let mode_type = match kind {
         fs_fidl::NodeKind::Directory => S_IFDIR,
         fs_fidl::NodeKind::File => S_IFREG,
+        fs_fidl::NodeKind::Symlink => S_IFLNK,
     };
     LinuxStat64 {
         st_dev: 1,
         st_ino: 1,
         st_mode: mode_type | attr.mode,
         st_nlink: 1,
-        st_uid: 0,
-        st_gid: 0,
+        st_uid: attr.uid,
+        st_gid: attr.gid,
         st_rdev: 0,
         #[cfg(not(all(bexos_guest, target_arch = "x86_64")))]
         __pad1: 0,
@@ -1428,6 +1431,7 @@ fn dirent64(entry: &DirEntryCache, index: usize) -> LinuxDirent64 {
     out.d_type = match entry.kind {
         fs_fidl::NodeKind::Directory => DT_DIR,
         fs_fidl::NodeKind::File => DT_REG,
+        fs_fidl::NodeKind::Symlink => DT_LNK,
     };
     for (index, byte) in entry.name.as_bytes().iter().take(255).enumerate() {
         out.d_name[index] = *byte as c_char;
@@ -3953,6 +3957,8 @@ mod tests {
             creation_time_nanos: 2_000_000_003,
             modification_time_nanos: 4_000_000_005,
             mode: 0o644,
+            uid: 12,
+            gid: 34,
         };
         let file = file_attr_to_stat(attr, fs_fidl::NodeKind::File);
         assert_eq!(file.st_mode & S_IFREG, S_IFREG);
@@ -3960,6 +3966,8 @@ mod tests {
         assert_eq!(file.st_blocks, 8);
         assert_eq!(file.st_mtime, 4);
         assert_eq!(file.st_mtime_nsec, 5);
+        assert_eq!(file.st_uid, 12);
+        assert_eq!(file.st_gid, 34);
 
         let dir = file_attr_to_stat(attr, fs_fidl::NodeKind::Directory);
         assert_eq!(dir.st_mode & S_IFDIR, S_IFDIR);

@@ -357,8 +357,20 @@ message NixRunnerOptions {
     // Root-bounded subpath within the selected startup directory. The empty
     // value and "/" both select that directory's root.
     string subpath = 2;
+    bool readonly = 3;
   }
   RootFilesystem rootfs = 4;
+  string working_directory = 5;
+  uint32 uid = 6;
+  uint32 gid = 7;
+  uint32 umask = 8;
+  message ResourceLimit {
+    uint32 resource = 1;
+    uint64 soft = 2;
+    uint64 hard = 3;
+  }
+  repeated ResourceLimit resource_limits = 9;
+  string hostname = 10;
 }
 
 message ExposedService {

@@ -38,11 +38,17 @@ impl BexFs {
     pub fn checkpoint_record(&self, key: u64) -> Result<Option<Vec<u8>>, Error> {
         let mut w = Encoder::new();
         if key == 0 {
-            w.word(1);
+            w.word(4);
             w.word(self.header_lba);
             w.bytes(&self.header.encode(160));
             w.word(self.read_only as u64);
             w.word(self.namespace.next_inode);
+            w.word(self.namespace.dentries.len() as u64);
+            for ((parent, name), inode) in &self.namespace.dentries {
+                w.word(*parent);
+                w.text(name);
+                w.word(*inode);
+            }
         } else {
             let Some(n) = self.namespace.nodes.get(&(key >> 16)) else {
                 return Ok(None);
@@ -59,31 +65,52 @@ impl BexFs {
                     .filter(|bytes| bytes.iter().any(|byte| *byte != 0)));
             }
             w.word(n.inode);
-            w.word(n.parent);
-            w.text(&n.name);
-            w.word(if n.kind == NodeKind::File { 1 } else { 2 });
+            w.word(match n.kind {
+                NodeKind::File => 1,
+                NodeKind::Directory => 2,
+                NodeKind::Symlink => 3,
+            });
             for value in [
                 n.attributes.size_bytes,
                 n.attributes.storage_allocated_bytes,
                 n.attributes.creation_time_nanos,
                 n.attributes.modification_time_nanos,
                 n.attributes.mode as u64,
+                n.attributes.uid as u64,
+                n.attributes.gid as u64,
                 n.data.len(),
             ] {
                 w.word(value);
+            }
+            w.word(n.xattrs.len() as u64);
+            for (name, value) in &n.xattrs {
+                w.text(name);
+                w.bytes(value);
             }
         }
         Ok(Some(w.finish()))
     }
     pub fn adopt_metadata(bytes: &[u8]) -> Result<Self, Error> {
         let mut r = Decoder::new(bytes);
-        if r.word()? != 1 {
+        let migration_format = r.word()?;
+        if !matches!(migration_format, 1..=4) {
             return Err(Error::UnsupportedVersion);
         }
         let header_lba = r.word()?;
         let header = BexfsHeader::decode(r.bytes(160)?).map_err(|_| Error::InvalidData)?;
         let read_only = r.flag()?;
         let next_inode = r.word()?;
+        let mut dentries = BTreeMap::new();
+        if migration_format >= 2 {
+            for _ in 0..r.count(4_000_000)? {
+                let parent = r.word()?;
+                let name = r.text(255)?.to_string();
+                let inode = r.word()?;
+                if dentries.insert((parent, name), inode).is_some() {
+                    return Err(Error::InvalidData);
+                }
+            }
+        }
         r.finish()?;
         Ok(Self {
             header_lba,
@@ -92,9 +119,11 @@ impl BexFs {
             namespace: Namespace {
                 next_inode,
                 nodes: BTreeMap::new(),
+                dentries,
             },
             key: LockedVolumeKey::new(&[0; 32]).unwrap(),
             dirty: Default::default(),
+            migration_format,
         })
     }
     pub fn adopt_record(&mut self, key: u64, bytes: Option<&[u8]>) -> Result<(), Error> {
@@ -129,23 +158,44 @@ impl BexFs {
             if r.word()? != inode {
                 return Err(Error::InvalidData);
             }
-            let parent = r.word()?;
-            let name = r.text(256)?.to_string();
+            let legacy_dentry = if self.migration_format == 1 {
+                Some((r.word()?, r.text(256)?.to_string()))
+            } else {
+                None
+            };
             let kind = match r.word()? {
                 1 => NodeKind::File,
                 2 => NodeKind::Directory,
+                3 if self.migration_format >= 3 => NodeKind::Symlink,
                 _ => return Err(Error::InvalidData),
             };
-            let attributes = NodeAttributes {
+            let mut attributes = NodeAttributes {
                 size_bytes: r.word()?,
                 storage_allocated_bytes: r.word()?,
                 creation_time_nanos: r.word()?,
                 modification_time_nanos: r.word()?,
                 mode: u32::try_from(r.word()?).map_err(|_| Error::InvalidData)?,
+                uid: 0,
+                gid: 0,
             };
+            if self.migration_format >= 4 {
+                attributes.uid = u32::try_from(r.word()?).map_err(|_| Error::InvalidData)?;
+                attributes.gid = u32::try_from(r.word()?).map_err(|_| Error::InvalidData)?;
+            }
             // The record key reserves 16 bits for the chunk number. Logical
             // sparse length need not fit the receiver's allocated-state cap.
             let len = r.count(CHUNK * u16::MAX as usize)? as u64;
+            let mut xattrs = BTreeMap::new();
+            if self.migration_format >= 3 {
+                for _ in 0..r.count(256)? {
+                    let name = r.text(255)?.to_string();
+                    validate_xattr_name(&name).map_err(|_| Error::InvalidData)?;
+                    let value = r.bytes(65_536)?.to_vec();
+                    if xattrs.insert(name, value).is_some() {
+                        return Err(Error::InvalidData);
+                    }
+                }
+            }
             r.finish()?;
             let mut data = self
                 .namespace
@@ -157,13 +207,17 @@ impl BexFs {
                 inode,
                 Node {
                     inode,
-                    parent,
-                    name,
                     kind,
                     attributes,
                     data,
+                    xattrs,
                 },
             );
+            if let Some((parent, name)) = legacy_dentry {
+                if inode != ROOT_INODE {
+                    self.namespace.dentries.insert((parent, name), inode);
+                }
+            }
         } else {
             let data = &mut self
                 .namespace
@@ -181,50 +235,7 @@ impl BexFs {
         Ok(())
     }
     pub fn validate_checkpoint(&self) -> Result<(), Error> {
-        let root = self
-            .namespace
-            .nodes
-            .get(&ROOT_INODE)
-            .ok_or(Error::InvalidData)?;
-        if root.kind != NodeKind::Directory || root.parent != ROOT_INODE || !root.name.is_empty() {
-            return Err(Error::InvalidData);
-        }
-        for n in self.namespace.nodes.values() {
-            if n.inode >= self.namespace.next_inode
-                || n.attributes.size_bytes != n.data.len() && n.kind == NodeKind::File
-            {
-                return Err(Error::InvalidData);
-            }
-            if n.inode != ROOT_INODE {
-                validate_component(&n.name).map_err(|_| Error::InvalidData)?;
-            }
-            let mut id = n.inode;
-            for depth in 0..=self.namespace.nodes.len() {
-                if id == ROOT_INODE {
-                    break;
-                }
-                if depth == self.namespace.nodes.len() {
-                    return Err(Error::InvalidData);
-                }
-                let parent = self
-                    .namespace
-                    .nodes
-                    .get(
-                        &self
-                            .namespace
-                            .nodes
-                            .get(&id)
-                            .ok_or(Error::InvalidData)?
-                            .parent,
-                    )
-                    .ok_or(Error::InvalidData)?;
-                if parent.kind != NodeKind::Directory {
-                    return Err(Error::InvalidData);
-                }
-                id = parent.inode;
-            }
-        }
-        Ok(())
+        validate_namespace(&self.namespace).map_err(|_| Error::InvalidData)
     }
     pub fn take_changes(&mut self) -> Vec<u64> {
         core::mem::take(&mut self.dirty).into_iter().collect()

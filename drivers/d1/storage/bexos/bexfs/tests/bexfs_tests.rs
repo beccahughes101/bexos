@@ -228,6 +228,114 @@ fn directory_entries_and_unlink_enforce_type_and_nonempty_rules() {
 }
 
 #[test]
+fn rename_moves_nodes_and_replaces_compatible_targets() {
+    let mut device = MemoryBlockDevice::new(BEXFS_BLOCK_SIZE, BLOCKS);
+    let mut fs = format(&mut device);
+    fs.open(fs.root_inode(), "a", 0x1 | 0x2 | 0x8).unwrap();
+    fs.rename(fs.root_inode(), "a", "b").unwrap();
+    assert_eq!(
+        fs.open(fs.root_inode(), "a", 0x1),
+        Err(BexFsError::NotFound)
+    );
+    assert!(fs.open(fs.root_inode(), "b", 0x1).is_ok());
+    fs.open(fs.root_inode(), "c", 0x1 | 0x2 | 0x8).unwrap();
+    fs.rename(fs.root_inode(), "b", "c").unwrap();
+    assert!(fs.open(fs.root_inode(), "c", 0x1).is_ok());
+}
+
+#[test]
+fn hard_links_share_storage_across_remount_and_live_migration() {
+    let mut device = MemoryBlockDevice::new(BEXFS_BLOCK_SIZE, BLOCKS);
+    let mut fs = format(&mut device);
+    let mut original = fs.open(1, "original", 0x1 | 0x2 | 0x8).unwrap();
+    fs.write(&mut original, b"durable shared data").unwrap();
+    fs.link(1, "original", "alias").unwrap();
+    let alias = fs.open(1, "alias", 0x1).unwrap();
+    assert_eq!(original.inode(), alias.inode());
+
+    let metadata = fs.checkpoint_record(0).unwrap().unwrap();
+    let mut migrated = BexFs::adopt_metadata(&metadata).unwrap();
+    for key in fs.checkpoint_keys().into_iter().filter(|key| *key != 0) {
+        migrated
+            .adopt_record(key, fs.checkpoint_record(key).unwrap().as_deref())
+            .unwrap();
+    }
+    migrated.validate_checkpoint().unwrap();
+    migrated.unlink(1, "original").unwrap();
+    let mut alias = migrated.open(1, "alias", 0x1).unwrap();
+    assert_eq!(
+        migrated.read(&mut alias, 64).unwrap(),
+        b"durable shared data"
+    );
+
+    fs.close(&mut device).unwrap();
+    let mut mounted = BexFs::mount(
+        &mut device,
+        LockedVolumeKey::new(&KEY).unwrap(),
+        "SYS_STATE",
+        false,
+    )
+    .unwrap();
+    let original = mounted.open(1, "original", 0x1).unwrap();
+    let mut alias = mounted.open(1, "alias", 0x1).unwrap();
+    assert_eq!(original.inode(), alias.inode());
+    assert_eq!(
+        mounted.read(&mut alias, 64).unwrap(),
+        b"durable shared data"
+    );
+}
+
+#[test]
+fn symlinks_and_xattrs_persist_and_migrate() {
+    let mut device = MemoryBlockDevice::new(BEXFS_BLOCK_SIZE, BLOCKS);
+    let mut fs = format(&mut device);
+    let mut original = fs.open(1, "original", 0x1 | 0x2 | 0x8).unwrap();
+    fs.write(&mut original, b"payload").unwrap();
+    let directory = fs.open(1, "links", 0x1 | 0x8 | 0x20).unwrap();
+    fs.symlink(directory.inode(), "../original", "relative")
+        .unwrap();
+    fs.link(directory.inode(), "relative", "relative_alias")
+        .unwrap();
+    fs.symlink(1, "/original", "absolute").unwrap();
+    fs.set_xattr(original.inode(), "user.oci", b"preserved", 1)
+        .unwrap();
+
+    let metadata = fs.checkpoint_record(0).unwrap().unwrap();
+    let mut migrated = BexFs::adopt_metadata(&metadata).unwrap();
+    for key in fs.checkpoint_keys().into_iter().filter(|key| *key != 0) {
+        migrated
+            .adopt_record(key, fs.checkpoint_record(key).unwrap().as_deref())
+            .unwrap();
+    }
+    migrated.validate_checkpoint().unwrap();
+    assert_eq!(
+        migrated
+            .readlink(directory.inode(), "relative_alias")
+            .unwrap(),
+        "../original"
+    );
+    let mut relative = migrated.open(directory.inode(), "relative", 0x1).unwrap();
+    assert_eq!(migrated.read(&mut relative, 16).unwrap(), b"payload");
+    assert_eq!(
+        migrated.get_xattr(relative.inode(), "user.oci").unwrap(),
+        b"preserved"
+    );
+
+    fs.close(&mut device).unwrap();
+    let mut mounted = BexFs::mount(
+        &mut device,
+        LockedVolumeKey::new(&KEY).unwrap(),
+        "SYS_STATE",
+        false,
+    )
+    .unwrap();
+    assert_eq!(mounted.readlink(1, "absolute").unwrap(), "/original");
+    let mut absolute = mounted.open(1, "absolute", 0x1).unwrap();
+    assert_eq!(mounted.read(&mut absolute, 16).unwrap(), b"payload");
+    assert_eq!(mounted.list_xattrs(absolute.inode()).unwrap(), ["user.oci"]);
+}
+
+#[test]
 fn sys_state_codec_detects_corruption() {
     let state = SysStateV1::initial();
     let mut bytes = state.encode();

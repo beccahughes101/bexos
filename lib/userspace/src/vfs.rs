@@ -14,6 +14,7 @@ pub struct Response {
 // directory request can queue behind BexFS's bounded atomic durability commit,
 // so the outer request needs headroom beyond the inner filesystem deadline.
 const VFS_RPC_TIMEOUT_SECONDS: u64 = 420;
+const VFS_PACKAGE_STORE_INITIALIZATION_TIMEOUT_SECONDS: u64 = 720;
 const VFS_PACKAGE_DIRECTORY_TIMEOUT_SECONDS: u64 = 900;
 const VFS_UPDATE_ARCHIVE_TIMEOUT_SECONDS: u64 = 660;
 
@@ -140,9 +141,9 @@ pub fn initialize_package_store(
             key_vmo: HandleRef { raw: key },
             storage_label,
         },
-        // Enclose the filesystem driver's 420-second mount deadline with
-        // enough time for archivefs/diskimage setup and RPC scheduling.
-        660,
+        // Enclose the filesystem driver's 690-second mount deadline with
+        // enough time for VFS dispatch and handle cleanup.
+        VFS_PACKAGE_STORE_INITIALIZATION_TIMEOUT_SECONDS,
     )
     .map_err(|status| {
         crate::log(&alloc::format!(

@@ -1,11 +1,26 @@
 use bexos_userspace::Memory;
-use bexos_zircon::{Vmar, VmarFlags, Vmo};
-use starnix_kernel::{EACCES, EFAULT, EINVAL, ENOMEM};
-use std::{sync::Arc, vec::Vec};
+use bexos_zircon::{AsHandleRef, Vmar, VmarFlags, Vmo};
+use starnix_kernel::{EACCES, EFAULT, EINVAL, ENOMEM, ENOTSUP};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    vec::Vec,
+};
 
 pub const PAGE_SIZE: u64 = 4096;
 const BRK_BASE: u64 = 0x30_0000_0000;
 const BRK_LIMIT: u64 = BRK_BASE + 256 * 1024 * 1024;
+static NEXT_FUTEX_ID: AtomicU64 = AtomicU64::new(1);
+
+pub fn new_futex_id() -> u64 {
+    NEXT_FUTEX_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+fn reserve_futex_id(id: u64) {
+    NEXT_FUTEX_ID.fetch_max(id.saturating_add(1), Ordering::Relaxed);
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MappingKind {
@@ -20,18 +35,37 @@ pub enum MappingKind {
     SignalTrampoline,
 }
 
+fn advance_kind(kind: MappingKind, delta: u64) -> MappingKind {
+    match kind {
+        MappingKind::File {
+            fd,
+            file_offset,
+            shared,
+        } => MappingKind::File {
+            fd,
+            file_offset: file_offset.saturating_add(delta),
+            shared,
+        },
+        kind => kind,
+    }
+}
+
 pub struct Mapping {
     pub vmo: Arc<Vmo>,
+    pub futex_id: u64,
     pub address: u64,
     pub size: u64,
     pub vmo_offset: u64,
     pub rights: u32,
     pub kind: MappingKind,
+    pub(crate) mapped: bool,
 }
 
 impl Drop for Mapping {
     fn drop(&mut self) {
-        let _ = Vmar::root_self().unmap(self.address, self.size);
+        if self.mapped {
+            let _ = Vmar::root_self().unmap(self.address, self.size);
+        }
     }
 }
 
@@ -81,8 +115,15 @@ fn linux_rights(prot: u64) -> Result<u32, i64> {
     Ok(rights)
 }
 
+fn linux_protection(rights: u32) -> u64 {
+    u64::from(rights & 2 != 0)
+        | (u64::from(rights & 4 != 0) << 1)
+        | (u64::from(rights & 8 != 0) << 2)
+}
+
 fn remap(
     vmo: Arc<Vmo>,
+    futex_id: u64,
     address: u64,
     size: u64,
     offset: u64,
@@ -95,16 +136,21 @@ fn remap(
     core::mem::forget(mapped);
     Ok(Mapping {
         vmo,
+        futex_id,
         address,
         size,
         vmo_offset: offset,
         rights,
         kind,
+        mapped: true,
     })
 }
 
 impl AddressSpace {
     pub fn new(mappings: Vec<Mapping>) -> Self {
+        for mapping in &mappings {
+            reserve_futex_id(mapping.futex_id);
+        }
         Self {
             mappings,
             brk: BRK_BASE,
@@ -115,8 +161,190 @@ impl AddressSpace {
         &self.mappings
     }
 
+    pub fn futex_key(&self, address: u64) -> Result<(u64, u64), i64> {
+        let end = address.checked_add(4).ok_or(EFAULT)?;
+        let mapping = self
+            .mappings
+            .iter()
+            .find(|mapping| {
+                address >= mapping.address
+                    && end <= mapping.address.saturating_add(mapping.size)
+                    && mapping.rights & (2 | 4) == (2 | 4)
+            })
+            .ok_or(EFAULT)?;
+        Ok((
+            mapping.futex_id,
+            mapping
+                .vmo_offset
+                .checked_add(address - mapping.address)
+                .ok_or(EFAULT)?,
+        ))
+    }
+
+    pub fn fork(&self, share: bool) -> Result<Self, i64> {
+        let mut ranges: Vec<(u64, u64, u64)> = Vec::new();
+        if !share {
+            for mapping in &self.mappings {
+                if matches!(mapping.kind, MappingKind::File { shared: true, .. }) {
+                    continue;
+                }
+                let handle = mapping.futex_id;
+                let end = mapping.vmo_offset.checked_add(mapping.size).ok_or(ENOMEM)?;
+                if let Some((_, base, limit)) = ranges
+                    .iter_mut()
+                    .find(|(candidate, _, _)| *candidate == handle)
+                {
+                    *base = (*base).min(mapping.vmo_offset);
+                    *limit = (*limit).max(end);
+                } else {
+                    ranges.push((handle, mapping.vmo_offset, end));
+                }
+            }
+        }
+        let snapshots = ranges
+            .into_iter()
+            .map(|(handle, base, end)| {
+                let parent = self
+                    .mappings
+                    .iter()
+                    .find(|mapping| mapping.futex_id == handle)
+                    .ok_or(ENOMEM)?;
+                let snapshot = Arc::new(
+                    parent
+                        .vmo
+                        .snapshot(base, end.checked_sub(base).ok_or(ENOMEM)?)
+                        .map_err(|_| ENOMEM)?,
+                );
+                Ok((handle, base, snapshot, new_futex_id()))
+            })
+            .collect::<Result<Vec<_>, i64>>()?;
+        let mut mappings = Vec::with_capacity(self.mappings.len());
+        for mapping in &self.mappings {
+            let shared_mapping =
+                share || matches!(mapping.kind, MappingKind::File { shared: true, .. });
+            let (vmo, vmo_offset, futex_id) = if shared_mapping {
+                (mapping.vmo.clone(), mapping.vmo_offset, mapping.futex_id)
+            } else {
+                let handle = mapping.futex_id;
+                let (_, base, snapshot, futex_id) = snapshots
+                    .iter()
+                    .find(|(candidate, _, _, _)| *candidate == handle)
+                    .ok_or(ENOMEM)?;
+                (snapshot.clone(), mapping.vmo_offset - *base, *futex_id)
+            };
+            mappings.push(Mapping {
+                vmo,
+                futex_id,
+                address: mapping.address,
+                size: mapping.size,
+                vmo_offset,
+                rights: mapping.rights,
+                kind: mapping.kind,
+                mapped: false,
+            });
+        }
+        Ok(Self {
+            mappings,
+            brk: self.brk,
+        })
+    }
+
+    pub fn deactivate(&mut self) -> Result<(), i64> {
+        for mapping in &mut self.mappings {
+            if mapping.mapped {
+                Vmar::root_self()
+                    .unmap(mapping.address, mapping.size)
+                    .map_err(|_| EINVAL)?;
+                mapping.mapped = false;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn activate(&mut self) -> Result<(), i64> {
+        let mut activated: Vec<usize> = Vec::new();
+        for index in 0..self.mappings.len() {
+            if self.mappings[index].mapped {
+                continue;
+            }
+            let result = {
+                let mapping = &self.mappings[index];
+                Vmar::root_self().map(
+                    mapping.address,
+                    &mapping.vmo,
+                    mapping.vmo_offset,
+                    mapping.size,
+                    flags(mapping.rights, true),
+                )
+            };
+            let Ok(mapped) = result else {
+                for index in activated {
+                    let old = &mut self.mappings[index];
+                    if old.mapped {
+                        let _ = Vmar::root_self().unmap(old.address, old.size);
+                        old.mapped = false;
+                    }
+                }
+                return Err(ENOMEM);
+            };
+            core::mem::forget(mapped);
+            self.mappings[index].mapped = true;
+            activated.push(index);
+        }
+        Ok(())
+    }
+
+    pub fn proc_maps(&self) -> String {
+        let mut mappings: Vec<_> = self.mappings.iter().collect();
+        mappings.sort_by_key(|mapping| mapping.address);
+        let mut output = String::new();
+        for mapping in mappings {
+            let read = if mapping.rights & 2 != 0 { 'r' } else { '-' };
+            let write = if mapping.rights & 4 != 0 { 'w' } else { '-' };
+            let execute = if mapping.rights & 8 != 0 { 'x' } else { '-' };
+            let shared = if matches!(mapping.kind, MappingKind::File { shared: true, .. }) {
+                's'
+            } else {
+                'p'
+            };
+            let offset = match mapping.kind {
+                MappingKind::File { file_offset, .. } => file_offset,
+                _ => mapping.vmo_offset,
+            };
+            let name = match mapping.kind {
+                MappingKind::Image => "[image]",
+                MappingKind::Stack => "[stack]",
+                MappingKind::Anonymous => "",
+                MappingKind::File { .. } => "[file]",
+                MappingKind::SignalTrampoline => "[vdso]",
+            };
+            use core::fmt::Write;
+            let _ = writeln!(
+                output,
+                "{:012x}-{:012x} {read}{write}{execute}{shared} {:08x} 00:00 0 {name}",
+                mapping.address,
+                mapping.address.saturating_add(mapping.size),
+                offset,
+            );
+        }
+        output
+    }
+
     pub fn into_mappings(mut self) -> Vec<Mapping> {
         std::mem::take(&mut self.mappings)
+    }
+
+    pub fn prepare_exec(&mut self) {
+        let mappings = std::mem::take(&mut self.mappings);
+        self.mappings = mappings
+            .into_iter()
+            .filter(|mapping| mapping.kind == MappingKind::SignalTrampoline)
+            .collect();
+        self.brk = BRK_BASE;
+    }
+
+    pub fn add_mapping(&mut self, mapping: Mapping) {
+        self.mappings.push(mapping);
     }
 
     fn containing(&self, address: u64, length: u64, rights: u32) -> Option<&Mapping> {
@@ -131,6 +359,12 @@ impl AddressSpace {
     pub fn read(&self, address: u64, length: usize) -> Result<&[u8], i64> {
         self.containing(address, length as u64, 2).ok_or(EFAULT)?;
         Ok(unsafe { std::slice::from_raw_parts(address as *const u8, length) })
+    }
+
+    pub fn validate_write(&self, address: u64, length: usize) -> Result<(), i64> {
+        self.containing(address, length as u64, 4)
+            .map(|_| ())
+            .ok_or(EFAULT)
     }
 
     pub fn write(&mut self, address: u64, bytes: &[u8]) -> Result<(), i64> {
@@ -188,11 +422,13 @@ impl AddressSpace {
         }
         self.mappings.push(Mapping {
             vmo,
+            futex_id: new_futex_id(),
             address,
             size,
             vmo_offset: 0,
             rights,
             kind,
+            mapped: true,
         });
         Ok(address)
     }
@@ -253,17 +489,128 @@ impl AddressSpace {
         if address & (PAGE_SIZE - 1) != 0 || length == 0 {
             return Err(EINVAL);
         }
-        self.rewrite_range(address, round(length)?, None)
+        self.rewrite_range(address, round(length)?, None, false)
     }
 
     pub fn protect(&mut self, address: u64, length: u64, prot: u64) -> Result<(), i64> {
         if address & (PAGE_SIZE - 1) != 0 || length == 0 {
             return Err(EINVAL);
         }
-        self.rewrite_range(address, round(length)?, Some(linux_rights(prot)?))
+        self.rewrite_range(address, round(length)?, Some(linux_rights(prot)?), true)
     }
 
-    fn rewrite_range(&mut self, address: u64, size: u64, rights: Option<u32>) -> Result<(), i64> {
+    pub fn remap(
+        &mut self,
+        old_address: u64,
+        old_length: u64,
+        new_length: u64,
+        remap_flags: u64,
+        new_address: u64,
+    ) -> Result<u64, i64> {
+        const MAYMOVE: u64 = 1;
+        const FIXED: u64 = 2;
+        const DONTUNMAP: u64 = 4;
+
+        if remap_flags & !(MAYMOVE | FIXED | DONTUNMAP) != 0
+            || remap_flags & FIXED != 0 && remap_flags & MAYMOVE == 0
+            || remap_flags & DONTUNMAP != 0
+        {
+            return Err(if remap_flags & DONTUNMAP != 0 {
+                ENOTSUP
+            } else {
+                EINVAL
+            });
+        }
+        if old_address & (PAGE_SIZE - 1) != 0
+            || old_length == 0
+            || new_length == 0
+            || remap_flags & FIXED != 0 && (new_address == 0 || new_address & (PAGE_SIZE - 1) != 0)
+        {
+            return Err(EINVAL);
+        }
+        let old_size = round(old_length)?;
+        let new_size = round(new_length)?;
+        let old_end = old_address.checked_add(old_size).ok_or(EINVAL)?;
+        let mapping = self
+            .mappings
+            .iter()
+            .find(|mapping| {
+                old_address >= mapping.address
+                    && old_end <= mapping.address.saturating_add(mapping.size)
+            })
+            .ok_or(EFAULT)?;
+        let rights = mapping.rights;
+        let source_vmo = mapping.vmo.clone();
+        let source_offset = mapping.vmo_offset + old_address - mapping.address;
+        let kind = match mapping.kind {
+            MappingKind::File {
+                fd,
+                file_offset,
+                shared,
+            } => MappingKind::File {
+                fd,
+                file_offset: file_offset + old_address - mapping.address,
+                shared,
+            },
+            kind => kind,
+        };
+
+        if remap_flags & FIXED == 0 {
+            if new_size <= old_size {
+                if new_size < old_size {
+                    self.unmap(old_address + new_size, old_size - new_size)?;
+                }
+                return Ok(old_address);
+            }
+            if remap_flags & MAYMOVE == 0 {
+                return Err(ENOMEM);
+            }
+        } else {
+            let new_end = new_address.checked_add(new_size).ok_or(EINVAL)?;
+            if new_address < old_end && old_address < new_end {
+                return Err(EINVAL);
+            }
+            self.unmap(new_address, new_size)?;
+        }
+
+        let target =
+            self.map_anonymous(new_address, new_size, 3, kind, remap_flags & FIXED != 0)?;
+        let copy = old_size.min(new_size);
+        let source = match Memory::map_at(
+            source_vmo.as_handle_ref().raw_handle(),
+            source_offset,
+            copy,
+            0,
+            2,
+        ) {
+            Ok(source) => source,
+            Err(_) => {
+                let _ = self.unmap(target, new_size);
+                return Err(EFAULT);
+            }
+        };
+        unsafe {
+            core::ptr::copy_nonoverlapping(source as *const u8, target as *mut u8, copy as usize);
+        }
+        let _ = Memory::unmap(source, copy);
+        if let Err(error) = self.protect(target, new_size, linux_protection(rights)) {
+            let _ = self.unmap(target, new_size);
+            return Err(error);
+        }
+        if let Err(error) = self.unmap(old_address, old_size) {
+            let _ = self.unmap(target, new_size);
+            return Err(error);
+        }
+        Ok(target)
+    }
+
+    fn rewrite_range(
+        &mut self,
+        address: u64,
+        size: u64,
+        rights: Option<u32>,
+        require_mapping: bool,
+    ) -> Result<(), i64> {
         let end = address.checked_add(size).ok_or(EINVAL)?;
         let mut touched = false;
         let mut rebuilt = Vec::new();
@@ -277,6 +624,7 @@ impl AddressSpace {
             touched = true;
             let _ = Vmar::root_self().unmap(mapping.address, mapping.size);
             let vmo = mapping.vmo.clone();
+            let futex_id = mapping.futex_id;
             let kind = mapping.kind;
             let old_rights = mapping.rights;
             let old_offset = mapping.vmo_offset;
@@ -288,6 +636,7 @@ impl AddressSpace {
             if before != 0 {
                 rebuilt.push(remap(
                     vmo.clone(),
+                    futex_id,
                     start,
                     before,
                     old_offset,
@@ -298,26 +647,32 @@ impl AddressSpace {
             if let Some(rights) = rights {
                 rebuilt.push(remap(
                     vmo.clone(),
+                    futex_id,
                     cut_start,
                     cut_end - cut_start,
                     old_offset + cut_start - start,
                     rights,
-                    kind,
+                    advance_kind(kind, cut_start - start),
                 )?);
             }
             if after != 0 {
                 rebuilt.push(remap(
                     vmo,
+                    futex_id,
                     cut_end,
                     after,
                     old_offset + cut_end - start,
                     old_rights,
-                    kind,
+                    advance_kind(kind, cut_end - start),
                 )?);
             }
         }
         self.mappings = rebuilt;
-        if touched { Ok(()) } else { Err(EINVAL) }
+        if touched || !require_mapping {
+            Ok(())
+        } else {
+            Err(EINVAL)
+        }
     }
 
     pub fn brk(&mut self, requested: u64) -> u64 {
@@ -387,6 +742,32 @@ mod tests {
         assert_eq!(linux_rights(4), Ok(8));
         assert_eq!(linux_rights(6), Err(EACCES));
         assert_eq!(linux_rights(8), Err(EINVAL));
+        assert_eq!(linux_protection(2), 1);
+        assert_eq!(linux_protection(4), 2);
+        assert_eq!(linux_protection(8), 4);
+    }
+
+    #[test]
+    fn split_file_mappings_advance_the_file_offset() {
+        assert_eq!(
+            advance_kind(
+                MappingKind::File {
+                    fd: 7,
+                    file_offset: 0x2000,
+                    shared: true,
+                },
+                0x3000,
+            ),
+            MappingKind::File {
+                fd: 7,
+                file_offset: 0x5000,
+                shared: true,
+            }
+        );
+        assert_eq!(
+            advance_kind(MappingKind::Anonymous, 0x3000),
+            MappingKind::Anonymous
+        );
     }
 
     #[test]

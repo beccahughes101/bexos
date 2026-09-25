@@ -52,6 +52,7 @@ fn launch(
         Vec::new(),
         0,
         true,
+        None,
     ) == lifecycle::AppLifecycleStatus::Ok
 }
 fn diagnostic(state: &mut state::AppdState, text: &str) {

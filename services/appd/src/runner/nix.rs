@@ -1,6 +1,5 @@
 use super::*;
 use crate::manifest::{ElfRunnerOptions, ProcessRunnerOptions, UpdateStrategy};
-use alloc::vec::Vec;
 use bexos_starnix_abi::{Launch, RUNNER_PATH};
 
 pub(super) fn launch<K: KernelOps, R: PackageImageResolver>(
@@ -30,17 +29,11 @@ pub(super) fn launch<K: KernelOps, R: PackageImageResolver>(
     let payload = resolver
         .resolve_executable(&request.manifest.package_name, &options.path)
         .map_err(LaunchError::PackageImage)?;
-    starnix_kernel::prepare_image(
-        payload.bytes,
-        starnix_kernel::Architecture::current(),
-        &options.arguments,
-        &options
-            .environment
-            .iter()
-            .map(|entry| (entry.name.clone(), entry.value.clone()))
-            .collect::<Vec<_>>(),
-    )
-    .map_err(|_| LaunchError::InvalidNixOptions)?;
+    // The runner resolves PT_INTERP inside the selected Linux rootfs. Appd only
+    // authenticates and validates the main executable here; rejecting dynamic
+    // images at this boundary made ordinary glibc/musl programs impossible.
+    starnix_kernel::validate_executable(payload.bytes, starnix_kernel::Architecture::current())
+        .map_err(|_| LaunchError::InvalidNixOptions)?;
 
     let runtime = resolver
         .resolve_starnix_runtime()

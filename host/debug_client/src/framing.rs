@@ -170,8 +170,11 @@ impl<T: DebugTransport> DebugClient<T> {
         // after package I/O. Its debugd-to-appd envelope allows 900 seconds.
         let timeout = match method_id {
             METHOD_LAUNCH_APP => 600,
+            // Bundle commit includes appd's package transaction and durable
+            // registry publication. Keep the host deadline outside debugd's
+            // 1,800-second aggregate transport bound.
+            METHOD_COMMIT_APP_BUNDLE_UPLOAD => 2100,
             bexos_debug_wire::METHOD_SHELL_OPEN
-            | METHOD_COMMIT_APP_BUNDLE_UPLOAD
             | bexos_debug_wire::METHOD_CREATE_USER
             | bexos_debug_wire::METHOD_UPDATE_USER
             | bexos_debug_wire::METHOD_DELETE_USER

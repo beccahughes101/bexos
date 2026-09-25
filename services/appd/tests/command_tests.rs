@@ -111,6 +111,7 @@ fn command_controls_checkpoint_identity_waits_and_completed_status() {
             uid: 1001,
             watch_pending: true,
             completion: Some(137),
+            resource_group: 4,
         }],
     };
     let bytes = state.encode();

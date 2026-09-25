@@ -20,6 +20,13 @@ pub struct OwnedDirEntry {
 // need headroom beyond the commit's own 300-second deadline for queueing and
 // request dispatch on emulated storage.
 const FS_RPC_TIMEOUT_SECONDS: u64 = 420;
+const FILESYSTEM_MOUNT_TIMEOUT_SECONDS: u64 = 690;
+const FILESYSTEM_SYNC_TIMEOUT_SECONDS: u64 = 690;
+// Package mounts stream and verify a compressed archive through the backing
+// filesystem. Source-emulated AArch64 can exceed the generic filesystem
+// deadline for a large package, while the enclosing VFS request is bounded at
+// 900 seconds. Keep this inner deadline below that outer contract.
+const ARCHIVE_MOUNT_TIMEOUT_SECONDS: u64 = 660;
 
 fn call<Q: FidlEncode>(
     channel: Channel,
@@ -120,8 +127,9 @@ pub fn mount(
             read_only,
         },
         // A large authenticated BexFS namespace can take several minutes to
-        // load under x86 TCG before the root channel is returned.
-        420,
+        // load under TCG before the root channel is returned. Keep this below
+        // the VFS package-store initialization deadline that encloses it.
+        FILESYSTEM_MOUNT_TIMEOUT_SECONDS,
     )
     .map_err(|status| {
         crate::log(&alloc::format!("fs: mount call failed {status:?}\n"));
@@ -186,11 +194,48 @@ pub fn attributes(file: Channel) -> Result<FileAttributes, FsStatus> {
     Ok(r.attr)
 }
 
+pub fn set_attributes(file: Channel, attr: FileAttributes) -> Result<(), FsStatus> {
+    let r = call(file, 2, &NodeSetAttrRequest { attr }, true)?;
+    let r = NodeSetAttrResponse::decode(&r.bytes, &r.handles).map_err(|_| FsStatus::Io)?;
+    check(r.status)
+}
+
 pub fn set_len(file: Channel, len: u64) -> Result<(), FsStatus> {
     let mut attr = attributes(file)?;
     attr.size_bytes = len;
-    let r = call(file, 2, &NodeSetAttrRequest { attr }, true)?;
-    let r = NodeSetAttrResponse::decode(&r.bytes, &r.handles).map_err(|_| FsStatus::Io)?;
+    set_attributes(file, attr)
+}
+
+pub fn get_xattr(node: Channel, name: &str) -> Result<Vec<u8>, FsStatus> {
+    let r = call(node, 4, &NodeGetXattrRequest { name }, true)?;
+    let r = NodeGetXattrResponse::decode(&r.bytes, &r.handles).map_err(|_| FsStatus::Io)?;
+    check(r.status)?;
+    Ok(r.value.to_vec())
+}
+
+pub fn set_xattr(node: Channel, name: &str, value: &[u8], flags: u32) -> Result<(), FsStatus> {
+    let r = call(node, 5, &NodeSetXattrRequest { name, value, flags }, true)?;
+    let r = NodeSetXattrResponse::decode(&r.bytes, &r.handles).map_err(|_| FsStatus::Io)?;
+    check(r.status)
+}
+
+pub fn list_xattrs(node: Channel) -> Result<Vec<String>, FsStatus> {
+    let r = call(node, 6, &NodeListXattrsRequest {}, true)?;
+    let r = NodeListXattrsResponse::decode(&r.bytes, &r.handles).map_err(|_| FsStatus::Io)?;
+    check(r.status)?;
+    (0..r.names.len())
+        .map(|index| {
+            r.names
+                .get(index)
+                .map(String::from)
+                .map_err(|_| FsStatus::Corrupt)
+        })
+        .collect()
+}
+
+pub fn remove_xattr(node: Channel, name: &str) -> Result<(), FsStatus> {
+    let r = call(node, 7, &NodeRemoveXattrRequest { name }, true)?;
+    let r = NodeRemoveXattrResponse::decode(&r.bytes, &r.handles).map_err(|_| FsStatus::Io)?;
     check(r.status)
 }
 
@@ -246,6 +291,42 @@ pub fn unlink(directory: Channel, name: &str) -> Result<(), FsStatus> {
     let r = DirectoryUnlinkResponse::decode(&r.bytes, &r.handles).map_err(|_| FsStatus::Io)?;
     check(r.status)
 }
+pub fn rename(directory: Channel, source: &str, target: &str) -> Result<(), FsStatus> {
+    let r = call(
+        directory,
+        23,
+        &DirectoryRenameRequest { source, target },
+        true,
+    )?;
+    let r = DirectoryRenameResponse::decode(&r.bytes, &r.handles).map_err(|_| FsStatus::Io)?;
+    check(r.status)
+}
+pub fn link(directory: Channel, source: &str, target: &str) -> Result<(), FsStatus> {
+    let r = call(
+        directory,
+        24,
+        &DirectoryLinkRequest { source, target },
+        true,
+    )?;
+    let r = DirectoryLinkResponse::decode(&r.bytes, &r.handles).map_err(|_| FsStatus::Io)?;
+    check(r.status)
+}
+pub fn symlink(directory: Channel, target: &str, link_path: &str) -> Result<(), FsStatus> {
+    let r = call(
+        directory,
+        25,
+        &DirectorySymlinkRequest { target, link_path },
+        true,
+    )?;
+    let r = DirectorySymlinkResponse::decode(&r.bytes, &r.handles).map_err(|_| FsStatus::Io)?;
+    check(r.status)
+}
+pub fn readlink(directory: Channel, path: &str) -> Result<String, FsStatus> {
+    let r = call(directory, 26, &DirectoryReadLinkRequest { path }, true)?;
+    let r = DirectoryReadLinkResponse::decode(&r.bytes, &r.handles).map_err(|_| FsStatus::Io)?;
+    check(r.status)?;
+    Ok(String::from(r.target))
+}
 pub fn seek(file: Channel, offset: i64) -> Result<(), FsStatus> {
     seek_with_whence(file, offset, 0).map(|_| ())
 }
@@ -267,7 +348,12 @@ pub fn sync_file(file: Channel) -> Result<(), FsStatus> {
     // BexFS commits the complete inactive namespace slot before publishing its
     // new header. Large package-store namespaces can therefore take longer
     // than the generic RPC deadline on emulated storage.
-    let r = call_with_timeout(file, 14, &FileSyncRequest {}, FS_RPC_TIMEOUT_SECONDS)?;
+    let r = call_with_timeout(
+        file,
+        14,
+        &FileSyncRequest {},
+        FILESYSTEM_SYNC_TIMEOUT_SECONDS,
+    )?;
     check(
         FileSyncResponse::decode(&r.bytes, &r.handles)
             .map_err(|_| FsStatus::Io)?
@@ -304,7 +390,7 @@ pub fn mount_archive(
                 .map(|h| h.raw)
                 .collect::<Vec<_>>(),
             true,
-            180,
+            ARCHIVE_MOUNT_TIMEOUT_SECONDS,
         )
         .map_err(|_| FsStatus::Io)?;
     let handles = m
@@ -315,7 +401,10 @@ pub fn mount_archive(
     let response = archive::ArchiveManagerMountPackageResponse::decode(&m.bytes, &handles)
         .map_err(|_| FsStatus::Io)?;
     let status = archive_status(response.status);
-    check(status)?;
+    if let Err(error) = check(status) {
+        let _ = Memory::close(response.root_dir.raw);
+        return Err(error);
+    }
     Ok(Channel(response.root_dir.raw))
 }
 pub fn close(file: Channel) -> Result<(), FsStatus> {
@@ -359,7 +448,7 @@ pub fn mount_archive_memory(
         .encode(&mut bytes, &mut hs)
         .map_err(|_| FsStatus::InvalidArgs)?;
     let m = Rpc(service)
-        .call_raw(
+        .call_raw_with_timeout(
             41,
             &bytes[..encoded.bytes],
             &hs[..encoded.handles]
@@ -367,6 +456,9 @@ pub fn mount_archive_memory(
                 .map(|h| h.raw)
                 .collect::<Vec<_>>(),
             true,
+            // Memory-backed mounts perform the same complete archive
+            // verification and decompression as file-backed package mounts.
+            ARCHIVE_MOUNT_TIMEOUT_SECONDS,
         )
         .map_err(|_| FsStatus::Io)?;
     let handles = m
@@ -377,6 +469,9 @@ pub fn mount_archive_memory(
     let response = archive::ArchiveManagerMountMemoryResponse::decode(&m.bytes, &handles)
         .map_err(|_| FsStatus::Io)?;
     let status = archive_status(response.status);
-    check(status)?;
+    if let Err(error) = check(status) {
+        let _ = Memory::close(response.root_dir.raw);
+        return Err(error);
+    }
     Ok(Channel(response.root_dir.raw))
 }

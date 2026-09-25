@@ -2,7 +2,7 @@ use bexos_migration::{
     Error as MigrationError,
     codec::{Decoder, Encoder},
 };
-use starnix_kernel::{EAGAIN, EINVAL};
+use starnix_kernel::EINVAL;
 use std::vec::Vec;
 
 pub const MAX_SIGNAL: u32 = 64;
@@ -58,6 +58,21 @@ fn bit(signal: u32) -> Result<u64, i64> {
 }
 
 impl SignalState {
+    pub fn fork(&self) -> Self {
+        let mut child = self.clone();
+        child.pending = 0;
+        child.saved_mask = None;
+        child
+    }
+
+    pub fn clear_handlers(&mut self) {
+        for action in &mut self.actions {
+            if action.handler != 1 {
+                *action = SignalAction::default();
+            }
+        }
+    }
+
     pub fn action(&self, signal: u32) -> Result<SignalAction, i64> {
         bit(signal)?;
         Ok(self.actions[signal as usize])
@@ -75,6 +90,25 @@ impl SignalState {
 
     pub fn mask(&self) -> u64 {
         self.mask
+    }
+
+    pub fn pending(&self) -> u64 {
+        self.pending
+    }
+
+    pub fn has_interrupting_pending(&self) -> bool {
+        let mut deliverable = self.pending & !self.mask;
+        while deliverable != 0 {
+            let signal = deliverable.trailing_zeros() + 1;
+            let action = self.actions[signal as usize];
+            if action.handler != 1
+                && !(action.handler == 0 && matches!(signal, 17 | 18 | 20 | 21 | 22 | 23 | 28))
+            {
+                return true;
+            }
+            deliverable &= !bit(signal).unwrap();
+        }
+        false
     }
 
     pub fn update_mask(&mut self, how: u32, value: u64) -> Result<u64, i64> {
@@ -122,6 +156,16 @@ impl SignalState {
     pub fn restore_mask(&mut self, mask: u64) {
         self.mask = mask;
     }
+
+    pub fn finish_exec(&mut self) {
+        for action in &mut self.actions {
+            if action.handler != 1 {
+                *action = SignalAction::default();
+            }
+        }
+        self.alt_stack = AltStack::default();
+        self.saved_mask = None;
+    }
     pub fn alt_stack(&self) -> AltStack {
         self.alt_stack
     }
@@ -133,14 +177,6 @@ impl SignalState {
         let previous = self.alt_stack;
         self.alt_stack = stack;
         Ok(previous)
-    }
-
-    pub fn validate_target(&self, pid: i64, tid: i64) -> Result<(), i64> {
-        if matches!(pid, 0 | 1) && matches!(tid, 0 | 1) {
-            Ok(())
-        } else {
-            Err(EAGAIN)
-        }
     }
 
     pub fn checkpoint(&self) -> Vec<u8> {
@@ -234,6 +270,29 @@ mod tests {
         assert_eq!(old, 0);
         assert_eq!(state.mask(), 0);
         assert_eq!(state.action(10).unwrap(), SignalAction::default());
+    }
+
+    #[test]
+    fn only_deliverable_non_ignored_signals_interrupt_waits() {
+        let mut state = SignalState::default();
+        state.update_mask(0, bit(10).unwrap()).unwrap();
+        state.queue(10).unwrap();
+        assert!(!state.has_interrupting_pending());
+        state.queue(17).unwrap();
+        assert!(!state.has_interrupting_pending());
+        state
+            .set_action(
+                12,
+                SignalAction {
+                    handler: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        state.queue(12).unwrap();
+        assert!(!state.has_interrupting_pending());
+        state.queue(15).unwrap();
+        assert!(state.has_interrupting_pending());
     }
 
     #[test]

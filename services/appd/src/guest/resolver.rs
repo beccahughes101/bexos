@@ -76,14 +76,28 @@ impl<'a> Resolver<'a> {
         dependencies: &[ResolvedLibraryDependency],
         vfsd: Channel,
         registry: &bexos_app_registry::MemoryAppRegistry,
+        container: Option<(&str, Channel)>,
     ) -> Result<Self, fs_fidl::FsStatus> {
         let mut images = Vec::new();
         for p in &manifest.processes {
             let package_path = executable_path(p).ok_or(fs_fidl::FsStatus::InvalidArgs)?;
-            let path = package_path
-                .strip_prefix("/pkg/")
-                .ok_or(fs_fidl::FsStatus::InvalidArgs)?;
-            let file = fs::open(root, path, 1 | 4)?;
+            let (source, path) = if container.is_some_and(|(name, _)| name == p.name) {
+                let (_, source) = container.unwrap();
+                (
+                    source,
+                    package_path
+                        .strip_prefix('/')
+                        .ok_or(fs_fidl::FsStatus::InvalidArgs)?,
+                )
+            } else {
+                (
+                    root,
+                    package_path
+                        .strip_prefix("/pkg/")
+                        .ok_or(fs_fidl::FsStatus::InvalidArgs)?,
+                )
+            };
+            let file = fs::open(source, path, 1 | 4)?;
             let bytes = read_owned_image(file, 256 * 1024 * 1024)?;
             let handle = Memory::from_bytes(&bytes).map_err(|_| fs_fidl::FsStatus::NoSpace)?;
             images.push(Image {

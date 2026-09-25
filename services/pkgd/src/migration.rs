@@ -407,6 +407,7 @@ fn kind(value: u64) -> Result<ArtifactKind, Error> {
         3 => Ok(ArtifactKind::Font),
         4 => Ok(ArtifactKind::Firmware),
         5 => Ok(ArtifactKind::NetworkExtension),
+        6 => Ok(ArtifactKind::Container),
         _ => Err(Error::InvalidData),
     }
 }

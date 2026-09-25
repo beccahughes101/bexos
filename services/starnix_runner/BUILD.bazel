@@ -1,3 +1,4 @@
+load("//build/platforms:architecture.bzl", "guest_select")
 load("//build/rules:app_archive.bzl", "app_archive")
 load("//build/rules:optimized_artifact.bzl", "optimized_artifact")
 load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
@@ -10,7 +11,7 @@ rust_library(
     srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
     crate_name = "bexos_starnix_runner",
     edition = "2024",
-    rustc_flags = select({
+    rustc_flags = guest_select([], ["--cfg=bexos_arch_x86_64"]) + select({
         "//build/platforms:is_bexos_userspace": ["--cfg=bexos_guest"],
         "//conditions:default": [],
     }),

@@ -1,0 +1,54 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("//build/rules:app_archive.bzl", "app_archive")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "containerd",
+    srcs = glob(["src/*.rs"], exclude = ["src/main.rs"]),
+    crate_name = "bexos_containerd",
+    edition = "2024",
+    deps = [
+        "//idl:app_opener_fidl_rust",
+        "//idl:container_fidl_rust",
+        "//idl:fs_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//lib/fs_client",
+        "//lib/migration",
+        "//lib/oci:oci",
+        "//lib/oci_fs",
+        "//lib/pkg_client",
+        "//lib/userspace",
+    ],
+)
+
+std_service_binary(
+    name = "containerd_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_containerd_elf",
+    deps = [":containerd"],
+)
+
+std_service_binary(
+    name = "replacement_elf",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_containerd_replacement",
+    deps = [":containerd"],
+)
+
+app_manifest(name = "manifest", src = "package/containerd.prototxt")
+app_archive(
+    name = "containerd_archive",
+    manifest = ":manifest",
+    entries = {"bin/containerd": ":containerd_elf"},
+    compression = "zstd",
+)
+app_archive(
+    name = "replacement_archive",
+    manifest = ":manifest",
+    entries = {"bin/containerd": ":replacement_elf"},
+    compression = "zstd",
+)
+
+rust_test(name = "tests", crate = ":containerd")

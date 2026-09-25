@@ -1,3 +1,4 @@
+load("//build/platforms:architecture.bzl", "guest_select")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 package(default_visibility = ["//visibility:public"])
@@ -26,6 +27,7 @@ rust_library(
     crate_root = "src/kernel/core/lib.rs",
     crate_name = "starnix_core",
     edition = "2024",
+    rustc_flags = guest_select([], ["--cfg=bexos_arch_x86_64"]),
 )
 
 rust_library(
@@ -34,6 +36,7 @@ rust_library(
     crate_root = "src/kernel/main.rs",
     crate_name = "starnix_kernel",
     edition = "2024",
+    rustc_flags = guest_select([], ["--cfg=bexos_arch_x86_64"]),
     deps = [
         ":starnix_core",
         "//lib/boot",

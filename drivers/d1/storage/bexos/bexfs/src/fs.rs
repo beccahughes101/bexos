@@ -24,6 +24,7 @@ use crate::key::LockedVolumeKey;
 const NAMESPACE_MAGIC: [u8; 8] = *b"BEXNS001";
 const NAMESPACE_EXTENTS_MAGIC: [u8; 8] = *b"BEXNS002";
 const NAMESPACE_SPARSE_MAGIC: [u8; 8] = *b"BEXNS003";
+const NAMESPACE_DENTRIES_MAGIC: [u8; 8] = *b"BEXNS004";
 const EXTERNAL_DATA_THRESHOLD: usize = 128 * 1024;
 const EXTERNAL_READ_WINDOW_BYTES: usize = 2 * 1024 * 1024;
 const EXTERNAL_WRITE_WINDOW_BYTES: usize = 2 * 1024 * 1024;
@@ -101,6 +102,7 @@ impl From<HeaderError> for BexFsError {
 pub enum NodeKind {
     File,
     Directory,
+    Symlink,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -110,6 +112,8 @@ pub struct NodeAttributes {
     pub creation_time_nanos: u64,
     pub modification_time_nanos: u64,
     pub mode: u32,
+    pub uid: u32,
+    pub gid: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -136,11 +140,10 @@ impl FileHandle {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Node {
     inode: u64,
-    parent: u64,
-    name: String,
     kind: NodeKind,
     attributes: NodeAttributes,
     data: SparseData,
+    xattrs: BTreeMap<String, Vec<u8>>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -280,14 +283,13 @@ impl SparseData {
 struct Namespace {
     next_inode: u64,
     nodes: BTreeMap<u64, Node>,
+    dentries: BTreeMap<(u64, String), u64>,
 }
 
 impl Namespace {
     fn empty() -> Self {
         let root = Node {
             inode: ROOT_INODE,
-            parent: ROOT_INODE,
-            name: String::new(),
             kind: NodeKind::Directory,
             attributes: NodeAttributes {
                 size_bytes: 0,
@@ -295,14 +297,18 @@ impl Namespace {
                 creation_time_nanos: 0,
                 modification_time_nanos: 0,
                 mode: 0o755,
+                uid: 0,
+                gid: 0,
             },
             data: SparseData::default(),
+            xattrs: BTreeMap::new(),
         };
         let mut nodes = BTreeMap::new();
         nodes.insert(ROOT_INODE, root);
         Self {
             next_inode: ROOT_INODE + 1,
             nodes,
+            dentries: BTreeMap::new(),
         }
     }
 }
@@ -320,6 +326,7 @@ pub struct BexFs {
     namespace: Namespace,
     read_only: bool,
     dirty: BTreeSet<u64>,
+    migration_format: u64,
 }
 
 impl BexFs {
@@ -421,6 +428,7 @@ impl BexFs {
             namespace,
             dirty: BTreeSet::new(),
             read_only: false,
+            migration_format: 4,
         })
     }
 
@@ -486,6 +494,7 @@ impl BexFs {
             namespace,
             dirty: BTreeSet::new(),
             read_only,
+            migration_format: 4,
         })
     }
 
@@ -500,6 +509,8 @@ impl BexFs {
             creation_time_nanos: 0,
             modification_time_nanos: 0,
             mode: 0,
+            uid: 0,
+            gid: 0,
         };
         for node in self.namespace.nodes.values() {
             usage.size_bytes = usage.size_bytes.saturating_add(node.attributes.size_bytes);
@@ -550,7 +561,13 @@ impl BexFs {
         let create = flags & 0x8 != 0;
         let truncate = flags & 0x10 != 0;
         let require_directory = flags & 0x20 != 0;
-        let inode = match self.resolve(base, path) {
+        let no_follow = flags & 0x40 != 0;
+        let resolved = if no_follow {
+            self.resolve_no_follow(base, path)
+        } else {
+            self.resolve(base, path)
+        };
+        let inode = match resolved {
             Ok(inode) => inode,
             Err(BexFsError::NotFound) if create => {
                 self.create_path(base, path, require_directory)?
@@ -695,6 +712,51 @@ impl BexFs {
             .ok_or(BexFsError::NotFound)
     }
 
+    pub fn set_metadata(
+        &mut self,
+        inode: u64,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+        modification_time_nanos: u64,
+    ) -> Result<(), BexFsError> {
+        if self.read_only {
+            return Err(BexFsError::ReadOnly);
+        }
+        let node = self
+            .namespace
+            .nodes
+            .get_mut(&inode)
+            .ok_or(BexFsError::NotFound)?;
+        node.attributes.mode = mode & 0o7777;
+        node.attributes.uid = uid;
+        node.attributes.gid = gid;
+        node.attributes.modification_time_nanos = modification_time_nanos;
+        self.dirty.insert(inode << 16);
+        Ok(())
+    }
+
+    pub fn kind_no_follow(&self, base: u64, path: &str) -> Result<NodeKind, BexFsError> {
+        let inode = self.inode_no_follow(base, path)?;
+        self.namespace
+            .nodes
+            .get(&inode)
+            .map(|node| node.kind)
+            .ok_or(BexFsError::NotFound)
+    }
+
+    pub fn inode_no_follow(&self, base: u64, path: &str) -> Result<u64, BexFsError> {
+        self.resolve_no_follow(base, path)
+    }
+
+    pub fn remove_tree(&mut self, base: u64, path: &str) -> Result<(), BexFsError> {
+        if self.read_only {
+            return Err(BexFsError::ReadOnly);
+        }
+        let (parent, name) = self.resolve_parent(base, path)?;
+        self.remove_tree_entry(parent, name)
+    }
+
     pub fn read_entries(&self, inode: u64) -> Result<Vec<DirectoryEntry>, BexFsError> {
         let directory = self
             .namespace
@@ -706,11 +768,14 @@ impl BexFs {
         }
         Ok(self
             .namespace
-            .nodes
-            .values()
-            .filter(|node| node.inode != ROOT_INODE && node.parent == inode)
-            .map(|node| DirectoryEntry {
-                name: node.name.clone(),
+            .dentries
+            .iter()
+            .filter(|((parent, _), _)| *parent == inode)
+            .filter_map(|((_, name), child)| {
+                self.namespace.nodes.get(child).map(|node| (name, node))
+            })
+            .map(|(name, node)| DirectoryEntry {
+                name: name.clone(),
                 kind: node.kind,
                 attributes: node.attributes,
             })
@@ -722,28 +787,228 @@ impl BexFs {
             return Err(BexFsError::ReadOnly);
         }
         validate_component(name)?;
-        let inode = self
+        self.require_directory(directory)?;
+        let key = (directory, name.to_string());
+        let inode = *self
             .namespace
-            .nodes
-            .values()
-            .find(|node| node.parent == directory && node.name == name)
-            .map(|node| node.inode)
+            .dentries
+            .get(&key)
             .ok_or(BexFsError::NotFound)?;
+        if self.has_children(inode) {
+            return Err(BexFsError::NotEmpty);
+        }
+        self.namespace.dentries.remove(&key);
+        self.remove_unlinked_inode(inode);
+        self.dirty.insert(0);
+        Ok(())
+    }
+
+    pub fn link(&mut self, base: u64, source: &str, target: &str) -> Result<(), BexFsError> {
+        if self.read_only {
+            return Err(BexFsError::ReadOnly);
+        }
+        let source_inode = self.resolve_no_follow(base, source)?;
         if self
             .namespace
             .nodes
-            .values()
-            .any(|node| node.parent == inode && node.inode != inode)
+            .get(&source_inode)
+            .is_none_or(|node| node.kind == NodeKind::Directory)
         {
-            return Err(BexFsError::NotEmpty);
+            return Err(BexFsError::AccessDenied);
         }
+        let (target_parent, target_name) = self.resolve_parent(base, target)?;
+        let key = (target_parent, target_name.to_string());
+        if self.namespace.dentries.contains_key(&key) {
+            return Err(BexFsError::AlreadyExists);
+        }
+        self.namespace.dentries.insert(key, source_inode);
+        self.dirty.insert(0);
+        Ok(())
+    }
+
+    pub fn symlink(&mut self, base: u64, target: &str, link_path: &str) -> Result<(), BexFsError> {
+        if self.read_only {
+            return Err(BexFsError::ReadOnly);
+        }
+        validate_symlink_target(target)?;
+        let (parent, name) = self.resolve_parent(base, link_path)?;
+        let key = (parent, name.to_string());
+        if self.namespace.dentries.contains_key(&key) {
+            return Err(BexFsError::AlreadyExists);
+        }
+        let inode = self.namespace.next_inode;
+        self.namespace.next_inode = inode.checked_add(1).ok_or(BexFsError::NoSpace)?;
+        let data = SparseData::from_dense(target.as_bytes().to_vec());
+        self.namespace.nodes.insert(
+            inode,
+            Node {
+                inode,
+                kind: NodeKind::Symlink,
+                attributes: NodeAttributes {
+                    size_bytes: data.len(),
+                    storage_allocated_bytes: data.allocated_bytes(),
+                    creation_time_nanos: 0,
+                    modification_time_nanos: 0,
+                    mode: 0o777,
+                    uid: 0,
+                    gid: 0,
+                },
+                data,
+                xattrs: BTreeMap::new(),
+            },
+        );
+        self.namespace.dentries.insert(key, inode);
+        self.dirty.insert(0);
         self.dirty.insert(inode << 16);
-        if let Some(n) = self.namespace.nodes.remove(&inode) {
-            self.dirty.extend(
-                (0..n.data.len().div_ceil(migration::CHUNK as u64))
-                    .map(|i| (inode << 16) | i as u64 + 1),
-            );
+        Ok(())
+    }
+
+    pub fn readlink(&self, base: u64, path: &str) -> Result<String, BexFsError> {
+        let inode = self.resolve_no_follow(base, path)?;
+        let node = self
+            .namespace
+            .nodes
+            .get(&inode)
+            .ok_or(BexFsError::NotFound)?;
+        if node.kind != NodeKind::Symlink {
+            return Err(BexFsError::InvalidArgs);
         }
+        let bytes = node.data.read_at(0, node.data.len() as usize);
+        core::str::from_utf8(&bytes)
+            .map(ToString::to_string)
+            .map_err(|_| BexFsError::Corrupt)
+    }
+
+    pub fn get_xattr(&self, inode: u64, name: &str) -> Result<Vec<u8>, BexFsError> {
+        validate_xattr_name(name)?;
+        self.namespace
+            .nodes
+            .get(&inode)
+            .ok_or(BexFsError::NotFound)?
+            .xattrs
+            .get(name)
+            .cloned()
+            .ok_or(BexFsError::NotFound)
+    }
+
+    pub fn set_xattr(
+        &mut self,
+        inode: u64,
+        name: &str,
+        value: &[u8],
+        flags: u32,
+    ) -> Result<(), BexFsError> {
+        if self.read_only {
+            return Err(BexFsError::ReadOnly);
+        }
+        validate_xattr_name(name)?;
+        if value.len() > 65_536 || flags & !3 != 0 || flags == 3 {
+            return Err(BexFsError::InvalidArgs);
+        }
+        let node = self
+            .namespace
+            .nodes
+            .get_mut(&inode)
+            .ok_or(BexFsError::NotFound)?;
+        let exists = node.xattrs.contains_key(name);
+        if flags == 1 && exists || flags == 2 && !exists {
+            return Err(if exists {
+                BexFsError::AlreadyExists
+            } else {
+                BexFsError::NotFound
+            });
+        }
+        node.xattrs.insert(name.to_string(), value.to_vec());
+        self.dirty.insert(inode << 16);
+        Ok(())
+    }
+
+    pub fn list_xattrs(&self, inode: u64) -> Result<Vec<String>, BexFsError> {
+        Ok(self
+            .namespace
+            .nodes
+            .get(&inode)
+            .ok_or(BexFsError::NotFound)?
+            .xattrs
+            .keys()
+            .cloned()
+            .collect())
+    }
+
+    pub fn remove_xattr(&mut self, inode: u64, name: &str) -> Result<(), BexFsError> {
+        if self.read_only {
+            return Err(BexFsError::ReadOnly);
+        }
+        validate_xattr_name(name)?;
+        self.namespace
+            .nodes
+            .get_mut(&inode)
+            .ok_or(BexFsError::NotFound)?
+            .xattrs
+            .remove(name)
+            .map(|_| self.dirty.insert(inode << 16))
+            .ok_or(BexFsError::NotFound)?;
+        Ok(())
+    }
+
+    pub fn rename(&mut self, base: u64, source: &str, target: &str) -> Result<(), BexFsError> {
+        if self.read_only {
+            return Err(BexFsError::ReadOnly);
+        }
+        let source_inode = self.resolve(base, source)?;
+        if source_inode == ROOT_INODE {
+            return Err(BexFsError::InvalidArgs);
+        }
+        let (source_parent, source_name) = self.resolve_parent(base, source)?;
+        let source_key = (source_parent, source_name.to_string());
+        let (target_parent, target_name) = self.resolve_parent(base, target)?;
+        let target_key = (target_parent, target_name.to_string());
+        let source_kind = self
+            .namespace
+            .nodes
+            .get(&source_inode)
+            .ok_or(BexFsError::NotFound)?
+            .kind;
+        if source_kind == NodeKind::Directory {
+            let mut ancestor = target_parent;
+            loop {
+                if ancestor == source_inode {
+                    return Err(BexFsError::InvalidArgs);
+                }
+                if ancestor == ROOT_INODE {
+                    break;
+                }
+                ancestor = self.directory_parent(ancestor)?;
+            }
+        }
+        let replaced = self.namespace.dentries.get(&target_key).and_then(|inode| {
+            self.namespace
+                .nodes
+                .get(inode)
+                .map(|node| (*inode, node.kind))
+        });
+        if let Some((inode, kind)) = replaced {
+            if inode == source_inode && source_key == target_key {
+                return Ok(());
+            }
+            if source_kind == NodeKind::Directory && kind != NodeKind::Directory {
+                return Err(BexFsError::NotDirectory);
+            }
+            if source_kind != NodeKind::Directory && kind == NodeKind::Directory {
+                return Err(BexFsError::IsDirectory);
+            }
+            if self.has_children(inode) {
+                return Err(BexFsError::NotEmpty);
+            }
+            self.namespace.dentries.remove(&target_key);
+            self.remove_unlinked_inode(inode);
+        }
+        self.namespace
+            .dentries
+            .remove(&source_key)
+            .ok_or(BexFsError::NotFound)?;
+        self.namespace.dentries.insert(target_key, source_inode);
+        self.dirty.insert(0);
         Ok(())
     }
 
@@ -781,53 +1046,85 @@ impl BexFs {
                 .then_some(base)
                 .ok_or(BexFsError::NotFound);
         }
-        let components = validate_relative_path(path)?;
-        let mut current = base;
-        if !self.namespace.nodes.contains_key(&current) {
-            return Err(BexFsError::NotFound);
+        self.resolve_path(base, path, true)
+    }
+
+    fn resolve_no_follow(&self, base: u64, path: &str) -> Result<u64, BexFsError> {
+        self.resolve_path(base, path, false)
+    }
+
+    fn resolve_path(&self, base: u64, path: &str, follow_final: bool) -> Result<u64, BexFsError> {
+        let components = validate_relative_path(path)?
+            .into_iter()
+            .map(ToString::to_string)
+            .collect();
+        self.walk(base, components, follow_final, 0)
+    }
+
+    fn walk(
+        &self,
+        mut current: u64,
+        components: Vec<String>,
+        follow_final: bool,
+        depth: usize,
+    ) -> Result<u64, BexFsError> {
+        if depth > 40 || !self.namespace.nodes.contains_key(&current) {
+            return Err(if depth > 40 {
+                BexFsError::InvalidArgs
+            } else {
+                BexFsError::NotFound
+            });
         }
-        for component in components {
-            let parent = self
+        let count = components.len();
+        for (index, component) in components.iter().enumerate() {
+            match component.as_str() {
+                "." => continue,
+                ".." => {
+                    self.require_directory(current)?;
+                    current = self.directory_parent(current)?;
+                    continue;
+                }
+                _ => {}
+            }
+            self.require_directory(current)?;
+            let parent = current;
+            current = self
+                .namespace
+                .dentries
+                .get(&(parent, component.clone()))
+                .copied()
+                .ok_or(BexFsError::NotFound)?;
+            let final_component = index + 1 == count;
+            let node = self
                 .namespace
                 .nodes
                 .get(&current)
                 .ok_or(BexFsError::NotFound)?;
-            if parent.kind != NodeKind::Directory {
-                return Err(BexFsError::NotDirectory);
+            if node.kind == NodeKind::Symlink && (!final_component || follow_final) {
+                let bytes = node.data.read_at(0, node.data.len() as usize);
+                let target = core::str::from_utf8(&bytes).map_err(|_| BexFsError::Corrupt)?;
+                let mut target_components = target
+                    .split('/')
+                    .filter(|component| !component.is_empty())
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>();
+                target_components.extend(components[index + 1..].iter().cloned());
+                let start = if target.starts_with('/') {
+                    ROOT_INODE
+                } else {
+                    parent
+                };
+                return self.walk(start, target_components, follow_final, depth + 1);
             }
-            current = self
-                .namespace
-                .nodes
-                .values()
-                .find(|node| node.parent == current && node.name == component)
-                .map(|node| node.inode)
-                .ok_or(BexFsError::NotFound)?;
         }
         Ok(current)
     }
 
     fn create_path(&mut self, base: u64, path: &str, directory: bool) -> Result<u64, BexFsError> {
-        let components = validate_relative_path(path)?;
-        let (name, parents) = components.split_last().ok_or(BexFsError::InvalidArgs)?;
-        let mut parent = base;
-        for component in parents {
-            parent = self.resolve(parent, component)?;
-        }
-        if self
-            .namespace
-            .nodes
-            .values()
-            .any(|node| node.parent == parent && node.name == *name)
-        {
+        let (parent, name) = self.resolve_parent(base, path)?;
+        let key = (parent, name.to_string());
+        if self.namespace.dentries.contains_key(&key) {
             return Err(BexFsError::AlreadyExists);
-        }
-        let parent_node = self
-            .namespace
-            .nodes
-            .get(&parent)
-            .ok_or(BexFsError::NotFound)?;
-        if parent_node.kind != NodeKind::Directory {
-            return Err(BexFsError::NotDirectory);
         }
         let inode = self.namespace.next_inode;
         self.namespace.next_inode = inode.checked_add(1).ok_or(BexFsError::NoSpace)?;
@@ -837,8 +1134,6 @@ impl BexFs {
             inode,
             Node {
                 inode,
-                parent,
-                name: (*name).to_string(),
                 kind: if directory {
                     NodeKind::Directory
                 } else {
@@ -850,11 +1145,95 @@ impl BexFs {
                     creation_time_nanos: 0,
                     modification_time_nanos: 0,
                     mode: if directory { 0o755 } else { 0o600 },
+                    uid: 0,
+                    gid: 0,
                 },
                 data: SparseData::default(),
+                xattrs: BTreeMap::new(),
             },
         );
+        self.namespace.dentries.insert(key, inode);
         Ok(inode)
+    }
+
+    fn resolve_parent<'a>(&self, base: u64, path: &'a str) -> Result<(u64, &'a str), BexFsError> {
+        let components = validate_relative_path(path)?;
+        let (name, parents) = components.split_last().ok_or(BexFsError::InvalidArgs)?;
+        let mut parent = base;
+        for component in parents {
+            parent = self.resolve(parent, component)?;
+        }
+        self.require_directory(parent)?;
+        Ok((parent, name))
+    }
+
+    fn require_directory(&self, inode: u64) -> Result<(), BexFsError> {
+        match self.namespace.nodes.get(&inode) {
+            Some(node) if node.kind == NodeKind::Directory => Ok(()),
+            Some(_) => Err(BexFsError::NotDirectory),
+            None => Err(BexFsError::NotFound),
+        }
+    }
+
+    fn has_children(&self, inode: u64) -> bool {
+        self.namespace
+            .dentries
+            .keys()
+            .any(|(parent, _)| *parent == inode)
+    }
+
+    fn remove_unlinked_inode(&mut self, inode: u64) {
+        if inode == ROOT_INODE
+            || self
+                .namespace
+                .dentries
+                .values()
+                .any(|child| *child == inode)
+        {
+            return;
+        }
+        self.dirty.insert(inode << 16);
+        if let Some(node) = self.namespace.nodes.remove(&inode) {
+            self.dirty.extend(
+                (0..node.data.len().div_ceil(migration::CHUNK as u64))
+                    .map(|chunk| (inode << 16) | chunk + 1),
+            );
+        }
+    }
+
+    fn remove_tree_entry(&mut self, parent: u64, name: &str) -> Result<(), BexFsError> {
+        let key = (parent, name.to_string());
+        let inode = *self
+            .namespace
+            .dentries
+            .get(&key)
+            .ok_or(BexFsError::NotFound)?;
+        let children = self
+            .namespace
+            .dentries
+            .keys()
+            .filter(|(child_parent, _)| *child_parent == inode)
+            .map(|(_, child_name)| child_name.clone())
+            .collect::<Vec<_>>();
+        for child in children {
+            self.remove_tree_entry(inode, &child)?;
+        }
+        self.namespace.dentries.remove(&key);
+        self.remove_unlinked_inode(inode);
+        self.dirty.insert(0);
+        Ok(())
+    }
+
+    fn directory_parent(&self, inode: u64) -> Result<u64, BexFsError> {
+        if inode == ROOT_INODE {
+            return Ok(ROOT_INODE);
+        }
+        self.namespace
+            .dentries
+            .iter()
+            .find(|(_, child)| **child == inode)
+            .map(|((parent, _), _)| *parent)
+            .ok_or(BexFsError::Corrupt)
     }
 }
 
@@ -881,6 +1260,20 @@ fn validate_component(component: &str) -> Result<(), BexFsError> {
         || component.len() > 255
         || component.contains('/')
     {
+        return Err(BexFsError::InvalidArgs);
+    }
+    Ok(())
+}
+
+fn validate_symlink_target(target: &str) -> Result<(), BexFsError> {
+    if target.is_empty() || target.len() > 4095 || target.as_bytes().contains(&0) {
+        return Err(BexFsError::InvalidArgs);
+    }
+    Ok(())
+}
+
+fn validate_xattr_name(name: &str) -> Result<(), BexFsError> {
+    if name.is_empty() || name.len() > 255 || name.as_bytes().contains(&0) || !name.contains('.') {
         return Err(BexFsError::InvalidArgs);
     }
     Ok(())
@@ -921,7 +1314,7 @@ fn write_namespace_slot(
         return Err(BexFsError::NoSpace);
     }
     let mut header = vec![0u8; BEXFS_BLOCK_SIZE as usize];
-    header[..8].copy_from_slice(&NAMESPACE_SPARSE_MAGIC);
+    header[..8].copy_from_slice(&NAMESPACE_DENTRIES_MAGIC);
     header[8..16].copy_from_slice(&sealed_len.to_le_bytes());
     header[16..24].copy_from_slice(&external_len.to_le_bytes());
     device.write_at(slot.lba, &header)?;
@@ -1019,6 +1412,7 @@ fn read_namespace_slot(
     device.read_at(slot.lba, &mut header)?;
     if header.get(..8) == Some(&NAMESPACE_EXTENTS_MAGIC)
         || header.get(..8) == Some(&NAMESPACE_SPARSE_MAGIC)
+        || header.get(..8) == Some(&NAMESPACE_DENTRIES_MAGIC)
     {
         return read_namespace_slot_with_extents(device, key, slot, &header);
     }
@@ -1082,8 +1476,11 @@ fn read_namespace_slot_with_extents(
     device.read_at(slot.lba + 1, &mut sealed)?;
     sealed.truncate(sealed_len as usize);
     open_namespace_in_place(key, &slot.nonce, &mut sealed).map_err(|_| BexFsError::Corrupt)?;
+    let dentries = header.get(..8) == Some(&NAMESPACE_DENTRIES_MAGIC);
     let sparse = header.get(..8) == Some(&NAMESPACE_SPARSE_MAGIC);
-    let (mut namespace, extents) = if sparse {
+    let (mut namespace, extents) = if dentries {
+        deserialize_dentry_namespace(&sealed)?
+    } else if sparse {
         deserialize_sparse_namespace(&sealed)?
     } else {
         deserialize_namespace_with_extents(&sealed)?
@@ -1196,47 +1593,64 @@ fn serialize_namespace_with_extents(
     let mut out = Vec::new();
     let mut external = Vec::new();
     let mut external_len = 0u64;
-    out.extend_from_slice(&NAMESPACE_SPARSE_MAGIC);
+    out.extend_from_slice(&NAMESPACE_DENTRIES_MAGIC);
     out.extend_from_slice(&namespace.next_inode.to_le_bytes());
     out.extend_from_slice(&(namespace.nodes.len() as u64).to_le_bytes());
     for node in namespace.nodes.values() {
-        if node.name.len() > 255 {
-            return Err(BexFsError::Corrupt);
-        }
         out.extend_from_slice(&node.inode.to_le_bytes());
-        out.extend_from_slice(&node.parent.to_le_bytes());
         out.push(match node.kind {
             NodeKind::File => 1,
             NodeKind::Directory => 2,
+            NodeKind::Symlink => 3,
         });
-        out.extend_from_slice(&(node.name.len() as u16).to_le_bytes());
         out.extend_from_slice(&node.attributes.mode.to_le_bytes());
+        out.extend_from_slice(&node.attributes.uid.to_le_bytes());
+        out.extend_from_slice(&node.attributes.gid.to_le_bytes());
         out.extend_from_slice(&node.attributes.creation_time_nanos.to_le_bytes());
         out.extend_from_slice(&node.attributes.modification_time_nanos.to_le_bytes());
         out.extend_from_slice(&node.data.len().to_le_bytes());
-        out.extend_from_slice(node.name.as_bytes());
         if node.kind == NodeKind::Directory {
             out.extend_from_slice(&0u64.to_le_bytes());
-            continue;
-        }
-        let allocated = node.data.allocated_bytes();
-        out.extend_from_slice(&(node.data.extents.len() as u64).to_le_bytes());
-        for (chunk, bytes) in node.data.iter_allocated() {
-            out.extend_from_slice(&chunk.to_le_bytes());
-            out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
-            if allocated as usize > EXTERNAL_DATA_THRESHOLD {
-                let offset = external_len.next_multiple_of(u64::from(BEXFS_BLOCK_SIZE));
-                external_len = offset
-                    .checked_add(bytes.len() as u64)
-                    .ok_or(BexFsError::NoSpace)?;
-                external.push(ExternalWriteRef { offset, bytes });
-                out.push(2);
-                out.extend_from_slice(&offset.to_le_bytes());
-            } else {
-                out.push(1);
-                out.extend_from_slice(bytes);
+        } else {
+            let allocated = node.data.allocated_bytes();
+            out.extend_from_slice(&(node.data.extents.len() as u64).to_le_bytes());
+            for (chunk, bytes) in node.data.iter_allocated() {
+                out.extend_from_slice(&chunk.to_le_bytes());
+                out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+                if allocated as usize > EXTERNAL_DATA_THRESHOLD {
+                    let offset = external_len.next_multiple_of(u64::from(BEXFS_BLOCK_SIZE));
+                    external_len = offset
+                        .checked_add(bytes.len() as u64)
+                        .ok_or(BexFsError::NoSpace)?;
+                    external.push(ExternalWriteRef { offset, bytes });
+                    out.push(2);
+                    out.extend_from_slice(&offset.to_le_bytes());
+                } else {
+                    out.push(1);
+                    out.extend_from_slice(bytes);
+                }
             }
         }
+        out.extend_from_slice(&(node.xattrs.len() as u64).to_le_bytes());
+        for (name, value) in &node.xattrs {
+            if name.len() > 255 || value.len() > 65_536 {
+                return Err(BexFsError::Corrupt);
+            }
+            out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            out.extend_from_slice(&(value.len() as u32).to_le_bytes());
+            out.extend_from_slice(name.as_bytes());
+            out.extend_from_slice(value);
+        }
+    }
+    out.extend_from_slice(&(namespace.dentries.len() as u64).to_le_bytes());
+    for ((parent, name), inode) in &namespace.dentries {
+        if name.len() > 255 {
+            return Err(BexFsError::Corrupt);
+        }
+        out.extend_from_slice(&parent.to_le_bytes());
+        out.extend_from_slice(&inode.to_le_bytes());
+        out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        out.extend_from_slice(name.as_bytes());
     }
     Ok((out, external, external_len))
 }
@@ -1247,6 +1661,140 @@ struct ExternalDataRef {
     chunk: Option<u64>,
     offset: u64,
     len: u64,
+}
+
+fn deserialize_dentry_namespace(
+    bytes: &[u8],
+) -> Result<(Namespace, Vec<ExternalDataRef>), BexFsError> {
+    let mut cursor = Cursor::new(bytes);
+    if cursor.take(8)? != NAMESPACE_DENTRIES_MAGIC {
+        return Err(BexFsError::Corrupt);
+    }
+    let next_inode = cursor.u64()?;
+    let count = usize::try_from(cursor.u64()?).map_err(|_| BexFsError::Corrupt)?;
+    if count == 0 || count > 1_000_000 {
+        return Err(BexFsError::Corrupt);
+    }
+    let mut nodes = BTreeMap::new();
+    let mut external = Vec::new();
+    for _ in 0..count {
+        let inode = cursor.u64()?;
+        let kind = match cursor.u8()? {
+            1 => NodeKind::File,
+            2 => NodeKind::Directory,
+            3 => NodeKind::Symlink,
+            _ => return Err(BexFsError::Corrupt),
+        };
+        let mode = cursor.u32()?;
+        let uid = cursor.u32()?;
+        let gid = cursor.u32()?;
+        let creation_time_nanos = cursor.u64()?;
+        let modification_time_nanos = cursor.u64()?;
+        let logical_size = cursor.u64()?;
+        let extent_count = cursor.u64()?;
+        let mut data = SparseData {
+            logical_size,
+            extents: BTreeMap::new(),
+        };
+        for _ in 0..extent_count {
+            let chunk = cursor.u64()?;
+            let len = usize::try_from(cursor.u32()?).map_err(|_| BexFsError::Corrupt)?;
+            if len == 0 || len > SPARSE_EXTENT_SIZE {
+                return Err(BexFsError::Corrupt);
+            }
+            match cursor.u8()? {
+                1 => {
+                    let bytes = cursor.take(len)?;
+                    let mut stored = vec![0; SPARSE_EXTENT_SIZE];
+                    stored[..len].copy_from_slice(bytes);
+                    if data
+                        .extents
+                        .insert(chunk, ExtentData::Owned(stored))
+                        .is_some()
+                    {
+                        return Err(BexFsError::Corrupt);
+                    }
+                }
+                2 => external.push(ExternalDataRef {
+                    inode,
+                    chunk: Some(chunk),
+                    offset: cursor.u64()?,
+                    len: len as u64,
+                }),
+                _ => return Err(BexFsError::Corrupt),
+            }
+        }
+        let xattr_count = usize::try_from(cursor.u64()?).map_err(|_| BexFsError::Corrupt)?;
+        if xattr_count > 256 {
+            return Err(BexFsError::Corrupt);
+        }
+        let mut xattrs = BTreeMap::new();
+        for _ in 0..xattr_count {
+            let name_len = cursor.u16()? as usize;
+            let value_len = usize::try_from(cursor.u32()?).map_err(|_| BexFsError::Corrupt)?;
+            if value_len > 65_536 {
+                return Err(BexFsError::Corrupt);
+            }
+            let name = core::str::from_utf8(cursor.take(name_len)?)
+                .map_err(|_| BexFsError::Corrupt)?
+                .to_string();
+            validate_xattr_name(&name).map_err(|_| BexFsError::Corrupt)?;
+            let value = cursor.take(value_len)?.to_vec();
+            if xattrs.insert(name, value).is_some() {
+                return Err(BexFsError::Corrupt);
+            }
+        }
+        let attributes = NodeAttributes {
+            size_bytes: logical_size,
+            storage_allocated_bytes: data.allocated_bytes(),
+            creation_time_nanos,
+            modification_time_nanos,
+            mode,
+            uid,
+            gid,
+        };
+        if nodes
+            .insert(
+                inode,
+                Node {
+                    inode,
+                    kind,
+                    attributes,
+                    data,
+                    xattrs,
+                },
+            )
+            .is_some()
+        {
+            return Err(BexFsError::Corrupt);
+        }
+    }
+    let dentry_count = usize::try_from(cursor.u64()?).map_err(|_| BexFsError::Corrupt)?;
+    if dentry_count > 4_000_000 {
+        return Err(BexFsError::Corrupt);
+    }
+    let mut dentries = BTreeMap::new();
+    for _ in 0..dentry_count {
+        let parent = cursor.u64()?;
+        let inode = cursor.u64()?;
+        let name_len = cursor.u16()? as usize;
+        let name = core::str::from_utf8(cursor.take(name_len)?)
+            .map_err(|_| BexFsError::Corrupt)?
+            .to_string();
+        if dentries.insert((parent, name), inode).is_some() {
+            return Err(BexFsError::Corrupt);
+        }
+    }
+    if !cursor.remaining().is_empty() {
+        return Err(BexFsError::Corrupt);
+    }
+    let namespace = Namespace {
+        next_inode,
+        nodes,
+        dentries,
+    };
+    validate_namespace(&namespace)?;
+    Ok((namespace, external))
 }
 
 fn deserialize_sparse_namespace(
@@ -1262,6 +1810,7 @@ fn deserialize_sparse_namespace(
         return Err(BexFsError::Corrupt);
     }
     let mut nodes = BTreeMap::new();
+    let mut dentries = BTreeMap::new();
     let mut external = Vec::new();
     for _ in 0..count {
         let inode = cursor.u64()?;
@@ -1279,6 +1828,9 @@ fn deserialize_sparse_namespace(
         let name = core::str::from_utf8(cursor.take(name_len)?)
             .map_err(|_| BexFsError::Corrupt)?
             .to_string();
+        if inode != ROOT_INODE && dentries.insert((parent, name), inode).is_some() {
+            return Err(BexFsError::Corrupt);
+        }
         let extent_count = cursor.u64()?;
         let mut data = SparseData {
             logical_size,
@@ -1321,17 +1873,18 @@ fn deserialize_sparse_namespace(
             creation_time_nanos,
             modification_time_nanos,
             mode,
+            uid: 0,
+            gid: 0,
         };
         if nodes
             .insert(
                 inode,
                 Node {
                     inode,
-                    parent,
-                    name,
                     kind,
                     attributes,
                     data,
+                    xattrs: BTreeMap::new(),
                 },
             )
             .is_some()
@@ -1342,7 +1895,11 @@ fn deserialize_sparse_namespace(
     if !cursor.remaining().is_empty() {
         return Err(BexFsError::Corrupt);
     }
-    let namespace = Namespace { next_inode, nodes };
+    let namespace = Namespace {
+        next_inode,
+        nodes,
+        dentries,
+    };
     validate_namespace(&namespace)?;
     Ok((namespace, external))
 }
@@ -1360,6 +1917,7 @@ fn deserialize_namespace_with_extents(
         return Err(BexFsError::Corrupt);
     }
     let mut nodes = BTreeMap::new();
+    let mut dentries = BTreeMap::new();
     let mut extents = Vec::new();
     for _ in 0..count {
         let inode = cursor.u64()?;
@@ -1377,6 +1935,9 @@ fn deserialize_namespace_with_extents(
         let name = core::str::from_utf8(cursor.take(name_len)?)
             .map_err(|_| BexFsError::Corrupt)?
             .to_string();
+        if inode != ROOT_INODE && dentries.insert((parent, name), inode).is_some() {
+            return Err(BexFsError::Corrupt);
+        }
         let data = match cursor.u8()? {
             1 => {
                 let data = cursor
@@ -1405,17 +1966,18 @@ fn deserialize_namespace_with_extents(
             creation_time_nanos,
             modification_time_nanos,
             mode,
+            uid: 0,
+            gid: 0,
         };
         if nodes
             .insert(
                 inode,
                 Node {
                     inode,
-                    parent,
-                    name,
                     kind,
                     attributes,
                     data: SparseData::from_dense(data),
+                    xattrs: BTreeMap::new(),
                 },
             )
             .is_some()
@@ -1426,7 +1988,11 @@ fn deserialize_namespace_with_extents(
     if !cursor.remaining().is_empty() {
         return Err(BexFsError::Corrupt);
     }
-    let namespace = Namespace { next_inode, nodes };
+    let namespace = Namespace {
+        next_inode,
+        nodes,
+        dentries,
+    };
     validate_namespace(&namespace)?;
     Ok((namespace, extents))
 }
@@ -1442,6 +2008,7 @@ fn deserialize_namespace(bytes: &[u8]) -> Result<Namespace, BexFsError> {
         return Err(BexFsError::Corrupt);
     }
     let mut nodes = BTreeMap::new();
+    let mut dentries = BTreeMap::new();
     for _ in 0..count {
         let inode = cursor.u64()?;
         let parent = cursor.u64()?;
@@ -1458,6 +2025,9 @@ fn deserialize_namespace(bytes: &[u8]) -> Result<Namespace, BexFsError> {
         let name = core::str::from_utf8(cursor.take(name_len)?)
             .map_err(|_| BexFsError::Corrupt)?
             .to_string();
+        if inode != ROOT_INODE && dentries.insert((parent, name), inode).is_some() {
+            return Err(BexFsError::Corrupt);
+        }
         let data = cursor.take(data_len)?.to_vec();
         let attributes = NodeAttributes {
             size_bytes: data.len() as u64,
@@ -1465,17 +2035,18 @@ fn deserialize_namespace(bytes: &[u8]) -> Result<Namespace, BexFsError> {
             creation_time_nanos,
             modification_time_nanos,
             mode,
+            uid: 0,
+            gid: 0,
         };
         if nodes
             .insert(
                 inode,
                 Node {
                     inode,
-                    parent,
-                    name,
                     kind,
                     attributes,
                     data: SparseData::from_dense(data),
+                    xattrs: BTreeMap::new(),
                 },
             )
             .is_some()
@@ -1486,21 +2057,77 @@ fn deserialize_namespace(bytes: &[u8]) -> Result<Namespace, BexFsError> {
     if !cursor.remaining().is_empty() {
         return Err(BexFsError::Corrupt);
     }
-    let namespace = Namespace { next_inode, nodes };
+    let namespace = Namespace {
+        next_inode,
+        nodes,
+        dentries,
+    };
     validate_namespace(&namespace)?;
     Ok(namespace)
 }
 
 fn validate_namespace(namespace: &Namespace) -> Result<(), BexFsError> {
-    if !namespace.nodes.contains_key(&ROOT_INODE) || namespace.next_inode <= ROOT_INODE {
+    if namespace.next_inode <= ROOT_INODE
+        || namespace
+            .nodes
+            .get(&ROOT_INODE)
+            .is_none_or(|node| node.kind != NodeKind::Directory)
+    {
         return Err(BexFsError::Corrupt);
     }
     for node in namespace.nodes.values() {
-        if node.inode == ROOT_INODE {
-            if node.parent != ROOT_INODE || node.kind != NodeKind::Directory {
-                return Err(BexFsError::Corrupt);
+        if node.inode >= namespace.next_inode
+            || node.kind != NodeKind::Directory && node.attributes.size_bytes != node.data.len()
+        {
+            return Err(BexFsError::Corrupt);
+        }
+    }
+    for ((parent, name), inode) in &namespace.dentries {
+        validate_component(name).map_err(|_| BexFsError::Corrupt)?;
+        if *inode == ROOT_INODE
+            || !namespace.nodes.contains_key(inode)
+            || namespace
+                .nodes
+                .get(parent)
+                .is_none_or(|node| node.kind != NodeKind::Directory)
+        {
+            return Err(BexFsError::Corrupt);
+        }
+    }
+    for inode in namespace
+        .nodes
+        .keys()
+        .copied()
+        .filter(|inode| *inode != ROOT_INODE)
+    {
+        let links = namespace
+            .dentries
+            .values()
+            .filter(|child| **child == inode)
+            .count();
+        if links == 0 || namespace.nodes[&inode].kind == NodeKind::Directory && links != 1 {
+            return Err(BexFsError::Corrupt);
+        }
+    }
+    for inode in namespace
+        .nodes
+        .values()
+        .filter(|node| node.kind == NodeKind::Directory)
+        .map(|node| node.inode)
+    {
+        let mut current = inode;
+        for _ in 0..namespace.nodes.len() {
+            if current == ROOT_INODE {
+                break;
             }
-        } else if !namespace.nodes.contains_key(&node.parent) {
+            current = namespace
+                .dentries
+                .iter()
+                .find(|(_, child)| **child == current)
+                .map(|((parent, _), _)| *parent)
+                .ok_or(BexFsError::Corrupt)?;
+        }
+        if current != ROOT_INODE {
             return Err(BexFsError::Corrupt);
         }
     }

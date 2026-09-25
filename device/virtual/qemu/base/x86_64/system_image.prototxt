@@ -12,6 +12,7 @@ base_packages: "//services/networkd:networkd_archive"
 base_packages: "//services/vswitchd:vswitchd_archive"
 base_packages: "//services/timed:timed_archive"
 base_packages: "//services/jobd:jobd_archive"
+base_packages: "//services/pkgd:pkgd_archive"
 
 autoinstall_packages {
   package: "//services/storage_verify:storage_verify"
@@ -49,9 +50,16 @@ autoinstall_packages {
 autoinstall_packages {
   package: "//services/jobd:jobd_archive"
 }
+autoinstall_packages { package: "//services/pkgd:pkgd_archive" }
 
 base_packages: "//apps/brush_shell:brush_shell"
 autoinstall_packages { package: "//apps/brush_shell:brush_shell" }
+base_packages: "//services/starnix_runner:starnix_runner_archive"
+autoinstall_packages { package: "//services/starnix_runner:starnix_runner_archive" }
+base_packages: "//services/containerd:containerd_archive"
+autoinstall_packages { package: "//services/containerd:containerd_archive" }
+base_packages: "//apps/container_cli:container_cli"
+autoinstall_packages { package: "//apps/container_cli:container_cli" }
 
 base_packages: "//services/prefsd:prefsd_archive"
 autoinstall_packages { package: "//services/prefsd:prefsd_archive" }

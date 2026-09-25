@@ -88,16 +88,12 @@ fn load_persistent_jobs(runtime: &mut Runtime) {
     let Some(vfsd) = runtime.vfsd else {
         return;
     };
-    if let Ok(store) = crate::storage::open_system_jobs(vfsd) {
-        if let Ok(records) = store.list() {
-            runtime.service.jobs.merge_records(records);
-        }
+    if let Ok(records) = crate::storage::load_system_jobs(vfsd) {
+        runtime.service.jobs.merge_records(records);
     }
     for uid in unlocked_users(runtime) {
-        if let Ok(store) = crate::storage::open_user_jobs(vfsd, uid) {
-            if let Ok(records) = store.list() {
-                runtime.service.jobs.merge_records(records);
-            }
+        if let Ok(records) = crate::storage::load_user_jobs(vfsd, uid) {
+            runtime.service.jobs.merge_records(records);
         }
     }
 }
@@ -111,15 +107,11 @@ pub(crate) fn load_persistent_user_jobs(runtime: &mut Runtime, uid: u64) {
         return;
     };
     if uid == 0 {
-        if let Ok(store) = crate::storage::open_system_jobs(vfsd) {
-            if let Ok(records) = store.list() {
-                runtime.service.jobs.merge_records(records);
-            }
-        }
-    } else if let Ok(store) = crate::storage::open_user_jobs(vfsd, uid) {
-        if let Ok(records) = store.list() {
+        if let Ok(records) = crate::storage::load_system_jobs(vfsd) {
             runtime.service.jobs.merge_records(records);
         }
+    } else if let Ok(records) = crate::storage::load_user_jobs(vfsd, uid) {
+        runtime.service.jobs.merge_records(records);
     }
 }
 

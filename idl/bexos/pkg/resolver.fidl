@@ -18,6 +18,7 @@ type ArtifactKind = strict enum : uint8 {
     FONT = 3;
     FIRMWARE = 4;
     NETWORK_EXTENSION = 5;
+    CONTAINER = 6;
 };
 struct BlobDigest { hash_type HashType; digest array<uint8, 32>; };
 struct ArtifactQuery {

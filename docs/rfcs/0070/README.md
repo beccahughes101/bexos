@@ -1,9 +1,19 @@
 # RFC-0070: Linux Binary Emulation Runtime (Starnix Port), Kernel Restricted Execution Mode, and OCI Container Hosting
 
 * **Author:** BexOS Systems Architecture & Compatibility Working Group
-* **Status:** Phase 1 implemented; Phases 2–4 remain proposed. See [current state](CURRENT.md).
+* **Status:** Phases 1–3 and offline Phase 4 implemented with guest acceptance pending. See [current state](CURRENT.md).
 * **Target Subsystems:** `kernel` (D0), `sdk/fidl/bexos.kernel`, `starnix_runner`, `pkgd`, `netstack`, `bexfs`, `vswitchd`
 * **Applicability:** Unmodified Linux Binaries, Android Runtimes, OCI Containers (Docker/Podman/Kubernetes workloads)
+
+### Offline execution profile
+
+The initial general-purpose ABI profile is intentionally offline. Linux guests
+may use pipes, `socketpair`, and `AF_UNIX` local IPC, but they receive no
+`AF_INET`, `AF_INET6`, netlink, packet, or vsock endpoint. `pkgd` remains the
+only component permitted to use its configured host networking path while it
+acquires verified container artifacts. The networking design later in this RFC
+is retained as a possible future profile; it is not part of the offline profile
+and must not be inferred from OCI support.
 
 ---
 
@@ -260,7 +270,7 @@ To run standard Linux container images (Docker / OCI format), the runtime orches
      │                             │    `/data/containers/c1/rootfs` │
      │                             │                                 │
      │                             │ 4. Spawn Sandboxed Job          │
-     │                             │    Inject Network Socket Channel│
+     │                             │    No guest network capability  │
      │                             │    `CreateContainer(c1_job, ...)`
      │                             ├────────────────────────────────►│
      │                             │                                 │ 5. Parse ELF Header
@@ -270,9 +280,18 @@ To run standard Linux container images (Docker / OCI format), the runtime orches
 
 ```
 
-### 6.1 Container Configuration Specification (`container.json`)
+### 6.1 Container Configuration
 
-`containerd` generates an OCI runtime configuration passed to Starnix over FIDL:
+The implemented offline profile persists `bexos.container.ContainerSpec` as
+bounded protobuf text at `/data/containers/<id>/config.prototxt`. It contains
+the verified manifest digest, effective argv/environment/cwd/identity,
+read-only-root flag, image reference, and CPU/memory/process limits. It has no
+network field. The JSON example below is retained as the broader future
+networked profile; it is not accepted by the current runtime.
+
+#### Future networked profile (`container.json`)
+
+The future profile would generate an OCI runtime configuration passed to Starnix over FIDL:
 
 ```json
 {
@@ -299,9 +318,9 @@ To run standard Linux container images (Docker / OCI format), the runtime orches
 
 ```
 
-### 6.2 Network Integration: Bridge vs. Isolated Stacks
+### 6.2 Future Network Integration: Bridge vs. Isolated Stacks
 
-Containers acquire network connectivity using two distinct topologies established in RFC-0048:
+The future networked profile would use two topologies established in RFC-0048:
 
 * **Mode 1: Direct Socket Bridge (Lightweight):**
 Starnix translates POSIX socket calls (`socket(AF_INET, SOCK_STREAM, 0)`) directly into IPC messages sent across `bexos.net.SocketProvider`. The container shares the system default IP address with zero NAT or network device emulation overhead.
@@ -350,17 +369,69 @@ Running arbitrary Linux binaries introduces potential security risks. BexOS enfo
 * Hook terminal I/O to native console and `scened` text buffers.
 * Validate core POSIX functionality against the Linux Test Project (LTP) test suite (focusing on filesystem, memory, and signals).
 
-The repository now contains the Phase 3 static, single-task implementation:
+The repository now contains the Phase 3 matching-architecture implementation:
 mounted package/data roots over the startup namespace, BexFS-backed writable
 directories, native console/socket terminal I/O, and bounded filesystem,
-memory, futex, clock, and signal syscall groups with host-side focused tests.
-Guest LTP and dual-architecture guest acceptance have not been run for this
-change. Dynamic ELF loading, task/thread creation, complete pseudo filesystems,
-and the broader subsystem designs above remain future work; see
+memory (including bounded `mremap` relocation), futex, clock, and signal
+syscall groups with host-side focused tests. File creation applies configured
+ownership and umask, and the chmod/chown syscall families are translated to
+the backing filesystem metadata protocol. The advertised `/proc/self/maps`
+and `/proc/thread-self/maps` nodes are generated from the active address-space
+mapping table, including split file offsets and private/shared permissions;
+procfs task directories and identity files reflect the live cooperative
+process/thread group. Open synthetic descriptors preserve content, type,
+flags, and cursor across heart transplant.
+Split shared file mappings retain their corresponding file offsets, so
+`mprotect`, `msync`, and `munmap` flush each segment to the correct backing
+range.
+Futex bitset waits retain arbitrary
+nonzero masks and wake only on intersection across private or shared queues,
+with masks preserved across transplant. `FUTEX_WAKE_OP` implements Linux's
+encoded atomic set/add/bitwise operations and signed comparisons before
+conditionally waking a second private or shared queue. Plain private and
+shared `FUTEX_REQUEUE`/`FUTEX_CMP_REQUEUE` preserve wait deadlines and queue
+scope, including stable shared backing-object identities across transplant. Futex2
+`futex_waitv` supports bounded private/shared 32-bit vectors, absolute
+deadlines, indexed wakeups, and transplant. Private and shared PI futex
+lock/try-lock/unlock operations include timed contention, owner-directed
+cooperative scheduling, cross-`CLONE_VM` ownership handoff, transplant state,
+and robust-owner-death recovery. The PI condition-variable pair atomically
+transfers private or shared waiters from `FUTEX_WAIT_REQUEUE_PI` to a PI mutex
+through `FUTEX_CMP_REQUEUE_PI`, preserving priority order, deadlines, signals,
+and transplant state. Robust-list registration and query are implemented for
+both supported Linux ABIs. The Linux `rseq` ABI registers aligned per-thread
+areas, publishes the runner's single virtual CPU, validates exact unregister
+tuples, follows fork/thread/exec lifecycle rules, and preserves registrations
+across heart transplant.
+Guest LTP and dual-architecture guest acceptance have not passed for this
+change. Dynamic glibc/musl ELF loading, local Unix sockets, pseudo filesystems,
+and event-loop descriptors are implemented. Cooperative `clone`/`clone3`
+thread groups, TLS/TID semantics, clear-TID futex joins, sleeping, and
+thread-state transplant are implemented. Bounded `fork`, `vfork`, process
+clone, `wait4`, zombie/reparenting, process signals, copy-on-write address
+spaces, and their transplant state are also implemented inside the serialized
+runner scheduler. Per-child BexOS process objects and the broader subsystem
+designs above remain future work; see
 [CURRENT.md](CURRENT.md) for the exact implemented surface.
+
+The maintained QEMU archive includes a matching-architecture dynamic musl PIE
+and its rootfs loader/shared library. Its acceptance phase covers pipe-based
+local IPC, `fork`, child exit status, `waitpid`, futex synchronization, robust
+and PI futex lifecycle, and `rseq` registration; both architecture variants
+build with the expected `PT_INTERP` and `DT_NEEDED` metadata. The guest phase
+has not passed. The source-built AArch64 firmware and platform boot now reach
+debugd, but the final long-running fixture install was stopped before Starnix
+execution and the x86_64 guest was not rerun, as recorded in `CURRENT.md`.
 
 ### Phase 4: OCI Runtime & Networking
 
 * Connect `starnix_runner` to `pkgd` via `libpkg_client` to resolve and unpack multi-layer OCI images.
 * Bridge Linux socket APIs to `bexos.net.SocketProvider`.
 * Demonstrate running standard container images (e.g., Alpine Linux `sh`, Python HTTP server, Redis) on BexOS.
+
+The offline portion is implemented: pkgd container resolution, strict OCI
+layout/config/layer verification (raw, gzip, and zstd), common-filesystem layer
+application with whiteouts and links, atomic durable unpack, transplantable
+`containerd`, appd-owned resource groups/trusted launches, and the packaged
+`container` CLI. Guest networking remains excluded by policy. The standard
+image demonstrations and optional networking bullets remain future acceptance.

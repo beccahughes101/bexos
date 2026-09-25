@@ -1,0 +1,44 @@
+package_name: "bexos.service.containerd"
+name: "Offline OCI container manager"
+package_version { major: 0 minor: 1 patch: 0 }
+processes {
+  name: "containerd"
+  runner: "elf"
+  service: true
+  wave: 8
+  resource_group: "system"
+  lifecycle { update_strategy: HEART_TRANSPLANT migration_timeout_ms: 5000 }
+  runner_options { [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/containerd" } }
+}
+# This declaration is never started at boot. appd uses it as the authenticated,
+# policy-bearing launch template for verified root filesystems supplied by this service.
+processes {
+  name: "container"
+  runner: "nix"
+  service: false
+  runner_options {
+    [type.googleapis.com/bexos.app.NixRunnerOptions] {
+      path: "/pkg/bin/containerd"
+      arguments: "/pkg/bin/containerd"
+      rootfs { source: PACKAGE readonly: true }
+      working_directory: "/"
+    }
+  }
+}
+services_exposed {
+  name: "bexos.container.ContainerManager"
+  protocol: "ContainerManager"
+  lifecycle: SINGLETON
+  visibility: PUBLIC
+  capabilities { capability: "Public" method_ordinals: 1 method_ordinals: 2 method_ordinals: 3 method_ordinals: 4 method_ordinals: 5 method_ordinals: 6 }
+}
+services_consumed {
+  name: "bexos.pkg.PackageResolver"
+  link_type: REQUIRED
+  capabilities { capability: "Resolve" methods { ordinal: 1 link_type: REQUIRED } methods { ordinal: 2 link_type: REQUIRED } }
+}
+services_consumed {
+  name: "Opener"
+  link_type: REQUIRED
+  capabilities { capability: "Public" methods { ordinal: 6 link_type: REQUIRED } }
+}

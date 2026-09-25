@@ -66,7 +66,7 @@ impl Launch {
                 _ => {}
             }
         }
-        if required != 0b1_1111 || version != u64::from(ABI_VERSION) {
+        if required != 0b1_1111 || !(1..=u64::from(ABI_VERSION)).contains(&version) {
             return Err(Error::InvalidEncoding);
         }
         let value = Self {
@@ -96,6 +96,7 @@ mod tests {
                     value: "C".to_string(),
                 }],
                 rootfs: NixRootFilesystem::default(),
+                ..Default::default()
             },
             image_len: 4096,
             service: true,
@@ -144,6 +145,7 @@ mod tests {
         value.options.rootfs = NixRootFilesystem {
             source: NixRootSource::Data,
             subpath: "/linux-root".to_string(),
+            readonly: true,
         };
         assert_eq!(Launch::decode(&value.encode().unwrap()).unwrap(), value);
         assert_eq!(

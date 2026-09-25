@@ -3,7 +3,7 @@ load("//build/platforms:architecture.bzl", "guest_select")
 load("//build/rules:assembly.bzl", "assembly_input_bundle", "product_app_config", "starlark_product", "system_image_with_prebuilt_apps")
 
 QEMU_PRODUCT_MANIFESTS = {
-        "//services/pkgd:pkgd_elf": "//services/pkgd:package_manifest",
+        "//services/pkgd:pkgd_archive": "//services/pkgd:package_manifest",
         "//testing/e2e/qemu/graphics/input_fixture:fixture_elf": "//testing/e2e/qemu/graphics/input_fixture:package_manifest",
         "//drivers/d1/input/virtio:input_driver": "//drivers/d1/input/virtio:package_manifest",
         "//drivers/d1/display/virtio/gpu:gpu_driver": "//drivers/d1/display/virtio/gpu:package_manifest",
@@ -12,6 +12,7 @@ QEMU_PRODUCT_MANIFESTS = {
         "//services/scened:scened_elf": "//services/scened:package_manifest",
         "//drivers/d1/rtc/pc/cmos:cmos": "//drivers/d1/rtc/pc/cmos:package_manifest",
         "//apps/brush_shell:brush_shell": "//apps/brush_shell:manifest",
+        "//apps/container_cli:container_cli": "//apps/container_cli:manifest",
         "//apps/dioxus_shared:dioxus_shared": "//apps/dioxus_shared:manifest",
         "//apps/dioxus_demo:dioxus_demo": "//apps/dioxus_demo:manifest",
         "//apps/sysui:sysui": "//apps/sysui:manifest",
@@ -54,6 +55,8 @@ QEMU_PRODUCT_MANIFESTS = {
         "//services/appd:appd_elf": "//services/appd:package_manifest",
         "//services/usbd:usbd": "//services/usbd:package_manifest",
         "//services/wasm_runner:wasm_runner_archive": "//services/wasm_runner:package_manifest",
+        "//services/starnix_runner:starnix_runner_archive": "//services/starnix_runner:package_manifest",
+        "//services/containerd:containerd_archive": "//services/containerd:manifest",
         "//services/debugd:debugd_elf": "//services/debugd:package_manifest",
         "//services/keychaind:keychaind_elf": "//services/keychaind:package_manifest",
         "//services/prefsd:prefsd_archive": "//services/prefsd:package_manifest",

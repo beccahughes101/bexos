@@ -1241,3 +1241,204 @@ findings. The authoritative [gap table](rfcs/0064/CURRENT.md#current-gaps)
 separates implementation defects, missing assertions, unpassed guest scenarios
 and final-tree architecture/product checks. No physical-hardware validation is
 claimed for RFC 0064.
+
+## RFC 0070 offline Linux ABI expansion (2026-09-25)
+
+The RFC 0070 runner now accepts matching-architecture dynamic ELF
+images with a rootfs-bounded `PT_INTERP`, constructs the Linux loader auxiliary
+vector, supports in-place `execve`, local pipe/socketpair and named `AF_UNIX`
+IPC, poll/select, eventfd/epoll/timerfd, and synthetic offline proc/sys/dev trees,
+propagates configured identity/hostname/limits, and implements same-filesystem
+rename. The launch and migration ABIs are versioned for the added state. Pkgd
+also recognizes the separately authorized `container` artifact kind. The
+offline OCI library and lifecycle contracts validate image-layout manifests,
+configs, raw/gzip/zstd layer hashes, safe tar paths, whiteouts, and link
+operations, and applies those plans through the common filesystem protocol. It
+supports bounded cooperative Linux process and thread groups: `fork`, `vfork`,
+process/thread `clone` and `clone3`, copy-on-write or shared address spaces,
+TLS/TID and clear-TID futex joins, process signal routing, blocking/`WNOHANG`
+`wait4`, zombies, orphan reparenting, sleeping, and transplant of every process
+and task frame. These address spaces are serialized through one restricted
+runner thread; per-child BexOS process objects remain a future isolation
+improvement.
+
+The offline `containerd` service and `container` CLI are implemented. The
+daemon resolves the authorized pkgd container kind, atomically unpacks verified
+images, persists/reloads prototxt specs, launches through appd's authenticated
+bridge and child resource groups, proxies process control, and retains
+lifecycle state through transplant. No guest network capability or field was
+added.
+
+The final combined matrix passed 21 Bazel targets: Starnix ABI/core/kernel and
+runner, appd and shell policy, pkgd and pkg config, OCI, the direct OCI-to-BexFS
+adapter, containerd, the container CLI, synchronous and asynchronous
+MemFS/BexFS/ArchiveFS, the internal and public libc suites, and
+heart-transplant coverage. The ArchiveFS/libc closure caught and corrected
+missing `uid`/`gid` propagation in read-only filesystem attributes before the
+final run. The OCI suite includes a complete synthetic image-layout chain plus
+digest, decompression-bound, duplicate-path, unsafe path, checksum, whiteout,
+hard-link, and symlink rejection coverage.
+
+Appd, normal and replacement Starnix runner archives, normal and replacement
+containerd archives, the container CLI, and the complete nongui product graph
+all built for AArch64 and x86_64. That validation also caught and corrected
+pkgd's earlier absence from the product graph. `bazel run
+@rules_rust//:rustfmt` and `git diff --check` pass. These are host/build
+results, not evidence that Alpine, Python, Redis, or LTP has executed in a
+guest.
+
+The architecture-selected QEMU fixture archive now also builds a genuine
+dynamic musl PIE on both AArch64 and x86_64, packages its loader and shared
+libc, and exercises pipe, `fork`, child exit, and parent `waitpid`. Inspection
+of each produced ELF confirms `PT_INTERP=/lib/ld-musl.so.1` and
+`DT_NEEDED=libc_musl.so`. The QEMU scenario requires its success marker and a
+zero runner exit before proceeding to the transplant scenario. This proves the
+fixture and package closure, not guest execution. The source-built AArch64
+platform now boots through debugd, but the final fixture run was stopped during
+its long durable install and therefore did not execute that assertion.
+
+The completion audit subsequently connected the already versioned filesystem
+link/readlink protocol to the Linux ABI. `link`/`linkat`,
+`symlink`/`symlinkat`, storage-backed `readlink`, symlink-aware `lstat` and
+`newfstatat`, and `DT_LNK` directory entries are implemented. MemFS and BexFS
+now preserve the final symlink inode when creating a hard link, with regression
+coverage across checkpoint, remount, and migration. Descriptor semantics were
+also corrected for `dup`/`dup2`/`dup3`, `F_GETFD`/`F_SETFD`,
+`F_DUPFD_CLOEXEC`, `F_GETFL`/`F_SETFL`, and `close_range` close-on-exec mode.
+The affected userspace, MemFS, BexFS, and Starnix runner suites pass.
+
+The same audit added both-architecture `faccessat2` and
+`sched_setaffinity`, plus the complete path/fd and follow/no-follow Linux xattr
+syscall family. OCI PAX planning now retains bounded raw `SCHILY.xattr.*` and
+strict base64 `LIBARCHIVE.xattr.*` records, and both layer sinks apply them to
+the final inode without following symlinks. Tests cover binary xattrs and a
+`security.capability` value through OCI parsing and direct BexFS application;
+the OCI, OCI-to-BexFS, containerd, Starnix, core syscall-map, and userspace
+suites pass.
+
+The dynamic-musl QEMU fixture now also checks the guest-facing form of that
+surface before its process test: writable `/data`, `F_DUPFD_CLOEXEC`, hard
+links, relative symlinks/readlink, xattr set/get/list/remove, and shared-inode
+xattr visibility. It also grows an anonymous mapping with `MREMAP_MAYMOVE` and
+checks retained and zero-filled bytes. Its AArch64 and x86_64 archives build
+successfully; no completed guest run has executed those assertions.
+
+The final ABI audit also replaced the `mremap` stub with bounded shrink and
+relocation support. `MREMAP_MAYMOVE` preserves contents and mapping protection,
+`MREMAP_FIXED` validates and replaces a non-overlapping destination, and
+unsupported `MREMAP_DONTUNMAP` remains an explicit `ENOTSUP` rather than
+silently diverging from Linux semantics. The Starnix runner suite passes after
+this change.
+
+The metadata audit now reports backing filesystem UID/GID values in `stat`,
+`newfstatat`, and `statx`; implements both-architecture `fchmod`, `fchmodat`,
+`fchmodat2`, `fchown`, and `fchownat` plus the x86_64 legacy pathname variants;
+and applies configured ownership and umask to newly created files and
+directories. `fchdir` is also implemented on both architectures. The dynamic
+musl fixture calls `chmod`, `fchmod`, and `fchown`, and both architecture
+archives build with those assertions included.
+
+The identity syscall audit adds real/effective/saved/filesystem UID and GID
+transitions, bounded supplementary groups, `/proc/self/status` reporting, and
+versioned transplant state. Both architecture tables now include the Linux
+`setuid`, `setgid`, `setreuid`, `setregid`, `setresuid`, `setresgid`,
+`setfsuid`, `setfsgid`, and `setgroups` numbers. The dynamic-musl fixture
+round-trips a supplementary group list and exercises no-op `setresuid` and
+`setresgid` transitions. It also asserts `O_CREAT|O_EXCL` and `O_NOFOLLOW`
+rejection behavior. Unsupported `openat2` resolve policies return explicit
+`ENOTSUP` instead of being silently ignored. The subsequent thread audit
+replaced the original `rseq` fallback with bounded registration,
+unregistration, lifecycle, and transplant support described below.
+
+The thread ABI audit first added the MATCH_ANY form of private/public
+`FUTEX_WAIT_BITSET` and `FUTEX_WAKE_BITSET`, including Linux absolute
+monotonic/realtime timeout conversion. The later selective-bitset audit accepts
+arbitrary nonzero masks and migration format 13 preserves each waiter mask.
+The dynamic-musl fixture covers mismatch, zero-waiter, nonintersecting, and
+intersecting wake behavior without leaving an unbounded wait.
+
+`//testing/e2e/qemu/starnix:starnix_test_aarch64` initially rebuilt and signed
+Trusty from source but failed before BexOS execution: the secure owner image
+had grown into its hard-coded page-table arena, so BL32 corrupted its own state
+and asserted at `bl1/aarch64/bl1_context_mgmt.c:24`. The owner now reserves its
+translation tables and stacks beyond a linker-bounded 1 MiB code/state region.
+With that correction, a source-firmware run completed the harness boot phase
+and debugd readiness.
+
+Later continuation runs reached fixture upload and appd's durable package
+installation. Those runs exposed and corrected an undersized ArchiveFS memory
+archive limit, invalid zero-handle error replies, repeated package-archive
+copies, read-only boot-state persistence, compressed primary pkgd startup cost,
+containerd grant/startup ordering, and phase deadlines that were shorter than
+their nested storage operations. One run passed the boot phase and then reached
+the host's outer fixture-install timeout; later runs reached debugd's lifecycle
+transport and aggregate deadlines. Debugd's install transport is now bounded
+at 1,800 seconds and the host commit deadline at 2,100 seconds. The final rerun
+with those bounds was stopped when the user requested that tests be skipped.
+The x86_64 guest scenario was not rerun. Therefore neither a Linux guest
+acceptance pass nor LTP conformance is claimed for this change.
+
+The subsequent signal/futex audit added blocking `rt_sigsuspend`, preserved
+signal-suspend state through transplant, and delivers pending signals
+immediately after cooperative rescheduling. It also implemented per-thread
+robust-list registration/query, bounded list traversal, waiter-preserving
+`FUTEX_OWNER_DIED` transitions, and robust-list transplant. The dynamic-musl
+fixture now exercises both paths; the focused runner/core tests and both
+architecture fixture builds pass.
+
+Priority-inheritance futex support now covers private and shared
+`FUTEX_LOCK_PI`, `FUTEX_LOCK_PI2`, `FUTEX_TRYLOCK_PI`, and `FUTEX_UNLOCK_PI`.
+The serialized scheduler follows blocked-owner chains, shared `CLONE_VM`
+waiters hand ownership across process contexts, deadlines and signals remove
+blocked execution, robust-owner death hands a PI mutex to a waiter, and the
+scope/owner/deadline/order state is versioned for transplant. The musl fixture
+contains a parent/child contention and handoff probe on both architectures.
+Host runner tests and both fixture builds pass; execution of the guest probe
+remains unverified.
+
+The futex2 audit adds both-architecture syscall decoding and bounded
+`futex_waitv` for mixed private/shared 32-bit entries, absolute realtime or
+monotonic deadlines, Linux mismatch/validation errors, indexed wake results,
+signal interruption, and versioned transplant state. The musl fixture blocks
+on two shared entries while a `CLONE_VM` child wakes the second and checks that
+the parent receives index one. Focused runner/core tests and both architecture
+fixture builds pass; the completed guest scenario remains pending.
+
+Plain futex requeue support now covers `FUTEX_REQUEUE` and
+`FUTEX_CMP_REQUEUE`, including comparison failure, private queues, shared
+queues spanning process contexts, stable shared-futex identity across
+transplant, and preservation of each blocked task's deadline. The dynamic-musl
+fixture requeues a shared `CLONE_VM` child without waking it and then wakes the
+destination futex. Focused runner tests, both architecture fixture builds, the
+default and x86_64 21-target regression matrices, and both eight-target product
+and archive closures pass. Execution of the guest probe remains unverified.
+
+The futex audit also implements `FUTEX_WAKE_OP` with Linux-compatible encoded
+set/add/or/and-not/xor operations, signed and shifted operands, comparisons
+against the original value, and conditional private/shared second-queue wakes.
+Focused tests cover invalid encodings, signed and shifted decoding, wrapping
+arithmetic, bit clearing, replacement, and comparison against signed original
+values. The dynamic-musl fixture atomically increments a shared target futex
+and wakes a waiting child only when its old value compares equal; both
+architecture fixtures build successfully.
+
+Priority-inheritance condition-variable support now includes absolute
+monotonic/realtime `FUTEX_WAIT_REQUEUE_PI` waits and validated
+`FUTEX_CMP_REQUEUE_PI` transfer to a distinct private or shared PI mutex.
+Requeue selection follows process priority and queue age, contended ownership
+participates in the existing PI chain and unlock handoff, and the pre-requeue
+state is versioned in runtime migration format 12. The dynamic-musl fixture
+holds the PI target, transfers a shared child waiter, observes `FUTEX_WAITERS`,
+unlocks, and checks that the child owns and releases the target. Focused runner
+tests and both architecture fixture builds pass.
+
+Selective futex bitset support now accepts arbitrary nonzero masks for
+`FUTEX_WAIT_BITSET` and `FUTEX_WAKE_BITSET` rather than only
+`FUTEX_BITSET_MATCH_ANY`. Queue matching applies the requested intersection
+for private and stable-identity shared futexes, while futex2 vector waiters
+remain match-any. The waiter mask is carried through runtime migration format
+13. The dynamic-musl fixture proves a nonintersecting wake leaves a shared
+child blocked before an intersecting wake resumes it; focused runner tests and
+both architecture fixture builds pass. The default and x86_64 21-target
+regression matrices and both eight-target product/archive closures also pass
+with the complete futex audit enabled.

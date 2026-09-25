@@ -1,0 +1,16 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "oci_fs",
+    srcs = ["src/lib.rs"],
+    crate_name = "bexos_oci_fs",
+    edition = "2024",
+    deps = [
+        "//idl:fs_fidl_rust",
+        "//lib/fs_client",
+        "//lib/oci:oci",
+        "//lib/userspace",
+    ],
+)

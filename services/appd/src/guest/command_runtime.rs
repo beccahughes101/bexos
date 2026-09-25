@@ -8,8 +8,14 @@ use opener_fidl::*;
 
 pub(super) struct CommandLaunch {
     pub options: CommandOptions,
-    pub cwd: u64,
+    pub cwd: Option<u64>,
     pub stdio: [u64; 3],
+}
+
+pub(super) struct ContainerLaunch {
+    pub rootfs: u64,
+    pub options: bexos_starnix_abi::NixRunnerOptions,
+    pub resource_group_id: u32,
 }
 fn control_status(
     process: u64,
@@ -162,7 +168,7 @@ pub(super) fn poll(
         }
         if p.channel == 0 {
             if p.completion.is_some() {
-                reaped.push(p.process);
+                reaped.push((p.process, p.resource_group));
                 return false;
             }
             return true;
@@ -229,7 +235,7 @@ pub(super) fn poll(
                     p.watch_pending = false;
                     changed = true;
                     if p.completion.is_some() {
-                        reaped.push(p.process);
+                        reaped.push((p.process, p.resource_group));
                         return false;
                     }
                     return true;
@@ -255,7 +261,7 @@ pub(super) fn poll(
         }
         true
     });
-    for process in reaped {
+    for (process, resource_group) in reaped {
         if let Some(i) = state
             .launches
             .iter()
@@ -263,6 +269,9 @@ pub(super) fn poll(
         {
             let launch = state.launches.remove(i);
             cleanup_dead_launch(state, &launch);
+        }
+        if resource_group != 0 {
+            let _ = Memory::close(resource_group);
         }
     }
     changed
@@ -332,6 +341,32 @@ fn dispatch(
                 Err(status) => opener_reply(
                     binding.channel,
                     &CommandLauncherLaunchCommandResponse {
+                        status,
+                        process_control: opener_fidl::HandleRef { raw: 0 },
+                    },
+                ),
+            }
+        }
+        5 => {
+            let result = CommandLauncherLaunchContainerRequest::decode(body, &refs)
+                .map_err(|_| OpenerStatus::InvalidArgs)
+                .and_then(|q| launch_container(state, kernel, binding, q, handles));
+            match result {
+                Ok(channel) => {
+                    let sent = reply(
+                        binding.channel,
+                        &CommandLauncherLaunchContainerResponse {
+                            status: OpenerStatus::Ok,
+                            process_control: opener_fidl::HandleRef { raw: channel },
+                        },
+                    );
+                    if sent.is_err() {
+                        let _ = Memory::close(channel);
+                    }
+                }
+                Err(status) => opener_reply(
+                    binding.channel,
+                    &CommandLauncherLaunchContainerResponse {
                         status,
                         process_control: opener_fidl::HandleRef { raw: 0 },
                     },
@@ -487,7 +522,7 @@ fn launch(
     let (server, client) = Channel::pair().map_err(|_| OpenerStatus::LaunchFailed)?;
     let spec = CommandLaunch {
         options,
-        cwd: q.cwd.raw,
+        cwd: Some(q.cwd.raw),
         stdio: [q.stdin_stream.raw, q.stdout_stream.raw, q.stderr_stream.raw],
     };
     let status = launch_application(
@@ -520,6 +555,7 @@ fn launch(
         Vec::new(),
         0,
         false,
+        None,
     );
     if status != lifecycle::AppLifecycleStatus::Ok {
         close_handles(&[server.0, client.0]);
@@ -534,6 +570,218 @@ fn launch(
         uid: binding.uid,
         watch_pending: false,
         completion: None,
+        resource_group: 0,
+    });
+    Ok(client.0)
+}
+
+fn launch_container(
+    state: &mut state::AppdState,
+    kernel: &mut KernelFidlOps<KernelTransport, KernelTransport, KernelTransport>,
+    binding: &OpenerBinding,
+    q: CommandLauncherLaunchContainerRequest<'_>,
+    handles: &[u64],
+) -> Result<u64, OpenerStatus> {
+    const PACKAGE: &str = "bexos.service.containerd";
+    const PROCESS: &str = "container";
+    if binding.package != PACKAGE
+        || binding.uid != 0
+        || handles.len() != 4
+        || state.commands.processes.len() >= LIMIT
+        || q.container_id.is_empty()
+        || q.arguments.len() > 64
+        || q.environment.len() > 64
+    {
+        return Err(OpenerStatus::AccessDenied);
+    }
+    let expected = [
+        q.rootfs.raw,
+        q.stdin_stream.raw,
+        q.stdout_stream.raw,
+        q.stderr_stream.raw,
+    ];
+    if expected.iter().enumerate().any(|(index, handle)| {
+        *handle == 0 || !handles.contains(handle) || expected[..index].contains(handle)
+    }) {
+        return Err(OpenerStatus::InvalidArgs);
+    }
+    for (index, handle) in expected.iter().copied().enumerate() {
+        let (kind, rights) = Memory::object_info(handle).map_err(|_| OpenerStatus::AccessDenied)?;
+        let required = if index <= 1 { 2 } else { 4 };
+        if rights & (required | 1 | 32) != (required | 1 | 32)
+            || (index == 0 && kind != kernel_fidl::ObjectType::Channel)
+            || (index != 0
+                && !matches!(
+                    kind,
+                    kernel_fidl::ObjectType::Channel | kernel_fidl::ObjectType::Socket
+                ))
+        {
+            return Err(OpenerStatus::AccessDenied);
+        }
+    }
+    let mut arguments = Vec::new();
+    for index in 0..q.arguments.len() {
+        arguments.push(
+            q.arguments
+                .get(index)
+                .map_err(|_| OpenerStatus::InvalidArgs)?
+                .to_string(),
+        );
+    }
+    if arguments.is_empty() {
+        arguments.push(q.executable.to_string());
+    }
+    let mut environment = Vec::new();
+    let mut command_environment = Vec::new();
+    for index in 0..q.environment.len() {
+        let pair = q
+            .environment
+            .get(index)
+            .map_err(|_| OpenerStatus::InvalidArgs)?;
+        let (name, value) = pair.split_once('=').ok_or(OpenerStatus::InvalidArgs)?;
+        environment.push(bexos_starnix_abi::Environment {
+            name: name.into(),
+            value: value.into(),
+        });
+        command_environment.push((name.into(), value.into()));
+    }
+    let mut resource_limits = Vec::new();
+    if q.resources.process_limit != 0 {
+        resource_limits.push(bexos_starnix_abi::NixResourceLimit {
+            resource: 6,
+            soft: u64::from(q.resources.process_limit),
+            hard: u64::from(q.resources.process_limit),
+        });
+    }
+    if q.resources.memory_limit_bytes != 0 {
+        resource_limits.push(bexos_starnix_abi::NixResourceLimit {
+            resource: 9,
+            soft: q.resources.memory_limit_bytes,
+            hard: q.resources.memory_limit_bytes,
+        });
+    }
+    let options = bexos_starnix_abi::NixRunnerOptions {
+        path: q.executable.into(),
+        arguments: arguments.clone(),
+        environment,
+        rootfs: bexos_starnix_abi::NixRootFilesystem {
+            source: bexos_starnix_abi::NixRootSource::Data,
+            subpath: String::new(),
+            readonly: q.readonly_rootfs,
+        },
+        working_directory: q.working_directory.into(),
+        uid: q.uid,
+        gid: q.gid,
+        umask: 0o022,
+        resource_limits,
+        hostname: q.hostname.into(),
+    };
+    options.validate().map_err(|_| OpenerStatus::InvalidArgs)?;
+    let command_options = CommandOptions {
+        arguments,
+        environment: command_environment,
+    };
+    command_options
+        .encode()
+        .map_err(|_| OpenerStatus::InvalidArgs)?;
+
+    let parent = kernel
+        .open_resource_group("apps")
+        .map_err(|_| OpenerStatus::LaunchFailed)?;
+    let suffix: String = q
+        .container_id
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '-'
+            }
+        })
+        .take(20)
+        .collect();
+    let group = kernel.create_resource_group_v2(
+        &format!("ctr-{suffix}"),
+        parent.handle,
+        crate::runner::ResourceGroupLimits {
+            cpu_weight: q.resources.cpu_shares.max(1),
+            max_cpu_utilization_permille: 0,
+            allow_realtime: false,
+            memory_low_watermark_bytes: 0,
+            memory_high_watermark_bytes: q.resources.memory_limit_bytes,
+            max_render_budget_percent: 0,
+            max_vram_bytes: 0,
+        },
+    );
+    let _ = kernel.close_handle(parent.handle);
+    let group = group.map_err(|_| OpenerStatus::LaunchFailed)?;
+    let (server, client) = match Channel::pair() {
+        Ok(pair) => pair,
+        Err(_) => {
+            let _ = kernel.close_handle(group.handle);
+            return Err(OpenerStatus::LaunchFailed);
+        }
+    };
+    let command = CommandLaunch {
+        options: command_options,
+        cwd: None,
+        stdio: [q.stdin_stream.raw, q.stdout_stream.raw, q.stderr_stream.raw],
+    };
+    let container = ContainerLaunch {
+        rootfs: q.rootfs.raw,
+        options,
+        resource_group_id: group.id,
+    };
+    let status = launch_application(
+        &mut state.registry,
+        &mut state.launches,
+        &mut state.services,
+        state.vfsd,
+        state.users,
+        kernel,
+        &mut state.broker,
+        &mut state.permission_routes,
+        &mut state.permissions,
+        &mut state.opener_bindings,
+        &mut state.version_manager_bindings,
+        &mut state.app_manager_bindings,
+        &mut state.worker_launcher_bindings,
+        &mut state.service_directory_bindings,
+        &mut state.lazy,
+        &state.domain_associations,
+        &state.config,
+        &state.component_configs,
+        PACKAGE,
+        PROCESS,
+        server.0,
+        0,
+        None,
+        false,
+        None,
+        Some(&command),
+        Vec::new(),
+        0,
+        false,
+        Some(&container),
+    );
+    if status != lifecycle::AppLifecycleStatus::Ok {
+        close_handles(&[server.0, client.0]);
+        let _ = kernel.close_handle(group.handle);
+        return Err(OpenerStatus::LaunchFailed);
+    }
+    let Some(process) = state.launches.last().map(|launch| launch.process_handle) else {
+        close_handles(&[server.0, client.0]);
+        let _ = kernel.close_handle(group.handle);
+        return Err(OpenerStatus::LaunchFailed);
+    };
+    state.commands.processes.push(ControlledProcess {
+        channel: server.0,
+        process,
+        package: PACKAGE.into(),
+        uid: 0,
+        watch_pending: false,
+        completion: None,
+        resource_group: group.handle.raw,
     });
     Ok(client.0)
 }

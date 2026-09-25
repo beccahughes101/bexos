@@ -26,11 +26,13 @@ type OpenFlags = strict bits : uint32 {
     CREATE = 0x00000008;
     TRUNCATE = 0x00000010;
     DIRECTORY = 0x00000020;
+    NO_FOLLOW = 0x00000040;
 };
 
 type NodeKind = strict enum : uint8 {
     FILE = 1;
     DIRECTORY = 2;
+    SYMLINK = 3;
 };
 
 struct FileAttributes {
@@ -39,6 +41,8 @@ struct FileAttributes {
     creation_time_nanos uint64;
     modification_time_nanos uint64;
     mode uint32;
+    uid uint32;
+    gid uint32;
 };
 
 struct DirEntry {
@@ -60,6 +64,32 @@ protocol Node {
     });
 
     3: Close();
+
+    4: GetXattr(struct {
+        name string:256;
+    }) -> (struct {
+        status FsStatus;
+        value vector<uint8>:65536;
+    });
+
+    5: SetXattr(struct {
+        name string:256;
+        value vector<uint8>:65536;
+        flags uint32;
+    }) -> (struct {
+        status FsStatus;
+    });
+
+    6: ListXattrs() -> (struct {
+        status FsStatus;
+        names vector<string:256>:256;
+    });
+
+    7: RemoveXattr(struct {
+        name string:256;
+    }) -> (struct {
+        status FsStatus;
+    });
 };
 
 protocol File {
@@ -115,6 +145,34 @@ protocol Directory {
         name string:256;
     }) -> (struct {
         status FsStatus;
+    });
+
+    23: Rename(struct {
+        source string:256;
+        target string:256;
+    }) -> (struct {
+        status FsStatus;
+    });
+
+    24: Link(struct {
+        source string:256;
+        target string:256;
+    }) -> (struct {
+        status FsStatus;
+    });
+
+    25: Symlink(struct {
+        target string:4096;
+        link_path string:256;
+    }) -> (struct {
+        status FsStatus;
+    });
+
+    26: ReadLink(struct {
+        path string:256;
+    }) -> (struct {
+        status FsStatus;
+        target string:4096;
     });
 };
 
