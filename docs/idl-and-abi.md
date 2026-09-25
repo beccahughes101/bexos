@@ -169,9 +169,22 @@ Current hardware/power contracts include:
   inspection, and scoped-provider creation;
 - `ProxyStreamHandler`, which receives the normalized original domain without
   local DNS;
-- private `StackBackend`, `StackController`, and
-  `VirtualSwitchController` methods for VRFs, virtual ports, endpoint escrow,
-  recovery checkpoints/adoption, and packet-generation commit.
+- private `StackBackend` and `StackController` methods for VRFs, endpoint
+  escrow, and recovery checkpoints/adoption;
+- private `VirtualSwitchController`, `SwitchRoutingController`, and
+  `SwitchExtensionController` methods for virtual ports, packet-generation
+  commit/replay, routed interfaces/FIB/neighbors, and atomic raw-WASM module
+  deployment;
+- privileged `NetworkExtensionManager`, implemented by networkd, for typed
+  firewall/NAT deployment, optional removal, generation status, counters, and
+  fault inspection.
+
+`lib/network_extension_abi` is a separate no-`std` guest/host ABI. Version one
+uses fixed-layout packet descriptors, a maximum 256-packet copied vector,
+bridge/pre-routing/firewall/post-routing hooks, and `DROP`, `PASS`, `REWRITE`,
+or VRF-checked `REDIRECT` actions. Guests export their exchange buffer,
+configuration entry point, processing entry point, and durable checkpoint
+range. Raw network modules import only monotonic time and do not use WASI.
 
 The std libc compatibility layer calls kernel services through the generated
 FIDL syscall transport. `clock_gettime` uses `Clock.GetTime`, TCP/UDP socket

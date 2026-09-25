@@ -406,6 +406,7 @@ fn kind(value: u64) -> Result<ArtifactKind, Error> {
         2 => Ok(ArtifactKind::Driver),
         3 => Ok(ArtifactKind::Font),
         4 => Ok(ArtifactKind::Firmware),
+        5 => Ok(ArtifactKind::NetworkExtension),
         _ => Err(Error::InvalidData),
     }
 }

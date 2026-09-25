@@ -16,8 +16,11 @@ use net_fidl::{
 
 use crate::device::{VirtualDevice, poll_devices};
 use crate::migration::Runtime;
+use crate::packet::{Packet, PacketDisposition};
 use crate::physical::PhysicalDevice;
+use crate::routing::InterfaceEndpoint;
 use crate::switch::{PortPolicy, SwitchError};
+use bexos_network_extension_abi::Direction;
 
 pub async fn main(channel: u64) -> ! {
     let control = Channel(channel);
@@ -66,11 +69,27 @@ pub async fn main(channel: u64) -> ! {
         accept(&mut runtime);
         let mut changed = poll(&mut runtime);
         changed |= poll_devices(&mut runtime.virtual_devices, &mut runtime.switch);
+        let now_ns = monotonic_ns();
+        let mut routed_output = Vec::new();
         for (interface, device) in &mut runtime.physical_devices {
-            changed |= device.poll(*interface, &mut runtime.switch);
+            changed |= device.poll(
+                *interface,
+                &mut runtime.switch,
+                &mut runtime.data_plane,
+                &mut routed_output,
+                now_ns,
+            );
+        }
+        for (interface, bytes) in routed_output {
+            if let Some(device) = runtime.physical_devices.get_mut(&interface) {
+                changed |= device.enqueue_routed(bytes).is_ok();
+            }
         }
         if changed {
-            source.changed_keys([0, 1, 2]);
+            if runtime.refresh_migration_image().is_err() {
+                let _ = bexos_userspace::migration::abort();
+            }
+            source.changed_keys([0, 1, 2].into_iter().chain(Runtime::data_plane_keys()));
         }
         bexos_userspace::yield_now();
     }
@@ -85,15 +104,17 @@ fn accept(runtime: &mut Runtime) {
             .ok()
             .and_then(ServiceBinding::parse);
         if let Some(binding) = binding.filter(|binding| {
-            binding.protocol_is("VirtualSwitchController")
-                && binding.caller_package.as_deref() == Some("bexos.service.networkd")
+            matches!(
+                binding.protocol.as_str(),
+                "VirtualSwitchController" | "SwitchRoutingController" | "SwitchExtensionController"
+            ) && binding.caller_package.as_deref() == Some("bexos.service.networkd")
         }) {
             runtime
                 .clients
                 .push(BoundServiceEndpoint::new_with_protocol(
                     Channel(endpoint),
                     binding.method_ordinals,
-                    "VirtualSwitchController",
+                    &binding.protocol,
                 ));
         } else {
             let _ = Memory::close(endpoint);
@@ -115,6 +136,24 @@ fn poll(runtime: &mut Runtime) -> bool {
                 .collect::<Vec<_>>();
             if !client.allows(ordinal) {
                 close_handles(&message.handles);
+                return true;
+            }
+            if client.protocol == "SwitchRoutingController" {
+                crate::routing_control::handle(runtime, client.channel, ordinal, request, &handles);
+                close_handles(&message.handles);
+                return true;
+            }
+            if client.protocol == "SwitchExtensionController" {
+                crate::extension_control::handle(
+                    runtime,
+                    client.channel,
+                    ordinal,
+                    request,
+                    &handles,
+                );
+                if ordinal != 1 {
+                    close_handles(&message.handles);
+                }
                 return true;
             }
             match ordinal {
@@ -180,13 +219,7 @@ fn poll(runtime: &mut Runtime) -> bool {
                                     .switch
                                     .commit_generation(request.port_id, request.generation)
                                     .and_then(|frames| {
-                                        let interface = physical.ok_or(SwitchError::NotFound)?;
-                                        runtime
-                                            .physical_devices
-                                            .get_mut(&interface)
-                                            .ok_or(SwitchError::NotFound)?
-                                            .enqueue(frames)
-                                            .map_err(|_| SwitchError::QueueFull)
+                                        commit_frames(runtime, request.port_id, frames)
                                     })
                                     .map(|_| Status::Ok)
                                     .unwrap_or_else(status)
@@ -226,6 +259,69 @@ fn poll(runtime: &mut Runtime) -> bool {
     });
     runtime.clients = clients;
     changed
+}
+
+fn commit_frames(
+    runtime: &mut Runtime,
+    port_id: u64,
+    frames: Vec<crate::switch::QueuedFrame>,
+) -> Result<(), SwitchError> {
+    let policy = runtime
+        .switch
+        .port(port_id)
+        .ok_or(SwitchError::NotFound)?
+        .policy;
+    let routed = runtime
+        .data_plane
+        .routing
+        .interface_for_endpoint(InterfaceEndpoint::Virtual(port_id))
+        .cloned();
+    if let Some(interface) = routed {
+        let mut packets = frames
+            .into_iter()
+            .map(|frame| {
+                Packet::parse(
+                    &frame.bytes,
+                    interface.id,
+                    Direction::VirtualIngress,
+                    interface.table_id,
+                    interface.zone,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let additional = runtime.data_plane.process(&mut packets, monotonic_ns());
+        packets.extend(additional);
+        for packet in packets {
+            match packet.disposition {
+                PacketDisposition::Deliver(target) => {
+                    runtime.switch.ingress_to_port(target, &packet.bytes)?;
+                }
+                PacketDisposition::Transmit(target) => {
+                    runtime
+                        .physical_devices
+                        .get_mut(&target)
+                        .ok_or(SwitchError::NotFound)?
+                        .enqueue_routed(packet.bytes)
+                        .map_err(|_| SwitchError::QueueFull)?;
+                }
+                PacketDisposition::Drop => {}
+                PacketDisposition::Continue => return Err(SwitchError::InvalidRoute),
+            }
+        }
+        Ok(())
+    } else {
+        runtime
+            .physical_devices
+            .get_mut(&policy.physical_interface)
+            .ok_or(SwitchError::NotFound)?
+            .enqueue(frames)
+            .map_err(|_| SwitchError::QueueFull)
+    }
+}
+
+fn monotonic_ns() -> u64 {
+    let frequency = bexos_userspace::syscall::frequency().max(1);
+    ((u128::from(bexos_userspace::syscall::ticks()) * 1_000_000_000) / u128::from(frequency)) as u64
 }
 
 fn create_port(

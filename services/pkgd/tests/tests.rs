@@ -83,6 +83,79 @@ fn oci_requires_exact_lowercase_sha256_descriptors() {
 }
 
 #[test]
+fn network_extension_requires_exact_oci_media_types_and_returns_wasm_layer() {
+    use bexos_pkg_config::Repository;
+    use bexos_pkgd::oci::{
+        NETWORK_EXTENSION_ABI, NETWORK_EXTENSION_CONFIG, NETWORK_EXTENSION_MANIFEST,
+        NETWORK_EXTENSION_WASM, Oci, hex,
+    };
+    use serde_json::json;
+
+    let config = serde_json::to_vec(&json!({"abi": NETWORK_EXTENSION_ABI})).unwrap();
+    let wasm = b"\0asm\x01\0\0\0".to_vec();
+    let config_digest: [u8; 32] = Sha256::digest(&config).into();
+    let wasm_digest: [u8; 32] = Sha256::digest(&wasm).into();
+    let manifest = serde_json::to_vec(&json!({
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "artifactType": NETWORK_EXTENSION_MANIFEST,
+        "annotations": {"org.bexos.network.abi": NETWORK_EXTENSION_ABI},
+        "config": {
+            "mediaType": NETWORK_EXTENSION_CONFIG,
+            "digest": format!("sha256:{}", hex(&config_digest)),
+            "size": config.len(),
+        },
+        "layers": [{
+            "mediaType": NETWORK_EXTENSION_WASM,
+            "digest": format!("sha256:{}", hex(&wasm_digest)),
+            "size": wasm.len(),
+        }],
+    }))
+    .unwrap();
+    let repository = Repository {
+        host: "registry.test".into(),
+        repository: "extensions/firewall".into(),
+        trusted_root: Vec::new(),
+        token_origins: Vec::new(),
+        redirect_origins: Vec::new(),
+        tls_roots_der: Vec::new(),
+    };
+    let mut transport = fixture::MemoryTransport {
+        responses: Default::default(),
+        calls: Vec::new(),
+    };
+    transport.responses.insert(
+        format!(
+            "/v2/extensions/firewall/blobs/sha256:{}",
+            hex(&config_digest)
+        ),
+        config,
+    );
+    transport.responses.insert(
+        format!("/v2/extensions/firewall/blobs/sha256:{}", hex(&wasm_digest)),
+        wasm.clone(),
+    );
+    let mut oci = Oci {
+        transport,
+        repository,
+        token: None,
+        transfers: Default::default(),
+        credential_generation: 0,
+    };
+    let layer = fixture::run(oci.network_extension(&manifest, 1024)).unwrap();
+    assert_eq!(&**layer.bytes, wasm.as_slice());
+    assert_eq!(layer.digest, wasm_digest);
+    assert_eq!(layer.length, wasm.len() as u64);
+
+    let mut invalid: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+    invalid["layers"][0]["mediaType"] = json!("application/wasm");
+    assert!(matches!(
+        fixture::run(oci.network_extension(&serde_json::to_vec(&invalid).unwrap(), 1024)),
+        Err(Error::VerifyFailed)
+    ));
+}
+
+#[test]
 fn payload_rejects_partial_overlong_and_corrupt_streams() {
     use bexos_pkgd::payload::Payload;
     let hash: [u8; 32] = Sha256::digest(b"abcd").into();

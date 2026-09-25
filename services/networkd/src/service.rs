@@ -16,6 +16,11 @@ use net_fidl::{
     NetstackGetLinkStatusRequest, NetstackGetLinkStatusResponse, NetstackListenTcpRequest,
     NetstackListenTcpResponse, NetstackPublicClient, NetstackResolveHostRequest,
     NetstackResolveHostResponse, NetstackWatchLinkStatusRequest, NetstackWatchLinkStatusResponse,
+    NetworkExtensionHook, NetworkExtensionKind, NetworkExtensionManagerApplyFirewallRequest,
+    NetworkExtensionManagerApplyFirewallResponse, NetworkExtensionManagerApplyNatRequest,
+    NetworkExtensionManagerApplyNatResponse, NetworkExtensionManagerListRequest,
+    NetworkExtensionManagerListResponse, NetworkExtensionManagerRemoveOptionalRequest,
+    NetworkExtensionManagerRemoveOptionalResponse,
     NetworkRoutingManagerGetScopedSocketProviderRequest,
     NetworkRoutingManagerGetScopedSocketProviderResponse,
     NetworkRoutingManagerListEgressProvidersRequest,
@@ -25,33 +30,40 @@ use net_fidl::{
     NetworkRoutingManagerUnregisterEgressProviderRequest,
     NetworkRoutingManagerUnregisterEgressProviderResponse,
     NetworkRoutingManagerUpdateEgressProviderRequest,
-    NetworkRoutingManagerUpdateEgressProviderResponse, ProviderInfo, ProviderRouteConfig,
-    ProxyStreamHandlerConnectRequest, ProxyStreamHandlerPublicClient, RouteTargetKind,
-    SocketAddress, SocketProviderConnectTcpRequest, SocketProviderConnectTcpResponse,
-    SocketProviderCreateUdpSocketRequest, SocketProviderCreateUdpSocketResponse,
-    SocketProviderGetLinkStatusRequest, SocketProviderGetLinkStatusResponse,
-    SocketProviderListenTcpRequest, SocketProviderListenTcpResponse,
-    SocketProviderResolveHostRequest, SocketProviderResolveHostResponse,
-    SocketProviderWatchLinkStatusRequest, SocketProviderWatchLinkStatusResponse,
-    StackBackendAdoptRecoveryRequest, StackBackendCheckpointRecoveryRequest,
-    StackBackendConnectTcpRequest, StackBackendCreateUdpSocketRequest,
-    StackBackendListenTcpRequest, StackBackendPublicClient, StackBackendRecoverConnectionRequest,
-    StackBackendRecoverControlRequest, StackBackendResolveHostRequest,
-    StackControllerAddRouteRequest, StackControllerAttachInterfaceRequest,
-    StackControllerCreateTableRequest, StackControllerPublicClient, Status, TableId as WireTableId,
-    TcpSocketCloseRequest, TcpSocketCloseResponse, TcpSocketGetLocalAddressRequest,
-    TcpSocketGetLocalAddressResponse, TcpSocketGetPeerAddressRequest,
-    TcpSocketGetPeerAddressResponse, TcpSocketGetStreamRequest, TcpSocketGetStreamResponse,
-    TcpSocketShutdownRequest, TcpSocketShutdownResponse, UdpSocketBindRequest,
-    UdpSocketPublicClient, UdpSocketRecvFromRequest, UdpSocketSendToRequest,
+    NetworkRoutingManagerUpdateEgressProviderResponse, PhysicalSwitchEndpoint, ProviderInfo,
+    ProviderRouteConfig, ProxyStreamHandlerConnectRequest, ProxyStreamHandlerPublicClient,
+    RouteTargetKind, SocketAddress, SocketProviderConnectTcpRequest,
+    SocketProviderConnectTcpResponse, SocketProviderCreateUdpSocketRequest,
+    SocketProviderCreateUdpSocketResponse, SocketProviderGetLinkStatusRequest,
+    SocketProviderGetLinkStatusResponse, SocketProviderListenTcpRequest,
+    SocketProviderListenTcpResponse, SocketProviderResolveHostRequest,
+    SocketProviderResolveHostResponse, SocketProviderWatchLinkStatusRequest,
+    SocketProviderWatchLinkStatusResponse, StackBackendAdoptRecoveryRequest,
+    StackBackendCheckpointRecoveryRequest, StackBackendConnectTcpRequest,
+    StackBackendCreateUdpSocketRequest, StackBackendListenTcpRequest, StackBackendPublicClient,
+    StackBackendRecoverConnectionRequest, StackBackendRecoverControlRequest,
+    StackBackendResolveHostRequest, StackControllerAddRouteRequest,
+    StackControllerAttachInterfaceRequest, StackControllerCreateTableRequest,
+    StackControllerPublicClient, Status, SwitchEndpoint, SwitchExtensionControllerInstallRequest,
+    SwitchExtensionControllerListRequest, SwitchExtensionControllerPublicClient,
+    SwitchExtensionControllerRemoveRequest, SwitchRoute, SwitchRoutedInterface,
+    SwitchRoutingControllerAddRouteRequest, SwitchRoutingControllerConfigureInterfaceRequest,
+    SwitchRoutingControllerPublicClient, TableId as WireTableId, TcpSocketCloseRequest,
+    TcpSocketCloseResponse, TcpSocketGetLocalAddressRequest, TcpSocketGetLocalAddressResponse,
+    TcpSocketGetPeerAddressRequest, TcpSocketGetPeerAddressResponse, TcpSocketGetStreamRequest,
+    TcpSocketGetStreamResponse, TcpSocketShutdownRequest, TcpSocketShutdownResponse,
+    UdpSocketBindRequest, UdpSocketPublicClient, UdpSocketRecvFromRequest, UdpSocketSendToRequest,
     VirtualSwitchControllerCommitGenerationRequest, VirtualSwitchControllerCreatePortRequest,
     VirtualSwitchControllerPublicClient, VirtualSwitchControllerRecoverGenerationRequest,
-    WireVector,
+    VirtualSwitchEndpoint, WireVector,
 };
 
 use crate::config::BootConfig;
 use crate::dns::{CacheKey, CacheValue, DnsError, RecordType, ResponseCode};
-use crate::migration::{ControlProxy, EscrowedBackend, ProxyControl, RecoveryJournal, Runtime};
+use crate::migration::{
+    ControlProxy, EscrowedBackend, ExtensionDeploymentKind, PendingExtensionDeployment,
+    ProxyControl, QueuedExtensionDeployment, RecoveryJournal, Runtime,
+};
 use crate::routing::{
     Destination, DnsTransport, DnsUpstream, IpAddress, IpPrefix, ProviderConfig, RouteLease,
     RoutingError, Target,
@@ -122,6 +134,12 @@ pub async fn main(channel: u64) -> ! {
                     .insert(instance, grant.endpoint);
             } else if grant.service == "bexos.net.VirtualSwitchController" {
                 runtime.vswitch_controller = Some(grant.endpoint);
+            } else if grant.service == "bexos.net.SwitchRoutingController" {
+                runtime.switch_routing_controller = Some(grant.endpoint);
+            } else if grant.service == "bexos.net.SwitchExtensionController" {
+                runtime.switch_extension_controller = Some(grant.endpoint);
+            } else if grant.service == "bexos.pkg.PackageResolver" {
+                runtime.package_resolver = Some(grant.endpoint);
             } else if grant.service == "bexos.security.trust.TlsTrustManager" {
                 runtime.tls_trust = Some(grant.endpoint);
             }
@@ -130,6 +148,7 @@ pub async fn main(channel: u64) -> ! {
             log("networkd: boot topology application failed\n");
             bexos_userspace::exit();
         }
+        queue_desired_extensions(&mut runtime, &config);
         Startup::ready(control).expect("networkd ready");
         runtime
     };
@@ -150,6 +169,8 @@ pub async fn main(channel: u64) -> ! {
         changed |= poll_control_proxies(&mut runtime);
         changed |= poll_proxy_controls(&mut runtime);
         changed |= checkpoint_backends(&mut runtime);
+        changed |= start_queued_extension(&mut runtime);
+        changed |= poll_extension_deployment(&mut runtime);
         if changed {
             source.changed_keys([0, 1, 2, 3, 4]);
         }
@@ -238,6 +259,86 @@ fn apply_boot_topology(runtime: &mut Runtime, config: &BootConfig) -> Result<(),
     }
     runtime.virtual_ports.sort_unstable();
     runtime.virtual_ports.dedup();
+    if !config.routed_interfaces.is_empty() || !config.switch_routes.is_empty() {
+        let routing = runtime
+            .switch_routing_controller
+            .ok_or(Status::ErrShouldWait)?;
+        let mut routing = SwitchRoutingControllerPublicClient::new(Rpc(Channel(routing)));
+        for interface in &config.routed_interfaces {
+            let endpoint = if interface.virtual_port != 0 && interface.physical_interface == 0 {
+                SwitchEndpoint::VirtualPort(VirtualSwitchEndpoint {
+                    port_id: interface.virtual_port,
+                })
+            } else if interface.physical_interface != 0 && interface.virtual_port == 0 {
+                SwitchEndpoint::PhysicalInterface(PhysicalSwitchEndpoint {
+                    interface_id: interface.physical_interface,
+                })
+            } else {
+                return Err(Status::ErrInvalidArgs);
+            };
+            let addresses = interface
+                .addresses
+                .iter()
+                .map(|(address, prefix_len)| net_fidl::IpSubnet {
+                    network: wire_address(*address),
+                    prefix_len: *prefix_len,
+                })
+                .collect::<Vec<_>>();
+            let response = routing
+                .configure_interface(
+                    &SwitchRoutingControllerConfigureInterfaceRequest {
+                        interface: SwitchRoutedInterface {
+                            interface_id: interface.id,
+                            endpoint,
+                            table: WireTableId {
+                                value: interface.table,
+                            },
+                            bridge_domain: interface.bridge_domain,
+                            vlan_id: interface.vlan_id,
+                            mac: interface.mac,
+                            mtu: interface.mtu,
+                            zone: interface.zone,
+                            addresses: WireVector::from_slice(&addresses),
+                        },
+                    },
+                    &mut vec![0; 4096],
+                    &mut [HandleRef { raw: 0 }; 1],
+                    &mut [0; 128],
+                    &mut [HandleRef { raw: 0 }; 1],
+                )
+                .map_err(|_| Status::ErrShouldWait)?;
+            if response.status != Status::Ok {
+                return Err(response.status);
+            }
+        }
+        for route in &config.switch_routes {
+            let response = routing
+                .add_route(
+                    &SwitchRoutingControllerAddRouteRequest {
+                        route: SwitchRoute {
+                            table: WireTableId { value: route.table },
+                            destination: net_fidl::IpSubnet {
+                                network: wire_address(route.destination),
+                                prefix_len: route.prefix_len,
+                            },
+                            gateway: wire_address(route.gateway.unwrap_or(route.destination)),
+                            has_gateway: route.gateway.is_some(),
+                            interface_id: route.interface_id,
+                            metric: route.metric,
+                        },
+                    },
+                    &mut [0; 512],
+                    &mut [HandleRef { raw: 0 }; 1],
+                    &mut [0; 128],
+                    &mut [HandleRef { raw: 0 }; 1],
+                )
+                .map_err(|_| Status::ErrShouldWait)?;
+            if response.status != Status::Ok {
+                return Err(response.status);
+            }
+        }
+    }
+    configure_bundled_extensions(runtime, config)?;
     for route in &config.routes {
         let response = stack
             .add_route(
@@ -341,6 +442,115 @@ fn apply_boot_topology(runtime: &mut Runtime, config: &BootConfig) -> Result<(),
     Ok(())
 }
 
+fn configure_bundled_extensions(runtime: &mut Runtime, config: &BootConfig) -> Result<(), Status> {
+    let endpoint = runtime
+        .switch_extension_controller
+        .ok_or(Status::ErrShouldWait)?;
+    let mut client = SwitchExtensionControllerPublicClient::new(Rpc(Channel(endpoint)));
+    install_bundled(
+        &mut client,
+        "bexos.bundled.firewall",
+        NetworkExtensionKind::Firewall,
+        NetworkExtensionHook::Firewall,
+        &config.firewall_config,
+        1,
+    )?;
+    if config.nat_enabled {
+        install_bundled(
+            &mut client,
+            "bexos.bundled.nat.pre-routing",
+            NetworkExtensionKind::Nat,
+            NetworkExtensionHook::PreRouting,
+            &config.nat_config,
+            1,
+        )?;
+    }
+    Ok(())
+}
+
+fn queue_desired_extensions(runtime: &mut Runtime, config: &BootConfig) {
+    for (kind, artifact, extension_config) in [
+        (
+            ExtensionDeploymentKind::Firewall,
+            &config.firewall_artifact,
+            config.firewall_config.as_slice(),
+        ),
+        (
+            ExtensionDeploymentKind::Nat,
+            &config.nat_artifact,
+            config.nat_config.as_slice(),
+        ),
+    ] {
+        if let Some(expected_digest) = artifact.expected_digest {
+            runtime.queued_extensions.push(QueuedExtensionDeployment {
+                kind,
+                registry_host: artifact.registry_host.clone(),
+                repository: artifact.repository.clone(),
+                tag: artifact.tag.clone(),
+                expected_digest,
+                config: extension_config.to_vec(),
+            });
+        }
+    }
+}
+
+fn start_queued_extension(runtime: &mut Runtime) -> bool {
+    if runtime.pending_extension.is_some() || runtime.queued_extensions.is_empty() {
+        return false;
+    }
+    let queued = runtime.queued_extensions.remove(0);
+    let result = begin_extension_deployment(
+        runtime,
+        0,
+        queued.kind,
+        &queued.registry_host,
+        &queued.repository,
+        &queued.tag,
+        queued.expected_digest,
+        &queued.config,
+    );
+    if result.is_err() {
+        runtime.queued_extensions.insert(0, queued);
+        false
+    } else {
+        true
+    }
+}
+
+fn install_bundled(
+    client: &mut SwitchExtensionControllerPublicClient<Rpc>,
+    name: &str,
+    kind: NetworkExtensionKind,
+    hook: NetworkExtensionHook,
+    config: &[u8],
+    generation: u64,
+) -> Result<(), Status> {
+    let response = client
+        .install(
+            &SwitchExtensionControllerInstallRequest {
+                name,
+                kind,
+                hook,
+                fail_open: false,
+                expected_digest: [0; 32],
+                module: HandleRef { raw: 0 },
+                module_length: 0,
+                config,
+                generation,
+            },
+            &mut vec![0; config.len() + 512],
+            &mut [HandleRef { raw: 0 }; 1],
+            &mut [0; 128],
+            &mut [HandleRef { raw: 0 }; 1],
+        )
+        .map_err(|_| Status::ErrShouldWait)?;
+    if response.status == Status::Ok {
+        Ok(())
+    } else {
+        Err(response.status)
+    }
+}
+
 fn accept_bindings(runtime: &mut Runtime) {
     if let Ok(message) = runtime.control.try_recv() {
         let Some(endpoint) = message.handles.first().copied() else {
@@ -356,7 +566,7 @@ fn accept_bindings(runtime: &mut Runtime) {
         };
         if matches!(
             binding.protocol.as_str(),
-            "Netstack" | "SocketProvider" | "NetworkRoutingManager"
+            "Netstack" | "SocketProvider" | "NetworkRoutingManager" | "NetworkExtensionManager"
         ) {
             if let Some(domain) = binding
                 .permission_values
@@ -397,6 +607,9 @@ fn poll_clients(runtime: &mut Runtime) -> bool {
                 }
                 "NetworkRoutingManager" => {
                     poll_routing_manager(runtime, client.channel, ordinal, request, &handles)
+                }
+                "NetworkExtensionManager" => {
+                    poll_extension_manager(runtime, client.channel, ordinal, request, &handles)
                 }
                 _ => close_handles(&message.handles),
             }
@@ -558,6 +771,376 @@ fn poll_routing_manager(
             reply(channel, &response);
         }
         _ => close_handles_raw(handles),
+    }
+}
+
+fn poll_extension_manager(
+    runtime: &mut Runtime,
+    channel: Channel,
+    ordinal: u64,
+    request: &[u8],
+    handles: &[HandleRef],
+) {
+    match ordinal {
+        1 => {
+            let result = NetworkExtensionManagerApplyFirewallRequest::decode(request, handles)
+                .map_err(|_| Status::ErrInvalidArgs)
+                .and_then(|request| {
+                    begin_extension_deployment(
+                        runtime,
+                        channel.0,
+                        ExtensionDeploymentKind::Firewall,
+                        request.registry_host,
+                        request.repository,
+                        request.tag,
+                        request.expected_digest,
+                        request.config,
+                    )
+                });
+            if let Err(status) = result {
+                reply(
+                    channel,
+                    &NetworkExtensionManagerApplyFirewallResponse {
+                        status,
+                        generation: 0,
+                    },
+                );
+            }
+        }
+        2 => {
+            let result = NetworkExtensionManagerApplyNatRequest::decode(request, handles)
+                .map_err(|_| Status::ErrInvalidArgs)
+                .and_then(|request| {
+                    begin_extension_deployment(
+                        runtime,
+                        channel.0,
+                        ExtensionDeploymentKind::Nat,
+                        request.registry_host,
+                        request.repository,
+                        request.tag,
+                        request.expected_digest,
+                        request.config,
+                    )
+                });
+            if let Err(status) = result {
+                reply(
+                    channel,
+                    &NetworkExtensionManagerApplyNatResponse {
+                        status,
+                        generation: 0,
+                    },
+                );
+            }
+        }
+        3 => {
+            let status = NetworkExtensionManagerRemoveOptionalRequest::decode(request, handles)
+                .map_err(|_| Status::ErrInvalidArgs)
+                .and_then(|request| remove_extension(runtime, request.kind))
+                .unwrap_or_else(|status| status);
+            reply(
+                channel,
+                &NetworkExtensionManagerRemoveOptionalResponse {
+                    status,
+                    generation: runtime.next_extension_generation,
+                },
+            );
+        }
+        4 => {
+            if NetworkExtensionManagerListRequest::decode(request, handles).is_err()
+                || runtime.pending_extension.is_some()
+            {
+                reply(
+                    channel,
+                    &NetworkExtensionManagerListResponse {
+                        status: Status::ErrShouldWait,
+                        extensions: WireVector::from_slice(&[]),
+                    },
+                );
+                return;
+            }
+            let Some(controller) = runtime.switch_extension_controller else {
+                reply(
+                    channel,
+                    &NetworkExtensionManagerListResponse {
+                        status: Status::ErrShouldWait,
+                        extensions: WireVector::from_slice(&[]),
+                    },
+                );
+                return;
+            };
+            let mut response_bytes = vec![0; 4096];
+            let result = SwitchExtensionControllerPublicClient::new(Rpc(Channel(controller))).list(
+                &SwitchExtensionControllerListRequest {},
+                &mut [0; 32],
+                &mut [],
+                &mut response_bytes,
+                &mut [],
+            );
+            match result {
+                Ok(response) => reply(
+                    channel,
+                    &NetworkExtensionManagerListResponse {
+                        status: response.status,
+                        extensions: response.extensions,
+                    },
+                ),
+                Err(_) => reply(
+                    channel,
+                    &NetworkExtensionManagerListResponse {
+                        status: Status::ErrShouldWait,
+                        extensions: WireVector::from_slice(&[]),
+                    },
+                ),
+            }
+        }
+        _ => close_handles_raw(handles),
+    }
+}
+
+fn begin_extension_deployment(
+    runtime: &mut Runtime,
+    caller: u64,
+    kind: ExtensionDeploymentKind,
+    registry_host: &str,
+    repository: &str,
+    tag: &str,
+    expected_digest: [u8; 32],
+    config: &[u8],
+) -> Result<(), Status> {
+    if runtime.pending_extension.is_some() || config.len() > 65_536 {
+        return Err(Status::ErrShouldWait);
+    }
+    let resolver = runtime
+        .package_resolver
+        .take()
+        .ok_or(Status::ErrShouldWait)?;
+    let digest = pkg_fidl::BlobDigest {
+        hash_type: pkg_fidl::HashType::Sha256,
+        digest: expected_digest,
+    };
+    let query = bexos_pkg_client::ArtifactQuery {
+        registry_host: registry_host.into(),
+        repository: repository.into(),
+        tag: tag.into(),
+        expected_digest: Some(digest),
+        kind: pkg_fidl::ArtifactKind::NetworkExtension,
+    };
+    let pending = bexos_pkg_client::PendingResolution::begin(Channel(resolver), &query)
+        .map_err(package_status)?;
+    let resolver = pending.into_channel().ok_or(Status::ErrShouldWait)?;
+    let generation = runtime.next_extension_generation;
+    runtime.next_extension_generation = generation.saturating_add(1);
+    runtime.pending_extension = Some(PendingExtensionDeployment {
+        caller,
+        kind,
+        config: config.to_vec(),
+        generation,
+        stage: 1,
+        module: None,
+        resolver: Some(resolver.0),
+        module_length: 0,
+        digest: expected_digest,
+    });
+    Ok(())
+}
+
+fn poll_extension_deployment(runtime: &mut Runtime) -> bool {
+    let Some(mut pending) = runtime.pending_extension.take() else {
+        return false;
+    };
+    let result = match pending.stage {
+        1 => poll_resolution(runtime, &mut pending),
+        2 | 3 => poll_switch_activation(runtime, &mut pending),
+        _ => Err(Status::ErrInvalidArgs),
+    };
+    match result {
+        Ok(false) => {
+            runtime.pending_extension = Some(pending);
+            false
+        }
+        Ok(true) => {
+            complete_extension_deployment(&pending, Status::Ok);
+            if let Some(handle) = pending.module {
+                let _ = Memory::close(handle);
+            }
+            true
+        }
+        Err(status) => {
+            if let Some(resolver) = pending.resolver.take() {
+                runtime.package_resolver = Some(resolver);
+            }
+            if let Some(handle) = pending.module {
+                let _ = Memory::close(handle);
+            }
+            complete_extension_deployment(&pending, status);
+            true
+        }
+    }
+}
+
+fn poll_resolution(
+    runtime: &mut Runtime,
+    pending: &mut PendingExtensionDeployment,
+) -> Result<bool, Status> {
+    let resolver = pending.resolver.take().ok_or(Status::ErrShouldWait)?;
+    let expected = pkg_fidl::BlobDigest {
+        hash_type: pkg_fidl::HashType::Sha256,
+        digest: pending.digest,
+    };
+    let mut resolution =
+        bexos_pkg_client::PendingResolution::adopt(Channel(resolver), Some(expected));
+    match resolution.poll().map_err(package_status)? {
+        None => {
+            pending.resolver = resolution.into_channel().map(|channel| channel.0);
+            Ok(false)
+        }
+        Some(module) => {
+            runtime.package_resolver = resolution.into_channel().map(|channel| channel.0);
+            pending.module_length = module.length();
+            pending.digest = module.digest().digest;
+            pending.module = Some(module.into_handle());
+            send_extension_install(runtime, pending, false)?;
+            pending.stage = 2;
+            Ok(false)
+        }
+    }
+}
+
+fn poll_switch_activation(
+    runtime: &mut Runtime,
+    _pending: &mut PendingExtensionDeployment,
+) -> Result<bool, Status> {
+    let channel = runtime
+        .switch_extension_controller
+        .ok_or(Status::ErrShouldWait)?;
+    let message = match Channel(channel).try_recv() {
+        Err(kernel_fidl::Status::ErrTimedOut) => return Ok(false),
+        Err(_) => return Err(Status::ErrShouldWait),
+        Ok(message) => message,
+    };
+    let handles = handle_refs(&message.handles);
+    let response =
+        net_fidl::SwitchExtensionControllerInstallResponse::decode(&message.bytes, &handles)
+            .map_err(|_| Status::ErrInvalidArgs)?;
+    close_handles(&message.handles);
+    if response.status != Status::Ok {
+        return Err(response.status);
+    }
+    Ok(true)
+}
+
+fn send_extension_install(
+    runtime: &Runtime,
+    pending: &mut PendingExtensionDeployment,
+    post_routing: bool,
+) -> Result<(), Status> {
+    let controller = runtime
+        .switch_extension_controller
+        .ok_or(Status::ErrShouldWait)?;
+    let module = pending.module.take().ok_or(Status::ErrInvalidHandle)?;
+    let (name, kind, hook) = match (pending.kind, post_routing) {
+        (ExtensionDeploymentKind::Firewall, _) => (
+            "bexos.signed.firewall",
+            NetworkExtensionKind::Firewall,
+            NetworkExtensionHook::Firewall,
+        ),
+        (ExtensionDeploymentKind::Nat, false) => (
+            "bexos.signed.nat.pre-routing",
+            NetworkExtensionKind::Nat,
+            NetworkExtensionHook::PreRouting,
+        ),
+        (ExtensionDeploymentKind::Nat, true) => (
+            "bexos.signed.nat.post-routing",
+            NetworkExtensionKind::Nat,
+            NetworkExtensionHook::PostRouting,
+        ),
+    };
+    let request = SwitchExtensionControllerInstallRequest {
+        name,
+        kind,
+        hook,
+        fail_open: false,
+        expected_digest: pending.digest,
+        module: HandleRef { raw: module },
+        module_length: pending.module_length,
+        config: &pending.config,
+        generation: pending.generation,
+    };
+    let mut bytes = vec![0; pending.config.len() + 1024];
+    let mut handles = [HandleRef { raw: 0 }; 1];
+    let encoded = request
+        .encode(&mut bytes[8..], &mut handles)
+        .map_err(|_| Status::ErrInvalidArgs)?;
+    bytes[..8].copy_from_slice(&1u64.to_le_bytes());
+    Channel(controller)
+        .send(&bytes[..8 + encoded.bytes], &[module])
+        .map_err(|_| Status::ErrShouldWait)
+}
+
+fn complete_extension_deployment(pending: &PendingExtensionDeployment, status: Status) {
+    if pending.caller == 0 {
+        return;
+    }
+    let channel = Channel(pending.caller);
+    match pending.kind {
+        ExtensionDeploymentKind::Firewall => reply(
+            channel,
+            &NetworkExtensionManagerApplyFirewallResponse {
+                status,
+                generation: pending.generation,
+            },
+        ),
+        ExtensionDeploymentKind::Nat => reply(
+            channel,
+            &NetworkExtensionManagerApplyNatResponse {
+                status,
+                generation: pending.generation,
+            },
+        ),
+    }
+}
+
+fn remove_extension(runtime: &mut Runtime, kind: NetworkExtensionKind) -> Result<Status, Status> {
+    if runtime.pending_extension.is_some() {
+        return Err(Status::ErrShouldWait);
+    }
+    let controller = runtime
+        .switch_extension_controller
+        .ok_or(Status::ErrShouldWait)?;
+    let names: &[&str] = match kind {
+        NetworkExtensionKind::Firewall => &["bexos.signed.firewall"],
+        NetworkExtensionKind::Nat => &[
+            "bexos.signed.nat.pre-routing",
+            "bexos.signed.nat.post-routing",
+        ],
+    };
+    for name in names {
+        let response = SwitchExtensionControllerPublicClient::new(Rpc(Channel(controller)))
+            .remove(
+                &SwitchExtensionControllerRemoveRequest { name },
+                &mut [0; 128],
+                &mut [],
+                &mut [0; 128],
+                &mut [],
+            )
+            .map_err(|_| Status::ErrShouldWait)?;
+        if response.status != Status::Ok && response.status != Status::ErrNotFound {
+            return Err(response.status);
+        }
+    }
+    Ok(Status::Ok)
+}
+
+fn package_status(status: pkg_fidl::PackageStatus) -> Status {
+    match status {
+        pkg_fidl::PackageStatus::Ok => Status::Ok,
+        pkg_fidl::PackageStatus::NotFound => Status::ErrNotFound,
+        pkg_fidl::PackageStatus::AccessDenied => Status::ErrAccessDenied,
+        pkg_fidl::PackageStatus::ResourceExhausted => Status::ErrResourceExhausted,
+        pkg_fidl::PackageStatus::TimedOut | pkg_fidl::PackageStatus::Unavailable => {
+            Status::ErrShouldWait
+        }
+        _ => Status::ErrInvalidArgs,
     }
 }
 

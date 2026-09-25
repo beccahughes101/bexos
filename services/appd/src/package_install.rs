@@ -283,6 +283,7 @@ fn validate_payload(bytes: &[u8], install: &PendingInstall) -> Result<(), AppMan
             return Err(AppManagerStatus::VerifyFailed);
         }
         ArtifactKind::Font => return Err(AppManagerStatus::InvalidArgs),
+        ArtifactKind::NetworkExtension => return Err(AppManagerStatus::InvalidArgs),
         _ => {}
     }
     if manifest.processes.iter().any(|p| {

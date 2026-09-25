@@ -112,6 +112,8 @@ mod bexos {
         }
     }
 }
+/// Installs the shared BexOS linear-memory and Pulley-stack backend.
+/// Embedded runtimes use the same mapping invariants as the application runner.
 pub fn configure(config: &mut wasmtime::Config, max_memory: usize) {
     #[cfg(bexos_guest)]
     bexos::configure(config, max_memory);

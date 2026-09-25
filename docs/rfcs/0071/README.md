@@ -5,6 +5,12 @@
 * **Target Subsystems:** `vswitchd`, `netstack`, `driver_manager`, `pkgd`, `sdk/fidl/bexos.net`
 * **Applicability:** Fast-Path Switching, Stateful Firewalls, NAT, MicroVM/Container Egress, Edge Routers
 
+> **Implementation note (2026-09-24):** See [CURRENT.md](CURRENT.md). Native
+> JIT, direct VMO/zero-copy guest access, NAT64, line-rate operation, and the
+> sub-nanosecond figures below remain future or unverified design targets. The
+> current implementation uses Pulley and bounded vector copies and makes no
+> throughput claim.
+
 ---
 
 ## 1. Summary

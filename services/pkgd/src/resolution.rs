@@ -128,6 +128,7 @@ pub async fn download<T: Transport + Clone + 'static>(
         ArtifactKind::Driver => "driver",
         ArtifactKind::Font => "font",
         ArtifactKind::Firmware => "firmware",
+        ArtifactKind::NetworkExtension => "network_extension",
     };
     if target.kind.as_deref() != Some(kind)
         || target.length == 0
@@ -135,17 +136,38 @@ pub async fn download<T: Transport + Clone + 'static>(
     {
         return Err(Error::VerifyFailed);
     }
-    let digest = parse_digest(&format!(
+    let target_digest = parse_digest(&format!(
         "sha256:{}",
         target.hashes.get("sha256").ok_or(Error::VerifyFailed)?
     ))?;
-    let bytes = match cached(&digest)? {
-        Some(bytes) => std::rc::Rc::new(crate::payload::Payload::from_bytes(&bytes, &digest)?),
-        None => oci.payload(&digest, target.length).await?,
-    };
-    target
-        .verify_target(&bytes)
-        .map_err(|_| Error::VerifyFailed)?;
+    let (bytes, digest, length, manifest_sha256, manifest_length) =
+        if query.kind == ArtifactKind::NetworkExtension {
+            let manifest = oci.payload(&target_digest, target.length).await?;
+            target
+                .verify_target(&manifest)
+                .map_err(|_| Error::VerifyFailed)?;
+            let layer = oci
+                .network_extension(&manifest, config.max_payload_bytes)
+                .await?;
+            (
+                layer.bytes,
+                layer.digest,
+                layer.length,
+                Some(target_digest),
+                target.length,
+            )
+        } else {
+            let bytes = match cached(&target_digest)? {
+                Some(bytes) => {
+                    std::rc::Rc::new(crate::payload::Payload::from_bytes(&bytes, &target_digest)?)
+                }
+                None => oci.payload(&target_digest, target.length).await?,
+            };
+            target
+                .verify_target(&bytes)
+                .map_err(|_| Error::VerifyFailed)?;
+            (bytes, target_digest, target.length, None, 0)
+        };
     let blake3 = *blake3::hash(&bytes).as_bytes();
     if query
         .expected_digest
@@ -171,7 +193,9 @@ pub async fn download<T: Transport + Clone + 'static>(
             blake3,
             kind: query.kind,
             tag: query.tag.clone(),
-            length: target.length,
+            length,
+            manifest_sha256,
+            manifest_length,
         });
     }
     state.revision = previous_revision

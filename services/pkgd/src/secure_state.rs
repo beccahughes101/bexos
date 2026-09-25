@@ -11,6 +11,8 @@ pub struct Grant {
     pub kind: ArtifactKind,
     pub tag: String,
     pub length: u64,
+    pub manifest_sha256: Option<[u8; 32]>,
+    pub manifest_length: u64,
 }
 #[derive(Clone)]
 pub struct RepositoryState {
@@ -36,7 +38,7 @@ impl RepositoryState {
     }
     pub fn encode(&self) -> Vec<u8> {
         let mut writer = Encoder::new();
-        writer.word(3);
+        writer.word(4);
         writer.word(self.revision);
         writer.word(self.time_floor);
         writer.bytes(&self.tuf.encode_state());
@@ -47,13 +49,19 @@ impl RepositoryState {
             writer.word(grant.kind as u64);
             writer.text(&grant.tag);
             writer.word(grant.length);
+            writer.word(grant.manifest_sha256.is_some() as u64);
+            if let Some(digest) = grant.manifest_sha256 {
+                writer.bytes(&digest);
+                writer.word(grant.manifest_length);
+            }
         }
         writer.finish()
     }
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let decode = || -> core::result::Result<Self, bexos_migration::Error> {
             let mut reader = Decoder::new(bytes);
-            if reader.word()? != 3 {
+            let version = reader.word()?;
+            if !matches!(version, 3 | 4) {
                 return Err(bexos_migration::Error::UnsupportedVersion);
             }
             let revision = reader.word()?;
@@ -75,14 +83,32 @@ impl RepositoryState {
                     2 => ArtifactKind::Driver,
                     3 => ArtifactKind::Font,
                     4 => ArtifactKind::Firmware,
+                    5 => ArtifactKind::NetworkExtension,
                     _ => return Err(bexos_migration::Error::InvalidData),
+                };
+                let tag = reader.text(64)?.into();
+                let length = reader.word()?;
+                let (manifest_sha256, manifest_length) = if version >= 4 && reader.flag()? {
+                    (
+                        Some(
+                            reader
+                                .bytes(32)?
+                                .try_into()
+                                .map_err(|_| bexos_migration::Error::InvalidData)?,
+                        ),
+                        reader.word()?,
+                    )
+                } else {
+                    (None, 0)
                 };
                 grants.push(Grant {
                     sha256,
                     blake3,
                     kind,
-                    tag: reader.text(64)?.into(),
-                    length: reader.word()?,
+                    tag,
+                    length,
+                    manifest_sha256,
+                    manifest_length,
                 });
             }
             reader.finish()?;

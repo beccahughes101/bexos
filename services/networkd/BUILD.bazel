@@ -14,9 +14,11 @@ rust_library(
     deps = [
         "//idl:kernel_fidl_rust",
         "//idl:net_fidl_rust",
+        "//idl:pkg_fidl_rust",
         "//lib/migration",
         "//lib/net:net_secure",
         "//lib/network_policy",
+        "//lib/pkg_client",
         "//lib/userspace",
     ],
 )

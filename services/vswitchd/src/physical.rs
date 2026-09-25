@@ -13,7 +13,11 @@ use ethernet_fidl::{
     Status,
 };
 
+use crate::graph::DataPlane;
+use crate::packet::{Packet, PacketDisposition};
+use crate::routing::InterfaceEndpoint;
 use crate::switch::{MAX_FRAME_SIZE, QueuedFrame, VirtualSwitch};
+use bexos_network_extension_abi::Direction;
 
 const SLOT_SIZE: usize = 9216;
 const SLOT_COUNT: usize = 64;
@@ -115,8 +119,16 @@ impl PhysicalDevice {
         self.outbound.len().saturating_add(count) <= 256
     }
 
-    pub fn poll(&mut self, interface: u64, switch: &mut VirtualSwitch) -> bool {
+    pub fn poll(
+        &mut self,
+        interface: u64,
+        switch: &mut VirtualSwitch,
+        data_plane: &mut DataPlane,
+        routed_output: &mut Vec<(u64, Vec<u8>)>,
+        now_ns: u64,
+    ) -> bool {
         let mut changed = false;
+        let mut routed_packets = Vec::new();
         loop {
             let Ok(message) = self.fifo.try_recv() else {
                 break;
@@ -138,7 +150,22 @@ impl PhysicalDevice {
                                 bytes.len(),
                             );
                         }
-                        switch.ingress(interface, &bytes);
+                        if let Some(routed) = data_plane
+                            .routing
+                            .interface_for_endpoint(InterfaceEndpoint::Physical(interface))
+                        {
+                            if let Ok(packet) = Packet::parse(
+                                &bytes,
+                                routed.id,
+                                Direction::PhysicalIngress,
+                                routed.table_id,
+                                routed.zone,
+                            ) {
+                                routed_packets.push(packet);
+                            }
+                        } else {
+                            switch.ingress(interface, &bytes);
+                        }
                         self.supply_rx_slot(entry.offset);
                     }
                 }
@@ -146,6 +173,22 @@ impl PhysicalDevice {
                     self.pending_tx.remove(&entry.req_id);
                 }
                 _ => {}
+            }
+        }
+        let additional = data_plane.process(&mut routed_packets, now_ns);
+        routed_packets.extend(additional);
+        for packet in routed_packets {
+            match packet.disposition {
+                PacketDisposition::Deliver(port) => {
+                    let _ = switch.ingress_to_port(port, &packet.bytes);
+                }
+                PacketDisposition::Transmit(physical) => {
+                    routed_output.push((physical, packet.bytes));
+                }
+                PacketDisposition::Continue => {
+                    switch.ingress(interface, &packet.bytes);
+                }
+                PacketDisposition::Drop => {}
             }
         }
         while self.pending_tx.len() < SLOT_COUNT {
@@ -159,6 +202,13 @@ impl PhysicalDevice {
             changed = true;
         }
         changed
+    }
+
+    pub fn enqueue_routed(&mut self, bytes: Vec<u8>) -> Result<(), Status> {
+        self.enqueue(vec![QueuedFrame {
+            generation: 0,
+            bytes,
+        }])
     }
 
     fn transmit(&mut self, bytes: &[u8]) -> Result<(), Status> {

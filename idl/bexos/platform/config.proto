@@ -23,6 +23,82 @@ message NetworkPolicy {
   repeated NetworkDnsUpstream dns_upstreams = 5;
   repeated NetworkResourceTemplate resource_templates = 6;
   uint32 max_dynamic_providers = 7;
+  repeated NetworkRoutedInterface routed_interfaces = 8;
+  repeated NetworkSwitchRoute switch_routes = 9;
+  NetworkFirewallPolicy firewall = 10;
+  NetworkNatPolicy nat = 11;
+}
+
+message NetworkRoutedInterface {
+  uint64 interface_id = 1;
+  uint64 physical_interface = 2;
+  uint64 virtual_port = 3;
+  uint32 table_id = 4;
+  uint32 bridge_domain = 5;
+  uint32 vlan_id = 6;
+  bytes mac = 7;
+  uint32 mtu = 8;
+  repeated NetworkIpPrefix addresses = 9;
+  uint32 security_zone = 10;
+  bool routing_enabled = 11;
+}
+
+message NetworkSwitchRoute {
+  uint32 table_id = 1;
+  NetworkIpPrefix destination = 2;
+  bytes gateway = 3;
+  uint64 interface_id = 4;
+  uint32 metric = 5;
+}
+
+message NetworkExtensionArtifact {
+  string registry_host = 1;
+  string repository = 2;
+  string tag = 3;
+  bytes expected_digest = 4;
+  string media_type = 5;
+  string abi = 6;
+}
+
+message NetworkFirewallRule {
+  string source_zone = 1;
+  string destination_zone = 2;
+  string direction = 3;
+  NetworkIpPrefix source = 4;
+  NetworkIpPrefix destination = 5;
+  uint32 protocol = 6;
+  uint32 source_port_start = 7;
+  uint32 source_port_end = 8;
+  uint32 destination_port_start = 9;
+  uint32 destination_port_end = 10;
+  uint32 icmp_type = 11;
+  uint32 icmp_code = 12;
+  string connection_state = 13;
+  bool allow = 14;
+}
+
+message NetworkFirewallPolicy {
+  repeated NetworkFirewallRule rules = 1;
+  NetworkExtensionArtifact desired_artifact = 2;
+}
+
+message NetworkNatPortForward {
+  bytes external_address = 1;
+  uint32 external_port = 2;
+  bytes internal_address = 3;
+  uint32 internal_port = 4;
+  uint32 protocol = 5;
+}
+
+message NetworkNatPolicy {
+  bool enabled = 1;
+  repeated bytes external_ipv4_pool = 2;
+  uint32 ephemeral_port_start = 3;
+  uint32 ephemeral_port_end = 4;
+  repeated NetworkNatPortForward port_forwards = 5;
+  NetworkIpPrefix nptv6_internal = 6;
+  NetworkIpPrefix nptv6_external = 7;
+  NetworkExtensionArtifact desired_artifact = 8;
 }
 
 message NetworkIsolationGroup {

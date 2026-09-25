@@ -10,6 +10,15 @@ _wasi_transition = transition(
     outputs = ["//command_line_option:platforms", "//command_line_option:compilation_mode"],
 )
 
+def _core_transition_impl(settings, attr):
+    return {"//command_line_option:platforms": "//build/platforms:wasm32_guest", "//command_line_option:compilation_mode": "opt"}
+
+_core_transition = transition(
+    implementation = _core_transition_impl,
+    inputs = [],
+    outputs = ["//command_line_option:platforms", "//command_line_option:compilation_mode"],
+)
+
 def _component_impl(ctx):
     return [DefaultInfo(files = ctx.attr.binary[0][DefaultInfo].files)]
 
@@ -21,6 +30,31 @@ _component = rule(
     },
 )
 
+_core_module = rule(
+    implementation = _component_impl,
+    attrs = {
+        "binary": attr.label(cfg = _core_transition, mandatory = True),
+        "_allowlist_function_transition": attr.label(default = "@bazel_tools//tools/allowlists/function_transition_allowlist"),
+    },
+)
+
 def wasi_component(name, srcs, deps, crate_name, **kwargs):
     rust_binary(name = name + "_binary", srcs = srcs, deps = deps, crate_name = crate_name, edition = "2024", **kwargs)
     _component(name = name, binary = ":" + name + "_binary", testonly = kwargs.get("testonly", False))
+
+def wasm_core_module(name, srcs, deps, crate_name, **kwargs):
+    """Builds a freestanding raw WebAssembly core module (never WASI)."""
+    rust_binary(
+        name = name + "_binary",
+        srcs = srcs,
+        deps = deps,
+        crate_name = crate_name,
+        edition = "2024",
+        rustc_flags = [
+            "-C", "panic=abort",
+            "-C", "link-arg=--no-entry",
+            "-C", "link-arg=--export-memory",
+        ],
+        **kwargs
+    )
+    _core_module(name = name, binary = ":" + name + "_binary", testonly = kwargs.get("testonly", False))

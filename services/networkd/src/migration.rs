@@ -25,7 +25,7 @@ pub(crate) const ROUTING_KEY: u64 = 1;
 pub(crate) const DNS_KEY: u64 = 2;
 pub(crate) const ESCROW_KEY: u64 = 3;
 pub(crate) const RECOVERY_KEY: u64 = 4;
-const VERSION: u64 = 6;
+const VERSION: u64 = 7;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct EscrowedBackend {
@@ -55,6 +55,9 @@ pub struct Runtime {
     pub stack_backend_channels: BTreeMap<alloc::string::String, u64>,
     pub stack_controller_channels: BTreeMap<alloc::string::String, u64>,
     pub vswitch_controller: Option<u64>,
+    pub switch_routing_controller: Option<u64>,
+    pub switch_extension_controller: Option<u64>,
+    pub package_resolver: Option<u64>,
     pub tls_trust: Option<u64>,
     pub escrowed_backends: BTreeMap<u64, EscrowedBackend>,
     pub control_proxies: Vec<ControlProxy>,
@@ -64,6 +67,37 @@ pub struct Runtime {
     pub recovery_journals: BTreeMap<alloc::string::String, RecoveryJournal>,
     pub virtual_ports: Vec<u64>,
     pub last_recovery_checkpoint_ms: u64,
+    pub pending_extension: Option<PendingExtensionDeployment>,
+    pub next_extension_generation: u64,
+    pub queued_extensions: Vec<QueuedExtensionDeployment>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExtensionDeploymentKind {
+    Firewall,
+    Nat,
+}
+
+pub struct PendingExtensionDeployment {
+    pub caller: u64,
+    pub kind: ExtensionDeploymentKind,
+    pub config: Vec<u8>,
+    pub generation: u64,
+    pub stage: u8,
+    pub module: Option<u64>,
+    pub resolver: Option<u64>,
+    pub module_length: u64,
+    pub digest: [u8; 32],
+}
+
+#[derive(Clone)]
+pub struct QueuedExtensionDeployment {
+    pub kind: ExtensionDeploymentKind,
+    pub registry_host: alloc::string::String,
+    pub repository: alloc::string::String,
+    pub tag: alloc::string::String,
+    pub expected_digest: [u8; 32],
+    pub config: Vec<u8>,
 }
 
 pub struct ControlProxy {
@@ -99,6 +133,9 @@ impl Runtime {
             stack_backend_channels: BTreeMap::new(),
             stack_controller_channels: BTreeMap::new(),
             vswitch_controller: None,
+            switch_routing_controller: None,
+            switch_extension_controller: None,
+            package_resolver: None,
             tls_trust: None,
             escrowed_backends: BTreeMap::new(),
             control_proxies: Vec::new(),
@@ -108,6 +145,9 @@ impl Runtime {
             recovery_journals: BTreeMap::new(),
             virtual_ports: Vec::new(),
             last_recovery_checkpoint_ms: 0,
+            pending_extension: None,
+            next_extension_generation: 2,
+            queued_extensions: Vec::new(),
         }
     }
 }
@@ -163,6 +203,9 @@ impl State for Runtime {
                 }
                 w.word(self.vswitch_controller.unwrap_or(0));
                 w.word(self.tls_trust.unwrap_or(0));
+                w.word(self.switch_routing_controller.unwrap_or(0));
+                w.word(self.switch_extension_controller.unwrap_or(0));
+                w.word(self.package_resolver.unwrap_or(0));
                 w.word(self.stack_backend_channels.len() as u64);
                 for (instance, channel) in &self.stack_backend_channels {
                     w.text(instance);
@@ -198,6 +241,34 @@ impl State for Runtime {
                     w.word(proxy.stream.unwrap_or(0));
                     w.word(proxy.flow_id);
                     w.word(proxy.backend.unwrap_or(0));
+                }
+                w.word(self.next_extension_generation);
+                w.word(self.pending_extension.is_some() as u64);
+                if let Some(pending) = &self.pending_extension {
+                    w.word(pending.caller);
+                    w.word(match pending.kind {
+                        ExtensionDeploymentKind::Firewall => 1,
+                        ExtensionDeploymentKind::Nat => 2,
+                    });
+                    w.bytes(&pending.config);
+                    w.word(pending.generation);
+                    w.word(pending.stage as u64);
+                    w.word(pending.module.unwrap_or(0));
+                    w.word(pending.resolver.unwrap_or(0));
+                    w.word(pending.module_length);
+                    w.bytes(&pending.digest);
+                }
+                w.word(self.queued_extensions.len() as u64);
+                for queued in &self.queued_extensions {
+                    w.word(match queued.kind {
+                        ExtensionDeploymentKind::Firewall => 1,
+                        ExtensionDeploymentKind::Nat => 2,
+                    });
+                    w.text(&queued.registry_host);
+                    w.text(&queued.repository);
+                    w.text(&queued.tag);
+                    w.bytes(&queued.expected_digest);
+                    w.bytes(&queued.config);
                 }
             }
             RECOVERY_KEY => {
@@ -283,6 +354,14 @@ impl State for Runtime {
                 } else {
                     None
                 };
+                if version >= 7 {
+                    let routing = r.word()?;
+                    self.switch_routing_controller = (routing != 0).then_some(routing);
+                    let extensions = r.word()?;
+                    self.switch_extension_controller = (extensions != 0).then_some(extensions);
+                    let resolver = r.word()?;
+                    self.package_resolver = (resolver != 0).then_some(resolver);
+                }
                 self.stack_backend_channels.clear();
                 self.stack_controller_channels.clear();
                 if version >= 2 {
@@ -360,6 +439,52 @@ impl State for Runtime {
                         },
                     });
                 }
+                if version >= 7 {
+                    self.next_extension_generation = r.word()?;
+                    self.pending_extension = if r.flag()? {
+                        Some(PendingExtensionDeployment {
+                            caller: r.word()?,
+                            kind: match r.word()? {
+                                1 => ExtensionDeploymentKind::Firewall,
+                                2 => ExtensionDeploymentKind::Nat,
+                                _ => return Err(Error::InvalidData),
+                            },
+                            config: r.bytes(65_536)?.to_vec(),
+                            generation: r.word()?,
+                            stage: u8::try_from(r.word()?).map_err(|_| Error::InvalidData)?,
+                            module: {
+                                let handle = r.word()?;
+                                (handle != 0).then_some(handle)
+                            },
+                            resolver: {
+                                let handle = r.word()?;
+                                (handle != 0).then_some(handle)
+                            },
+                            module_length: r.word()?,
+                            digest: r.bytes(32)?.try_into().map_err(|_| Error::InvalidData)?,
+                        })
+                    } else {
+                        None
+                    };
+                    self.queued_extensions.clear();
+                    for _ in 0..r.count(2)? {
+                        self.queued_extensions.push(QueuedExtensionDeployment {
+                            kind: match r.word()? {
+                                1 => ExtensionDeploymentKind::Firewall,
+                                2 => ExtensionDeploymentKind::Nat,
+                                _ => return Err(Error::InvalidData),
+                            },
+                            registry_host: r.text(128)?.to_string(),
+                            repository: r.text(128)?.to_string(),
+                            tag: r.text(64)?.to_string(),
+                            expected_digest: r
+                                .bytes(32)?
+                                .try_into()
+                                .map_err(|_| Error::InvalidData)?,
+                            config: r.bytes(65_536)?.to_vec(),
+                        });
+                    }
+                }
             }
             RECOVERY_KEY => {
                 let version = read_version(&mut r)?;
@@ -410,6 +535,16 @@ impl State for Runtime {
         if let Some(channel) = self.vswitch_controller {
             out.push(Resource::Handle(channel));
         }
+        for channel in [
+            self.switch_routing_controller,
+            self.switch_extension_controller,
+            self.package_resolver,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            out.push(Resource::Handle(channel));
+        }
         if let Some(channel) = self.tls_trust {
             out.push(Resource::Handle(channel));
         }
@@ -428,6 +563,20 @@ impl State for Runtime {
             if let Some(stream) = proxy.stream {
                 out.push(Resource::Handle(stream));
             }
+        }
+        if let Some(handle) = self
+            .pending_extension
+            .as_ref()
+            .and_then(|pending| pending.module)
+        {
+            out.push(Resource::Handle(handle));
+        }
+        if let Some(handle) = self
+            .pending_extension
+            .as_ref()
+            .and_then(|pending| pending.resolver)
+        {
+            out.push(Resource::Handle(handle));
         }
         for provider in self.routing.providers.values() {
             if let Target::Proxy { channel } = provider.config.target {
@@ -466,6 +615,7 @@ fn read_version(r: &mut Decoder<'_>) -> Result<u64, Error> {
         3 => Ok(3),
         4 => Ok(4),
         5 => Ok(5),
+        6 => Ok(6),
         VERSION => Ok(VERSION),
         _ => Err(Error::UnsupportedVersion),
     }

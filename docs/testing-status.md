@@ -1,5 +1,49 @@
 # Testing Status
 
+## RFC 0036/0071 routed VPP and network extensions (2026-09-24)
+
+The tree now contains the bounded native L2/L3 graph, routed-interface and
+switch-FIB control, neighbor queues, ICMP/MTU handling, the shared raw-core-WASM
+extension runtime, embedded firewall and NAT modules, networkd deployment
+manager, and pkgd network-extension artifact verification described by the
+current-state documents. Host coverage includes graph batching and routing,
+IPv4/IPv6 validation, neighbor resolution, fragmentation, extension ABI fault
+policies and rollback, firewall state and limits, NAT44/PAT/DNAT/fragments,
+NPTv6 checksum neutrality, migration codecs, OCI media validation, and heart
+transplant coverage.
+
+The final focused validation passed:
+
+```sh
+bazel run @rules_rust//:rustfmt
+bazel test //lib/network_extension_abi:tests \
+  //services/vswitchd:internal_tests //services/networkd:internal_tests \
+  //services/pkgd:tests //services/pkgd:migration_tests \
+  //services/appd:appd_tests //:heart_transplant_coverage_test
+bazel test //services/vswitchd:internal_tests --runs_per_test=3
+```
+
+The normal and replacement archives for `vswitchd`, `networkd`, and `pkgd`,
+and both network-transplant images, built successfully for AArch64 and x86_64.
+The live targets were also attempted:
+
+```sh
+bazel test --test_tag_filters=requires-qemu \
+  //testing/e2e/qemu/elf:network_transplant_test_aarch64
+bazel test --config=x86_64 --test_tag_filters=requires-qemu \
+  //testing/e2e/qemu/elf:network_transplant_test_x86_64
+```
+
+Neither live target reached BexOS on this Apple Silicon host. AArch64 stalled at
+generation 1 after the existing TF-A assertion in
+`bl1/aarch64/bl1_context_mgmt.c:24`. x86_64 passed UEFI Secure Boot and reached
+`monitor-runtime: entering assigned Trusty domain`, then stalled at generation
+1. Both were terminated by the harness's 120-second progress watchdog. These
+are pre-kernel firmware/TCG failures, so this run does not claim routed,
+firewall, NAT, or transplant guest acceptance. The packaged targets are ready
+for those assertions on a host that boots the corresponding secure firmware
+stack.
+
 ## Split PR and branch CI (2026-09-24)
 
 The `Bazel CI` workflow now separates pull-request validation from main/manual

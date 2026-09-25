@@ -31,12 +31,16 @@ controller bindings are accepted only from networkd. The normal product no
 longer grants the physical Ethernet capability directly to netstackd.
 
 Vswitchd exclusively consumes physical Ethernet devices and exposes isolated
-virtual descriptor-ring devices. It performs destination MAC/VLAN demux,
-broadcast and multicast fan-out, access/trunk VLAN translation, source
+virtual descriptor-ring devices. Legacy ports retain destination MAC/VLAN
+demux, broadcast and multicast fan-out, access/trunk VLAN translation, source
 MAC/VLAN anti-spoofing, bounded queues, backpressure, and a bounded copy between
-the physical and per-port VMO pools. Physical and virtual devices, mappings,
-port policy, queued frames, counters, and generations participate in heart
-transplant. The QEMU `qemu-default` selector resolves to the sole enumerated NIC.
+the physical and per-port VMO pools. Explicitly routed endpoints additionally
+enter the RFC 71 native L2/L3 vector graph: per-VRF FIB lookup, neighbor state,
+hop-limit/checksum processing, IPv4 fragmentation, MTU/ICMP errors, and
+sandboxed firewall/NAT hooks. Physical and virtual devices, mappings, port
+policy, routed interfaces, FIBs, neighbors and queued packets, extension state,
+counters, and packet generations participate in heart transplant. The QEMU
+`qemu-default` selector resolves to the sole enumerated NIC.
 
 ## Recovery behavior
 
@@ -72,6 +76,12 @@ Runtime provider/table state and recovery journals survive service replacement
 but are intentionally not persisted across reboot. Boot prototxt remains the
 authoritative reboot topology.
 
+Networkd is also the sole client of the private switch routing and extension
+controllers. It restores pending package-resolution channels and deployments
+during replacement. Boot always starts with the embedded fail-closed firewall;
+optional NAT and verified signed replacements are applied only after the
+network path is available, avoiding a network/pkgd dependency cycle.
+
 ## Deliberate exclusions and validation boundary
 
 The privileged stack/switch controllers remain discoverable for assembly but
@@ -81,7 +91,9 @@ CONNECT, WireGuard, and IPsec protocol engines are not part of this RFC 0068
 implementation. Redirectord and short-link storage/HTTP behavior remain outside
 scope. Host tests cover routing, DNS parsing/cache isolation, VRF isolation,
 virtual switching, migration codecs, journal validation, and appd lifecycle
-state. QEMU live/crash recovery and split-DNS scenarios must only be claimed
+state. The RFC 71 additions also have host coverage for routed graph behavior,
+bundled firewall/NAT behavior, package verification, and extension migration.
+QEMU live/crash recovery, routed policy, and split-DNS scenarios must only be claimed
 after their architecture-specific guest targets pass; see
 [testing status](../../testing-status.md).
 

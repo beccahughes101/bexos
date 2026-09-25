@@ -410,6 +410,117 @@ protocol VirtualSwitchController {
     });
 };
 
+struct PhysicalSwitchEndpoint { interface_id uint64; };
+struct VirtualSwitchEndpoint { port_id uint64; };
+
+type SwitchEndpoint = strict union {
+    1: physical_interface PhysicalSwitchEndpoint;
+    2: virtual_port VirtualSwitchEndpoint;
+};
+
+struct SwitchRoutedInterface {
+    interface_id uint64;
+    endpoint SwitchEndpoint;
+    table TableId;
+    bridge_domain uint32;
+    vlan_id uint16;
+    mac array<uint8, 6>;
+    mtu uint32;
+    zone uint16;
+    addresses vector<IpSubnet>:16;
+};
+
+struct SwitchRoute {
+    table TableId;
+    destination IpSubnet;
+    gateway IpAddress;
+    has_gateway bool;
+    interface_id uint64;
+    metric uint32;
+};
+
+struct SwitchNeighbor {
+    interface_id uint64;
+    address IpAddress;
+    mac array<uint8, 6>;
+};
+
+/// Private networkd -> vswitchd routed-interface and neighbor control plane.
+protocol SwitchRoutingController {
+    1: ConfigureInterface(struct { interface SwitchRoutedInterface; }) -> (struct { status Status; });
+    2: RemoveInterface(struct { interface_id uint64; }) -> (struct { status Status; });
+    3: AddRoute(struct { route SwitchRoute; }) -> (struct { status Status; });
+    4: RemoveRoute(struct { route SwitchRoute; }) -> (struct { status Status; });
+    5: UpdateNeighbor(struct { neighbor SwitchNeighbor; }) -> (struct { status Status; });
+};
+
+type NetworkExtensionKind = strict enum : uint8 {
+    FIREWALL = 1;
+    NAT = 2;
+};
+
+type NetworkExtensionHook = strict enum : uint8 {
+    BRIDGE = 1;
+    PRE_ROUTING = 2;
+    FIREWALL = 3;
+    POST_ROUTING = 4;
+};
+
+struct NetworkExtensionStatus {
+    name string:64;
+    kind NetworkExtensionKind;
+    generation uint64;
+    digest array<uint8, 32>;
+    faulted bool;
+    batches uint64;
+    packets uint64;
+    passed uint64;
+    dropped uint64;
+    rewritten uint64;
+    redirected uint64;
+    traps uint64;
+};
+
+/// Private networkd -> vswitchd atomic module deployment boundary. Module
+/// VMOs contain raw core WebAssembly and are never exposed to the packet loop.
+protocol SwitchExtensionController {
+    1: Install(resource struct {
+        name string:64;
+        kind NetworkExtensionKind;
+        hook NetworkExtensionHook;
+        fail_open bool;
+        expected_digest array<uint8, 32>;
+        module handle:VMO;
+        module_length uint64;
+        config vector<uint8>:65536;
+        generation uint64;
+    }) -> (struct { status Status; active_generation uint64; });
+    2: Remove(struct { name string:64; }) -> (struct { status Status; active_generation uint64; });
+    3: List() -> (struct { status Status; extensions vector<NetworkExtensionStatus>:8; });
+};
+
+/// Typed privileged API. networkd is the sole caller of the private switch
+/// controllers and resolves signed artifacts before forwarding installations.
+@discoverable
+protocol NetworkExtensionManager {
+    1: ApplyFirewall(struct {
+        registry_host string:128;
+        repository string:128;
+        tag string:64;
+        expected_digest array<uint8, 32>;
+        config vector<uint8>:65536;
+    }) -> (struct { status Status; generation uint64; });
+    2: ApplyNat(struct {
+        registry_host string:128;
+        repository string:128;
+        tag string:64;
+        expected_digest array<uint8, 32>;
+        config vector<uint8>:65536;
+    }) -> (struct { status Status; generation uint64; });
+    3: RemoveOptional(struct { kind NetworkExtensionKind; }) -> (struct { status Status; generation uint64; });
+    4: List() -> (struct { status Status; extensions vector<NetworkExtensionStatus>:8; });
+};
+
 protocol LinkWatcher {
     1: OnLinkStatus(struct {
         link LinkStatus;

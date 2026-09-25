@@ -1,0 +1,11 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "network_extension_guest",
+    srcs = ["src/lib.rs"],
+    crate_name = "bexos_network_extension_guest",
+    edition = "2024",
+    deps = ["//lib/network_extension_abi"],
+)

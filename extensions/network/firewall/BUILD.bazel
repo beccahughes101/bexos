@@ -1,0 +1,13 @@
+load("//build/rules:wasm.bzl", "wasm_core_module")
+
+package(default_visibility = ["//visibility:public"])
+
+wasm_core_module(
+    name = "firewall_wasm",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_network_firewall",
+    deps = [
+        "//lib/network_extension_abi",
+        "//lib/network_extension_guest",
+    ],
+)

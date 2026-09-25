@@ -480,14 +480,26 @@ split DNS (UDP/DoT/DoH), control-channel proxying, backend selection, and
 recovery escrow. TCP payload does not traverse networkd.
 
 Vswitchd consumes physical `bexos.hardware.ethernet.Device` instances and
-creates per-table virtual packet-ring devices. MAC/VLAN demux, access/trunk
-translation, broadcast/multicast fan-out, anti-spoof checks, queue limits,
-backpressure, and generation commits are enforced before frames cross an
-isolation boundary. Its physical/virtual VMO mappings, port policy, queues, and
-generations are migrated during replacement.
+creates per-table virtual packet-ring devices. Legacy bridge ports retain
+MAC/VLAN demux, access/trunk translation, broadcast/multicast fan-out,
+anti-spoof checks, queue limits, backpressure, and generation commits.
+Explicit routed interfaces enter a bounded 256-packet native graph for IPv4/
+IPv6 parsing, per-VRF FIB lookup, hop/MTU handling, neighbors and output. Its
+hook order invokes sandboxed pre-routing NAT, firewall, and post-routing NAT
+extensions. The bundled fail-closed firewall is mandatory before readiness;
+the bundled NAT44/PAT and NPTv6 extension is opt-in.
+
+Networkd alone uses `VirtualSwitchController`, `SwitchRoutingController`, and
+`SwitchExtensionController`, and publishes the privileged typed
+`NetworkExtensionManager`. Signed replacement modules are resolved through
+pkgd only after networking starts. Physical/virtual mappings, policy, queues,
+routed FIB and neighbor state, packet generations, module/config/checkpoint
+state, counters, faults, and pending networkd resolution state are migrated
+during replacement.
 
 Targets are under `//services/networkd` and `//services/vswitchd`; each service
-has normal and replacement archives. See [RFC 0068 current state](rfcs/0068/CURRENT.md)
+has normal and replacement archives. See [networking architecture](networking.md),
+[RFC 0068 current state](rfcs/0068/CURRENT.md), [RFC 0071 current state](rfcs/0071/CURRENT.md),
 and [RFC 0061 current state](rfcs/0061/CURRENT.md).
 
 ## netstackd

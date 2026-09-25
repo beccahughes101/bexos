@@ -17,6 +17,13 @@ pub struct BootConfig {
     pub ports: Vec<PortConfig>,
     pub routes: Vec<RouteConfig>,
     pub upstreams: Vec<UpstreamConfig>,
+    pub routed_interfaces: Vec<RoutedInterfaceConfig>,
+    pub switch_routes: Vec<RouteConfig>,
+    pub firewall_config: Vec<u8>,
+    pub firewall_artifact: ExtensionArtifactConfig,
+    pub nat_enabled: bool,
+    pub nat_config: Vec<u8>,
+    pub nat_artifact: ExtensionArtifactConfig,
 }
 
 #[derive(Clone, Debug)]
@@ -61,6 +68,28 @@ pub struct UpstreamConfig {
     pub priority: u32,
 }
 
+#[derive(Clone, Debug)]
+pub struct RoutedInterfaceConfig {
+    pub id: u64,
+    pub physical_interface: u64,
+    pub virtual_port: u64,
+    pub table: u32,
+    pub bridge_domain: u32,
+    pub vlan_id: u16,
+    pub mac: [u8; 6],
+    pub mtu: u32,
+    pub zone: u16,
+    pub addresses: Vec<(IpAddress, u8)>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ExtensionArtifactConfig {
+    pub registry_host: String,
+    pub repository: String,
+    pub tag: String,
+    pub expected_digest: Option<[u8; 32]>,
+}
+
 impl BootConfig {
     pub fn from_startup(startup: &Startup) -> Result<Self, Error> {
         let handle = startup.config.ok_or(Error::InvalidData)?;
@@ -96,8 +125,12 @@ impl BootConfig {
 
     fn decode(bytes: &[u8]) -> Result<Self, Error> {
         let mut r = Decoder::new(bytes);
-        if r.word()? != MAGIC || r.word()? != 1 {
+        if r.word()? != MAGIC {
             return Err(Error::InvalidData);
+        }
+        let version = r.word()?;
+        if !matches!(version, 1 | 2) {
+            return Err(Error::UnsupportedVersion);
         }
         let instance_id: String = r.text(64)?.into();
         let max_dynamic_providers = usize::try_from(r.word()?).map_err(|_| Error::InvalidData)?;
@@ -176,6 +209,67 @@ impl BootConfig {
                 priority: word_u32(&mut r)?,
             });
         }
+        let mut routed_interfaces = Vec::new();
+        let mut switch_routes = Vec::new();
+        let mut firewall_config = b"NFW1\0\0\0\0".to_vec();
+        let mut firewall_artifact = ExtensionArtifactConfig::default();
+        let mut nat_enabled = false;
+        let mut nat_config = Vec::new();
+        let mut nat_artifact = ExtensionArtifactConfig::default();
+        if version >= 2 {
+            for _ in 0..r.count(256)? {
+                let id = r.word()?;
+                let physical_interface = r.word()?;
+                let virtual_port = r.word()?;
+                let table = word_u32(&mut r)?;
+                let bridge_domain = word_u32(&mut r)?;
+                let vlan_id = u16::try_from(r.word()?).map_err(|_| Error::InvalidData)?;
+                let mac = r.bytes(6)?.try_into().map_err(|_| Error::InvalidData)?;
+                let mtu = word_u32(&mut r)?;
+                let zone = u16::try_from(r.word()?).map_err(|_| Error::InvalidData)?;
+                let mut addresses = Vec::new();
+                for _ in 0..r.count(16)? {
+                    addresses.push((
+                        ip(r.bytes(16)?)?,
+                        u8::try_from(r.word()?).map_err(|_| Error::InvalidData)?,
+                    ));
+                }
+                routed_interfaces.push(RoutedInterfaceConfig {
+                    id,
+                    physical_interface,
+                    virtual_port,
+                    table,
+                    bridge_domain,
+                    vlan_id,
+                    mac,
+                    mtu,
+                    zone,
+                    addresses,
+                });
+            }
+            for _ in 0..r.count(4096)? {
+                let table = word_u32(&mut r)?;
+                let destination = ip(r.bytes(16)?)?;
+                let prefix_len = u8::try_from(r.word()?).map_err(|_| Error::InvalidData)?;
+                let gateway_bytes = r.bytes(16)?;
+                let gateway = (!gateway_bytes.is_empty())
+                    .then(|| ip(gateway_bytes))
+                    .transpose()?;
+                switch_routes.push(RouteConfig {
+                    table,
+                    destination,
+                    prefix_len,
+                    gateway,
+                    interface_id: r.word()?,
+                    metric: word_u32(&mut r)?,
+                });
+            }
+            firewall_config = r.bytes(65_536)?.to_vec();
+            firewall_artifact = extension_artifact(&mut r)?;
+            nat_enabled = r.flag()?;
+            nat_config = r.bytes(65_536)?.to_vec();
+            nat_artifact = extension_artifact(&mut r)?;
+        }
         r.finish()?;
         if instance_id.is_empty()
             || domains.is_empty()
@@ -187,6 +281,12 @@ impl BootConfig {
             || upstreams
                 .iter()
                 .any(|upstream| !tables.contains(&upstream.table))
+            || routed_interfaces
+                .iter()
+                .any(|interface| !tables.contains(&interface.table))
+            || switch_routes
+                .iter()
+                .any(|route| !tables.contains(&route.table))
             || domains
                 .iter()
                 .filter(|domain| domain.system_default)
@@ -207,8 +307,39 @@ impl BootConfig {
             ports,
             routes,
             upstreams,
+            routed_interfaces,
+            switch_routes,
+            firewall_config,
+            firewall_artifact,
+            nat_enabled,
+            nat_config,
+            nat_artifact,
         })
     }
+}
+
+fn extension_artifact(r: &mut Decoder<'_>) -> Result<ExtensionArtifactConfig, Error> {
+    let registry_host: String = r.text(128)?.into();
+    let repository: String = r.text(128)?.into();
+    let tag: String = r.text(64)?.into();
+    let digest = r.bytes(32)?;
+    let media_type = r.text(128)?;
+    let abi = r.text(64)?;
+    let absent =
+        registry_host.is_empty() && repository.is_empty() && tag.is_empty() && digest.is_empty();
+    if !absent
+        && (digest.len() != 32
+            || media_type != "application/vnd.bexos.net.filter.v1"
+            || abi != "vpp-wasm-v1")
+    {
+        return Err(Error::InvalidData);
+    }
+    Ok(ExtensionArtifactConfig {
+        registry_host,
+        repository,
+        tag,
+        expected_digest: (!digest.is_empty()).then(|| digest.try_into().unwrap()),
+    })
 }
 
 fn word_u32(r: &mut Decoder<'_>) -> Result<u32, Error> {

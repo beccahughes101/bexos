@@ -1,7 +1,7 @@
 //! Shared, capability-oriented WebAssembly execution for BexOS.
 #![cfg_attr(bexos_guest, feature(thread_local))]
 pub mod engine;
-mod platform;
+pub mod platform;
 
 mod abi;
 pub mod budget;

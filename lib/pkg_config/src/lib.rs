@@ -320,7 +320,7 @@ fn consumer(bytes: &[u8]) -> Result<Consumer> {
             _ => return Err(PackageStatus::InvalidArgs),
         }
     }
-    if consumer.package.is_empty() || consumer.kinds.iter().any(|kind| !(1..=4).contains(kind)) {
+    if consumer.package.is_empty() || consumer.kinds.iter().any(|kind| !(1..=5).contains(kind)) {
         return Err(PackageStatus::InvalidArgs);
     }
     Ok(consumer)
@@ -351,6 +351,7 @@ fn mapping(bytes: &[u8]) -> Result<Mapping> {
                     2 => ArtifactKind::Driver,
                     3 => ArtifactKind::Font,
                     4 => ArtifactKind::Firmware,
+                    5 => ArtifactKind::NetworkExtension,
                     _ => return Err(PackageStatus::InvalidArgs),
                 }
             }

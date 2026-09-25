@@ -99,6 +99,29 @@ services_consumed {
   }
 }
 services_consumed {
+  name: "bexos.net.SwitchRoutingController"
+  link_type: REQUIRED
+  capabilities { capability: "Control" methods { ordinal: 1 link_type: REQUIRED } methods { ordinal: 2 link_type: REQUIRED } methods { ordinal: 3 link_type: REQUIRED } methods { ordinal: 4 link_type: REQUIRED } methods { ordinal: 5 link_type: REQUIRED } }
+}
+services_consumed {
+  name: "bexos.net.SwitchExtensionController"
+  link_type: REQUIRED
+  capabilities { capability: "Control" methods { ordinal: 1 link_type: REQUIRED } methods { ordinal: 2 link_type: REQUIRED } methods { ordinal: 3 link_type: REQUIRED } }
+}
+services_consumed {
+  name: "bexos.pkg.PackageResolver"
+  link_type: OPTIONAL
+  capabilities { capability: "Resolve" methods { ordinal: 1 link_type: OPTIONAL } methods { ordinal: 2 link_type: OPTIONAL } }
+}
+services_exposed {
+  name: "bexos.net.NetworkExtensionManager"
+  protocol: "NetworkExtensionManager"
+  lifecycle: SINGLETON
+  visibility: PRIVATE
+  bind_permission: "BEXOS_SYSTEM_PRIVILEGED"
+  capabilities { capability: "Control" method_ordinals: 1 method_ordinals: 2 method_ordinals: 3 method_ordinals: 4 }
+}
+services_consumed {
   name: "bexos.security.trust.TlsTrustManager"
   link_type: REQUIRED
   capabilities { capability: "Public" methods { ordinal: 1 link_type: REQUIRED } }

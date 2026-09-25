@@ -6,6 +6,16 @@ use crate::{
 use bexos_pkg_config::Repository;
 use sha2::{Digest, Sha256};
 pub const MAX_METADATA: usize = 1024 * 1024;
+pub const NETWORK_EXTENSION_MANIFEST: &str = "application/vnd.bexos.net.filter.v1";
+pub const NETWORK_EXTENSION_CONFIG: &str = "application/vnd.bexos.net.filter.config.v1+json";
+pub const NETWORK_EXTENSION_WASM: &str = "application/vnd.bexos.net.filter.wasm.v1";
+pub const NETWORK_EXTENSION_ABI: &str = "vpp-wasm-v1";
+
+pub struct NetworkExtensionLayer {
+    pub bytes: std::rc::Rc<crate::payload::Payload>,
+    pub digest: [u8; 32],
+    pub length: u64,
+}
 pub struct Oci<T> {
     pub transport: T,
     pub repository: Repository,
@@ -14,6 +24,56 @@ pub struct Oci<T> {
     pub credential_generation: u64,
 }
 impl<T: Transport + Clone + 'static> Oci<T> {
+    pub async fn network_extension(
+        &mut self,
+        manifest: &[u8],
+        maximum: u64,
+    ) -> Result<NetworkExtensionLayer> {
+        let json: serde_json::Value =
+            serde_json::from_slice(manifest).map_err(|_| Error::VerifyFailed)?;
+        if json["schemaVersion"] != 2
+            || json["mediaType"] != "application/vnd.oci.image.manifest.v1+json"
+            || json["artifactType"] != NETWORK_EXTENSION_MANIFEST
+            || json["annotations"]["org.bexos.network.abi"] != NETWORK_EXTENSION_ABI
+        {
+            return Err(Error::VerifyFailed);
+        }
+        let config = &json["config"];
+        if config["mediaType"] != NETWORK_EXTENSION_CONFIG {
+            return Err(Error::VerifyFailed);
+        }
+        let config_digest = parse_digest(config["digest"].as_str().ok_or(Error::VerifyFailed)?)?;
+        let config_size = config["size"]
+            .as_u64()
+            .filter(|size| *size > 0 && *size <= 64 * 1024)
+            .ok_or(Error::VerifyFailed)?;
+        let config_bytes = self.blob(&config_digest, config_size).await?;
+        let config_json: serde_json::Value =
+            serde_json::from_slice(&config_bytes).map_err(|_| Error::VerifyFailed)?;
+        if config_json["abi"] != NETWORK_EXTENSION_ABI {
+            return Err(Error::VerifyFailed);
+        }
+        let layer = json["layers"]
+            .as_array()
+            .filter(|layers| layers.len() == 1)
+            .and_then(|layers| layers.first())
+            .ok_or(Error::VerifyFailed)?;
+        if layer["mediaType"] != NETWORK_EXTENSION_WASM {
+            return Err(Error::VerifyFailed);
+        }
+        let digest = parse_digest(layer["digest"].as_str().ok_or(Error::VerifyFailed)?)?;
+        let length = layer["size"]
+            .as_u64()
+            .filter(|size| *size > 0 && *size <= maximum)
+            .ok_or(Error::VerifyFailed)?;
+        let bytes = self.payload(&digest, length).await?;
+        Ok(NetworkExtensionLayer {
+            bytes,
+            digest,
+            length,
+        })
+    }
+
     pub async fn role(&mut self, tag: &str, role: &str) -> Result<Vec<u8>> {
         let path = format!("/v2/{}/manifests/{tag}", self.repository.repository);
         let manifest = self.fetch(&path, MAX_METADATA).await?;

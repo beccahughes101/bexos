@@ -13,6 +13,22 @@ services_exposed {
   bind_permission: "BEXOS_SYSTEM_PRIVILEGED"
   capabilities { capability: "Control" method_ordinals: 1 method_ordinals: 2 method_ordinals: 3 method_ordinals: 4 }
 }
+services_exposed {
+  name: "bexos.net.SwitchRoutingController"
+  protocol: "SwitchRoutingController"
+  lifecycle: SINGLETON
+  visibility: PUBLIC
+  bind_permission: "BEXOS_SYSTEM_PRIVILEGED"
+  capabilities { capability: "Control" method_ordinals: 1 method_ordinals: 2 method_ordinals: 3 method_ordinals: 4 method_ordinals: 5 }
+}
+services_exposed {
+  name: "bexos.net.SwitchExtensionController"
+  protocol: "SwitchExtensionController"
+  lifecycle: SINGLETON
+  visibility: PUBLIC
+  bind_permission: "BEXOS_SYSTEM_PRIVILEGED"
+  capabilities { capability: "Control" method_ordinals: 1 method_ordinals: 2 method_ordinals: 3 }
+}
 services_consumed {
   name: "bexos.hardware.ethernet.Device"
   link_type: REQUIRED

@@ -12,7 +12,13 @@ type PackageStatus = strict enum : int32 {
     TIMED_OUT = -6;
 };
 type HashType = strict enum : uint8 { SHA256 = 1; BLAKE3 = 2; };
-type ArtifactKind = strict enum : uint8 { APPLICATION = 1; DRIVER = 2; FONT = 3; FIRMWARE = 4; };
+type ArtifactKind = strict enum : uint8 {
+    APPLICATION = 1;
+    DRIVER = 2;
+    FONT = 3;
+    FIRMWARE = 4;
+    NETWORK_EXTENSION = 5;
+};
 struct BlobDigest { hash_type HashType; digest array<uint8, 32>; };
 struct ArtifactQuery {
     registry_host string:128;

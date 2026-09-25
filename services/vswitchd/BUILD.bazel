@@ -11,12 +11,51 @@ rust_library(
     crate_name = "bexos_vswitchd",
     edition = "2024",
     rustc_flags = guest_select([], ["--cfg=bexos_arch_x86_64"]),
-    deps = ["//idl:ethernet_fidl_rust", "//idl:kernel_fidl_rust", "//idl:net_fidl_rust", "//lib/migration", "//lib/network_policy", "//lib/userspace"],
+    compile_data = [
+        "//extensions/network/firewall:firewall_wasm",
+        "//extensions/network/nat:nat_wasm",
+    ],
+    rustc_env = {
+        "BEXOS_FIREWALL_WASM": "$(execpath //extensions/network/firewall:firewall_wasm)",
+        "BEXOS_NAT_WASM": "$(execpath //extensions/network/nat:nat_wasm)",
+    },
+    deps = [
+        "//idl:ethernet_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//idl:net_fidl_rust",
+        "//lib/migration",
+        "//lib/network_extension_abi",
+        "//lib/network_policy",
+        "//lib/userspace",
+        "//lib/wasm_abi",
+        "//lib/wasm_engine",
+        "//lib/wasm_runtime",
+        "@crates//:wasmtime",
+        "@crates//:sha2",
+    ],
 )
 
 std_service_binary(name = "vswitchd_elf", srcs = ["src/main.rs"], crate_name = "vswitchd_elf", deps = [":vswitchd"])
 std_service_binary(name = "replacement_elf", srcs = ["src/main.rs"], crate_name = "vswitchd_replacement_elf", deps = [":vswitchd"])
-rust_test(name = "internal_tests", crate = ":vswitchd")
+rust_test(name = "internal_tests", crate = ":vswitchd", deps = ["@crates//:wat"])
 app_manifest(name = "package_manifest", src = "package/vswitchd.prototxt")
-app_archive(name = "vswitchd_archive", manifest = ":package_manifest", entries = {"bin/vswitchd": ":vswitchd_elf"}, compression = "zstd")
-app_archive(name = "replacement_archive", manifest = ":package_manifest", entries = {"bin/vswitchd": ":replacement_elf"}, compression = "zstd")
+app_archive(
+    name = "vswitchd_archive",
+    manifest = ":package_manifest",
+    entries = {
+        "bin/vswitchd": ":vswitchd_elf",
+        "data/extensions/firewall.wasm": "//extensions/network/firewall:firewall_wasm",
+        "data/extensions/nat.wasm": "//extensions/network/nat:nat_wasm",
+    },
+    compression = "zstd",
+)
+app_archive(
+    name = "replacement_archive",
+    manifest = ":package_manifest",
+    entries = {
+        "bin/vswitchd": ":replacement_elf",
+        "data/extensions/firewall.wasm": "//extensions/network/firewall:firewall_wasm",
+        "data/extensions/nat.wasm": "//extensions/network/nat:nat_wasm",
+    },
+    compression = "zstd",
+)

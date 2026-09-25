@@ -6183,7 +6183,7 @@ fn networkd_config_snapshot(
         .find(|group| group.name == instance_id)?;
     let mut policy = Encoder::new();
     policy.word(0x4e45_5450_4f4c_3031);
-    policy.word(1);
+    policy.word(2);
     policy.text(instance_id);
     policy.word(config.network_policy.max_dynamic_providers as u64);
     let domains = config
@@ -6257,6 +6257,54 @@ fn networkd_config_snapshot(
         policy.text(&upstream.doh_path);
         policy.word(upstream.priority as u64);
     }
+    let routed = config
+        .network_policy
+        .routed_interfaces
+        .iter()
+        .filter(|interface| {
+            group.table_ids.contains(&interface.table_id) && interface.routing_enabled
+        })
+        .collect::<Vec<_>>();
+    policy.word(routed.len() as u64);
+    for interface in routed {
+        policy.word(interface.interface_id);
+        policy.word(interface.physical_interface);
+        policy.word(interface.virtual_port);
+        policy.word(interface.table_id as u64);
+        policy.word(interface.bridge_domain as u64);
+        policy.word(interface.vlan_id as u64);
+        policy.bytes(&interface.mac);
+        policy.word(interface.mtu as u64);
+        policy.word(interface.security_zone as u64);
+        policy.word(interface.addresses.len() as u64);
+        for address in &interface.addresses {
+            policy.bytes(&address.address);
+            policy.word(address.prefix_len as u64);
+        }
+    }
+    let switch_routes = config
+        .network_policy
+        .switch_routes
+        .iter()
+        .filter(|route| group.table_ids.contains(&route.table_id))
+        .collect::<Vec<_>>();
+    policy.word(switch_routes.len() as u64);
+    for route in switch_routes {
+        policy.word(route.table_id as u64);
+        policy.bytes(&route.destination.address);
+        policy.word(route.destination.prefix_len as u64);
+        policy.bytes(&route.gateway);
+        policy.word(route.interface_id);
+        policy.word(route.metric as u64);
+    }
+    policy.bytes(&firewall_extension_config(&config.network_policy.firewall)?);
+    encode_extension_artifact(
+        &mut policy,
+        &config.network_policy.firewall.desired_artifact,
+    );
+    policy.word(config.network_policy.nat.enabled as u64);
+    policy.bytes(&nat_extension_config(&config.network_policy.nat)?);
+    encode_extension_artifact(&mut policy, &config.network_policy.nat.desired_artifact);
     let mut values = manifest
         .config_schema
         .resolve(
@@ -6292,6 +6340,117 @@ fn networkd_config_snapshot(
         crate::ComponentConfigValue::Bytes(policy.finish()),
     );
     manifest.config_schema.encode_table(&values, 0).ok()
+}
+
+fn encode_extension_artifact(
+    out: &mut bexos_migration::codec::Encoder,
+    artifact: &crate::platform_config::NetworkExtensionArtifact,
+) {
+    out.text(&artifact.registry_host);
+    out.text(&artifact.repository);
+    out.text(&artifact.tag);
+    out.bytes(&artifact.expected_digest);
+    out.text(&artifact.media_type);
+    out.text(&artifact.abi);
+}
+
+fn firewall_extension_config(
+    firewall: &crate::platform_config::NetworkFirewallPolicy,
+) -> Option<Vec<u8>> {
+    if firewall.rules.len() > 128 {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(8 + firewall.rules.len() * 56);
+    bytes.extend_from_slice(b"NFW1");
+    bytes.extend_from_slice(&(firewall.rules.len() as u16).to_le_bytes());
+    bytes.extend_from_slice(&[0; 2]);
+    for rule in &firewall.rules {
+        let mut encoded = [0u8; 56];
+        encoded[0] = u8::from(rule.allow);
+        encoded[1] = match rule.direction.as_str() {
+            "physical_ingress" | "inbound" => 1,
+            "virtual_ingress" | "outbound" => 2,
+            _ => 0,
+        };
+        encoded[2] = rule.protocol;
+        encoded[3] = match rule.connection_state.as_str() {
+            "new" => 1,
+            "established" | "related" => 2,
+            _ => 0,
+        };
+        let source_zone = rule.source_zone.parse::<u16>().unwrap_or(0);
+        let destination_zone = rule.destination_zone.parse::<u16>().unwrap_or(0);
+        encoded[4..6].copy_from_slice(&source_zone.to_le_bytes());
+        encoded[6..8].copy_from_slice(&destination_zone.to_le_bytes());
+        encoded[8] = rule.source.prefix_len;
+        encoded[9] = rule.destination.prefix_len;
+        copy_ip(&mut encoded[12..28], &rule.source.address)?;
+        copy_ip(&mut encoded[28..44], &rule.destination.address)?;
+        encoded[44..46].copy_from_slice(&rule.source_port_start.to_le_bytes());
+        encoded[46..48].copy_from_slice(
+            &rule
+                .source_port_end
+                .max(rule.source_port_start)
+                .to_le_bytes(),
+        );
+        encoded[48..50].copy_from_slice(&rule.destination_port_start.to_le_bytes());
+        encoded[50..52].copy_from_slice(
+            &rule
+                .destination_port_end
+                .max(rule.destination_port_start)
+                .to_le_bytes(),
+        );
+        encoded[52] = match rule.icmp_type {
+            Some(value) => u8::try_from(value).ok()?,
+            None => u8::MAX,
+        };
+        encoded[53] = match rule.icmp_code {
+            Some(value) => u8::try_from(value).ok()?,
+            None => u8::MAX,
+        };
+        bytes.extend_from_slice(&encoded);
+    }
+    Some(bytes)
+}
+
+fn nat_extension_config(nat: &crate::platform_config::NetworkNatPolicy) -> Option<Vec<u8>> {
+    if !nat.enabled {
+        return Some(Vec::new());
+    }
+    let external: [u8; 4] = nat.external_ipv4_pool.first()?.as_slice().try_into().ok()?;
+    if nat.port_forwards.len() > 128 {
+        return None;
+    }
+    let mut bytes = vec![0u8; 48 + nat.port_forwards.len() * 16];
+    bytes[..4].copy_from_slice(b"NAT1");
+    bytes[4..8].copy_from_slice(&external);
+    bytes[8..10].copy_from_slice(&nat.ephemeral_port_start.to_le_bytes());
+    bytes[10..12].copy_from_slice(&nat.ephemeral_port_end.to_le_bytes());
+    bytes[12] = nat.nptv6_internal.prefix_len;
+    bytes[14..16].copy_from_slice(&(nat.port_forwards.len() as u16).to_le_bytes());
+    copy_ip(&mut bytes[16..32], &nat.nptv6_internal.address)?;
+    copy_ip(&mut bytes[32..48], &nat.nptv6_external.address)?;
+    for (index, forward) in nat.port_forwards.iter().enumerate() {
+        let start = 48 + index * 16;
+        let external: [u8; 4] = forward.external_address.as_slice().try_into().ok()?;
+        let internal: [u8; 4] = forward.internal_address.as_slice().try_into().ok()?;
+        bytes[start..start + 4].copy_from_slice(&external);
+        bytes[start + 4..start + 6].copy_from_slice(&forward.external_port.to_le_bytes());
+        bytes[start + 6..start + 10].copy_from_slice(&internal);
+        bytes[start + 10..start + 12].copy_from_slice(&forward.internal_port.to_le_bytes());
+        bytes[start + 12] = forward.protocol;
+    }
+    Some(bytes)
+}
+
+fn copy_ip(out: &mut [u8], address: &[u8]) -> Option<()> {
+    match address.len() {
+        0 => out.fill(0),
+        4 => out[..4].copy_from_slice(address),
+        16 => out.copy_from_slice(address),
+        _ => return None,
+    }
+    Some(())
 }
 
 fn mark_launch_failed(registry: &mut MemoryAppRegistry, record: &bexos_app_registry::AppRecord) {

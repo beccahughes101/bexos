@@ -38,6 +38,7 @@ image/autoinstall set. The storage-image packages are preinstalled on the
 - [Kernel](kernel.md): `//kernel` and `//kernel/core` responsibilities.
 - [Appd And Userspace](appd-userspace.md): manifest handling, broker, lifecycle, runners, namespace, config, waves, and migration.
 - [WASM Runtime](wasm-runtime.md): implementation status, guest interfaces, limits, lifecycle, and verification.
+- [Networking](networking.md): isolated netstacks, native routed switching, firewall/NAT extensions, and recovery ownership.
 - [System and User UI](sysui.md): package selection, authentication, desktop windows, isolation, and recovery.
 - [Dioxus WASM native UI](dioxus.md): Rust WASI component apps, shared UI component packaging, native GPU/CPU rendering, input, and transplant behavior.
 - [Localization](localization.md): compiled Fluent catalogs, shared CLDR data, locale preferences, native/WASM ownership, and current coverage.
@@ -311,8 +312,9 @@ boundaries are:
   platform prototxt. Networkd implements RFC 61 provider routing, domain-scoped
   sockets, split DNS over UDP/DoT/DoH, proxy hostname delegation, and endpoint
   escrow. Netstackd enforces VRF/FIB/interface scope and uses smoltcp for
-  dual-stack TCP/UDP. Vswitchd owns the physical NIC and enforces virtual-port
-  MAC/VLAN isolation. All three services support heart transplant; netstackd
+  dual-stack TCP/UDP. Vswitchd owns the physical NIC, enforces virtual-port
+  MAC/VLAN isolation, and runs the explicit routed L2/L3 graph plus sandboxed
+  firewall/NAT hooks. All three services support heart transplant; netstackd
   also emits generation-gated recovery journals used for crash adoption.
 - **Time and power policy:** timed applies initial/failed/manual corrections as
   realtime steps, slews bounded subsequent network corrections through the

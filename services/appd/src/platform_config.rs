@@ -25,6 +25,10 @@ pub struct NetworkPolicy {
     pub dns_upstreams: Vec<NetworkDnsUpstream>,
     pub resource_templates: Vec<NetworkResourceTemplate>,
     pub max_dynamic_providers: u32,
+    pub routed_interfaces: Vec<NetworkRoutedInterface>,
+    pub switch_routes: Vec<NetworkSwitchRoute>,
+    pub firewall: NetworkFirewallPolicy,
+    pub nat: NetworkNatPolicy,
 }
 
 impl Default for NetworkPolicy {
@@ -43,6 +47,10 @@ impl Default for NetworkPolicy {
             dns_upstreams: Vec::new(),
             resource_templates: Vec::new(),
             max_dynamic_providers: 64,
+            routed_interfaces: Vec::new(),
+            switch_routes: Vec::new(),
+            firewall: NetworkFirewallPolicy::default(),
+            nat: NetworkNatPolicy::default(),
         }
     }
 }
@@ -102,6 +110,85 @@ pub struct NetworkRoute {
     pub gateway: Vec<u8>,
     pub interface_id: u64,
     pub metric: u32,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct NetworkRoutedInterface {
+    pub interface_id: u64,
+    pub physical_interface: u64,
+    pub virtual_port: u64,
+    pub table_id: u32,
+    pub bridge_domain: u32,
+    pub vlan_id: u16,
+    pub mac: Vec<u8>,
+    pub mtu: u32,
+    pub addresses: Vec<NetworkIpPrefix>,
+    pub security_zone: u16,
+    pub routing_enabled: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct NetworkSwitchRoute {
+    pub table_id: u32,
+    pub destination: NetworkIpPrefix,
+    pub gateway: Vec<u8>,
+    pub interface_id: u64,
+    pub metric: u32,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct NetworkExtensionArtifact {
+    pub registry_host: String,
+    pub repository: String,
+    pub tag: String,
+    pub expected_digest: Vec<u8>,
+    pub media_type: String,
+    pub abi: String,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct NetworkFirewallRule {
+    pub source_zone: String,
+    pub destination_zone: String,
+    pub direction: String,
+    pub source: NetworkIpPrefix,
+    pub destination: NetworkIpPrefix,
+    pub protocol: u8,
+    pub source_port_start: u16,
+    pub source_port_end: u16,
+    pub destination_port_start: u16,
+    pub destination_port_end: u16,
+    pub icmp_type: Option<u32>,
+    pub icmp_code: Option<u32>,
+    pub connection_state: String,
+    pub allow: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct NetworkFirewallPolicy {
+    pub rules: Vec<NetworkFirewallRule>,
+    pub desired_artifact: NetworkExtensionArtifact,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct NetworkNatPolicy {
+    pub enabled: bool,
+    pub external_ipv4_pool: Vec<Vec<u8>>,
+    pub ephemeral_port_start: u16,
+    pub ephemeral_port_end: u16,
+    pub port_forwards: Vec<NetworkNatPortForward>,
+    pub nptv6_internal: NetworkIpPrefix,
+    pub nptv6_external: NetworkIpPrefix,
+    pub desired_artifact: NetworkExtensionArtifact,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct NetworkNatPortForward {
+    pub external_address: Vec<u8>,
+    pub external_port: u16,
+    pub internal_address: Vec<u8>,
+    pub internal_port: u16,
+    pub protocol: u8,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -656,6 +743,14 @@ fn decode_network_policy(bytes: &[u8]) -> Result<NetworkPolicy, ManifestError> {
                 .resource_templates
                 .push(decode_network_resource_template(field.bytes()?)?),
             7 => policy.max_dynamic_providers = field.varint()? as u32,
+            8 => policy
+                .routed_interfaces
+                .push(decode_network_routed_interface(field.bytes()?)?),
+            9 => policy
+                .switch_routes
+                .push(decode_network_switch_route(field.bytes()?)?),
+            10 => policy.firewall = decode_network_firewall_policy(field.bytes()?)?,
+            11 => policy.nat = decode_network_nat_policy(field.bytes()?)?,
             _ => {}
         }
     }
@@ -663,6 +758,142 @@ fn decode_network_policy(bytes: &[u8]) -> Result<NetworkPolicy, ManifestError> {
         policy.max_dynamic_providers = 64;
     }
     Ok(policy)
+}
+
+fn decode_network_routed_interface(bytes: &[u8]) -> Result<NetworkRoutedInterface, ManifestError> {
+    let mut value = NetworkRoutedInterface::default();
+    let mut cursor = Cursor::new(bytes);
+    while let Some(field) = cursor.next_field()? {
+        match field.number {
+            1 => value.interface_id = field.varint()?,
+            2 => value.physical_interface = field.varint()?,
+            3 => value.virtual_port = field.varint()?,
+            4 => value.table_id = field.varint()? as u32,
+            5 => value.bridge_domain = field.varint()? as u32,
+            6 => value.vlan_id = field.varint()? as u16,
+            7 => value.mac = field.bytes()?.to_vec(),
+            8 => value.mtu = field.varint()? as u32,
+            9 => value
+                .addresses
+                .push(decode_network_ip_prefix(field.bytes()?)?),
+            10 => value.security_zone = field.varint()? as u16,
+            11 => value.routing_enabled = field.varint()? != 0,
+            _ => {}
+        }
+    }
+    Ok(value)
+}
+
+fn decode_network_switch_route(bytes: &[u8]) -> Result<NetworkSwitchRoute, ManifestError> {
+    let mut value = NetworkSwitchRoute::default();
+    let mut cursor = Cursor::new(bytes);
+    while let Some(field) = cursor.next_field()? {
+        match field.number {
+            1 => value.table_id = field.varint()? as u32,
+            2 => value.destination = decode_network_ip_prefix(field.bytes()?)?,
+            3 => value.gateway = field.bytes()?.to_vec(),
+            4 => value.interface_id = field.varint()?,
+            5 => value.metric = field.varint()? as u32,
+            _ => {}
+        }
+    }
+    Ok(value)
+}
+
+fn decode_network_extension_artifact(
+    bytes: &[u8],
+) -> Result<NetworkExtensionArtifact, ManifestError> {
+    let mut value = NetworkExtensionArtifact::default();
+    let mut cursor = Cursor::new(bytes);
+    while let Some(field) = cursor.next_field()? {
+        match field.number {
+            1 => value.registry_host = field.string()?,
+            2 => value.repository = field.string()?,
+            3 => value.tag = field.string()?,
+            4 => value.expected_digest = field.bytes()?.to_vec(),
+            5 => value.media_type = field.string()?,
+            6 => value.abi = field.string()?,
+            _ => {}
+        }
+    }
+    Ok(value)
+}
+
+fn decode_network_firewall_policy(bytes: &[u8]) -> Result<NetworkFirewallPolicy, ManifestError> {
+    let mut value = NetworkFirewallPolicy::default();
+    let mut cursor = Cursor::new(bytes);
+    while let Some(field) = cursor.next_field()? {
+        match field.number {
+            1 => value
+                .rules
+                .push(decode_network_firewall_rule(field.bytes()?)?),
+            2 => value.desired_artifact = decode_network_extension_artifact(field.bytes()?)?,
+            _ => {}
+        }
+    }
+    Ok(value)
+}
+
+fn decode_network_firewall_rule(bytes: &[u8]) -> Result<NetworkFirewallRule, ManifestError> {
+    let mut value = NetworkFirewallRule::default();
+    let mut cursor = Cursor::new(bytes);
+    while let Some(field) = cursor.next_field()? {
+        match field.number {
+            1 => value.source_zone = field.string()?,
+            2 => value.destination_zone = field.string()?,
+            3 => value.direction = field.string()?,
+            4 => value.source = decode_network_ip_prefix(field.bytes()?)?,
+            5 => value.destination = decode_network_ip_prefix(field.bytes()?)?,
+            6 => value.protocol = field.varint()? as u8,
+            7 => value.source_port_start = field.varint()? as u16,
+            8 => value.source_port_end = field.varint()? as u16,
+            9 => value.destination_port_start = field.varint()? as u16,
+            10 => value.destination_port_end = field.varint()? as u16,
+            11 => value.icmp_type = Some(field.varint()? as u32),
+            12 => value.icmp_code = Some(field.varint()? as u32),
+            13 => value.connection_state = field.string()?,
+            14 => value.allow = field.varint()? != 0,
+            _ => {}
+        }
+    }
+    Ok(value)
+}
+
+fn decode_network_nat_policy(bytes: &[u8]) -> Result<NetworkNatPolicy, ManifestError> {
+    let mut value = NetworkNatPolicy::default();
+    let mut cursor = Cursor::new(bytes);
+    while let Some(field) = cursor.next_field()? {
+        match field.number {
+            1 => value.enabled = field.varint()? != 0,
+            2 => value.external_ipv4_pool.push(field.bytes()?.to_vec()),
+            3 => value.ephemeral_port_start = field.varint()? as u16,
+            4 => value.ephemeral_port_end = field.varint()? as u16,
+            5 => value
+                .port_forwards
+                .push(decode_network_nat_port_forward(field.bytes()?)?),
+            6 => value.nptv6_internal = decode_network_ip_prefix(field.bytes()?)?,
+            7 => value.nptv6_external = decode_network_ip_prefix(field.bytes()?)?,
+            8 => value.desired_artifact = decode_network_extension_artifact(field.bytes()?)?,
+            _ => {}
+        }
+    }
+    Ok(value)
+}
+
+fn decode_network_nat_port_forward(bytes: &[u8]) -> Result<NetworkNatPortForward, ManifestError> {
+    let mut value = NetworkNatPortForward::default();
+    let mut cursor = Cursor::new(bytes);
+    while let Some(field) = cursor.next_field()? {
+        match field.number {
+            1 => value.external_address = field.bytes()?.to_vec(),
+            2 => value.external_port = field.varint()? as u16,
+            3 => value.internal_address = field.bytes()?.to_vec(),
+            4 => value.internal_port = field.varint()? as u16,
+            5 => value.protocol = field.varint()? as u8,
+            _ => {}
+        }
+    }
+    Ok(value)
 }
 
 fn decode_network_isolation_group(bytes: &[u8]) -> Result<NetworkIsolationGroup, ManifestError> {

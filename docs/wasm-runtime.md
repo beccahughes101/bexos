@@ -70,6 +70,15 @@ growth preserves the previous logical length and all existing data. VMAR separat
 validation, bounds checks, and checked host interfaces enforce the guest boundary.
 The trusted runner and engine share the process address space.
 
+Vswitchd reuses the same BexOS memory and Pulley-stack platform adapter for a
+distinct RFC 71 network-extension profile. These guests are raw core modules,
+not WASI applications: monotonic time is the only import. Each call copies a
+validated vector of at most 256 packet descriptors and bounded packet bytes
+into guest linear memory. The host copies bytes back only for validated
+`REWRITE` actions, meters every vector with fuel and a 500 microsecond epoch
+watchdog, quarantines traps, and applies the module's fail-open or fail-closed
+policy. Direct VMO aliasing and native guest JIT remain future designs.
+
 Native service dispatches receive a fresh, bounded manifest fuel allowance on
 each call; commands and child admission keep their existing finite budgets.
 Migration snapshots are prepared for pending migration requests at safe points,

@@ -43,6 +43,31 @@ pub enum SwitchError {
     QueueFull,
     Spoofed,
     StaleGeneration,
+    InvalidRoute,
+    InvalidNeighbor,
+    InvalidExtension,
+    InUse,
+    TtlExpired,
+    MtuExceeded,
+}
+
+impl VirtualSwitch {
+    /// Enqueues a frame for one explicit virtual endpoint. Routed delivery uses
+    /// this instead of the bridge fan-out path so VRFs and bridge domains
+    /// cannot leak packets into one another.
+    pub fn ingress_to_port(&mut self, port_id: u64, bytes: &[u8]) -> Result<(), SwitchError> {
+        FrameHeader::parse(bytes)?;
+        let port = self.ports.get_mut(&port_id).ok_or(SwitchError::NotFound)?;
+        if port.rx.len().saturating_add(port.delivered_rx.len()) >= port.policy.rx_capacity {
+            port.dropped_rx = port.dropped_rx.saturating_add(1);
+            return Err(SwitchError::QueueFull);
+        }
+        port.rx.push_back(QueuedFrame {
+            generation: port.committed_generation.saturating_add(1),
+            bytes: bytes.to_vec(),
+        });
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
