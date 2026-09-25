@@ -79,7 +79,8 @@ fn prototxt_wasm_options_decode() {
 }
 #[test]
 fn wasm_launch_keeps_consumer_identity_and_sends_payload_prelude() {
-    let manifest = manifest();
+    let mut manifest = manifest();
+    manifest.architecture = bexos_app_manifest::Architecture::Multi;
     let mut kernel = FakeKernelOps::new();
     let result = RunnerRegistry::new()
         .launch(

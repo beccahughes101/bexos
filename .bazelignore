@@ -1,1 +1,3 @@
 third_party/linux_nvme
+testing/out_of_tree_sdk/fixture
+testing/out_of_tree_sdk/prebuilt_repository

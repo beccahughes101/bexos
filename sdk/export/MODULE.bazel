@@ -1,0 +1,51 @@
+module(name = "bexos_sdk", version = "0.1.0")
+
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "protobuf", version = "36.0.bcr.1")
+bazel_dep(name = "rules_proto", version = "7.1.0")
+bazel_dep(name = "rules_rust", version = "0.73.0")
+bazel_dep(name = "rules_cc", version = "0.2.22")
+
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(
+    edition = "2024",
+    extra_rustc_flags_triples = {
+        "aarch64-unknown-linux-gnu": [
+            "-Z",
+            "branch-protection=bti,pac-ret,leaf",
+            "-C",
+            "unsafe-allow-abi-mismatch=branch-protection",
+        ],
+    },
+    extra_target_triples = [
+        "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-gnu",
+        "wasm32-wasip2",
+    ],
+    versions = ["nightly/2026-07-16"],
+)
+use_repo(rust, "rust_toolchains")
+register_toolchains("@rust_toolchains//:all")
+register_toolchains(
+    "//platforms:aarch64_cc_toolchain",
+    "//platforms:wasm32_cc_toolchain",
+    "//platforms:x86_64_cc_toolchain",
+)
+
+# Portable applications use the SDK-owned lifecycle bindings. Keep this crate
+# universe isolated so consuming workspaces do not need to supply or align a
+# wit-bindgen dependency of their own.
+sdk_crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+sdk_crate.spec(package = "wit-bindgen", version = "=0.58.0")
+sdk_crate.from_specs(
+    cargo_lockfile = "//:sdk-Cargo.lock",
+    lockfile = "//:sdk-crates-lock.json",
+    name = "sdk_crates",
+    supported_platform_triples = [
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-gnu",
+        "wasm32-wasip2",
+    ],
+)
+use_repo(sdk_crate, "sdk_crates")

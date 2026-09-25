@@ -54,3 +54,39 @@ label, cannot be installed, selected, launched or activated as replacements.
 Old durable records remain intact and appear unavailable with a rebuild/reinstall
 diagnostic, so one old package does not prevent unrelated packages from loading.
 No loader rewrites signed manifests or infers a missing label from an ELF.
+## Verified out-of-tree applications
+
+Products import a signed archive with `bexos_prebuilt_app`. Analysis invokes
+the BEXARCV2 verifier and accepts only the configured signer key and package
+ID, ABI level 1, compatible manifest/ELF architecture, application package
+kind, and transplantable services. Package code is never executed during
+assembly. The original signed bytes are installed in encrypted `STORAGE` at
+`pkg/<package_id>.bex`; the same ID is added to `base_packages` and optionally
+to `autoinstall_packages` in the system-image manifest. Duplicate package IDs
+or storage destinations fail the build.
+
+The `public_key` input is a prototxt signer record with a 32-byte `key_id` and
+Ed25519 `public_key_hex`. Its public key must also be authorized by the target
+image's application signing roots. External archives retain their signed
+default component configuration; product rewriting or resigning is not part of
+SDK v1.
+
+Published application archives should be pinned as content, not executed as
+repository rules. For example:
+
+```starlark
+http_file(
+    name = "vendor_clock",
+    urls = ["https://downloads.example/vendor-clock-1.2.3.bex"],
+    sha256 = "<verified sha256>",
+    downloaded_file_path = "vendor-clock.bex",
+)
+
+bexos_prebuilt_app(
+    name = "vendor_clock",
+    archive = "@vendor_clock//file",
+    package_id = "com.example.vendor_clock",
+    public_key = "//product/keys:vendor_clock_signer.prototxt",
+    autoinstall = True,
+)
+```

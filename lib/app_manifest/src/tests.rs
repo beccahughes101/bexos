@@ -1,4 +1,5 @@
 use super::*;
+use alloc::vec;
 const NATIVE: &[u8] = &[0x1a, 5, 0x12, 3, b'e', b'l', b'f'];
 #[test]
 fn omitted_defaults_to_portable() {
@@ -80,5 +81,37 @@ fn elf_payload_must_match_declared_machine() {
     assert_eq!(
         validate_payload(Architecture::Multi, &elf),
         Err(Error::NativeArchitectureRequired)
+    );
+}
+
+#[test]
+fn sdk_apps_require_identity_abi_and_transplantable_services() {
+    let process = [0x20, 1, 0x4a, 2, 0x08, 1];
+    let mut manifest = vec![0x0a, 8];
+    manifest.extend_from_slice(b"app.test");
+    manifest.extend_from_slice(&[0x1a, process.len() as u8]);
+    manifest.extend_from_slice(&process);
+    manifest.extend_from_slice(&[0x78, 1]);
+    assert_eq!(
+        validate_sdk_app(&manifest, "app.test", 1),
+        Ok(SdkAppMetadata {
+            package_name: "app.test".into(),
+            min_bexos_abi_version: 1,
+        })
+    );
+    assert_eq!(
+        validate_sdk_app(&manifest, "app.other", 1),
+        Err(Error::InvalidPackage)
+    );
+    assert_eq!(
+        validate_sdk_app(&manifest, "app.test", 0),
+        Err(Error::IncompatibleAbi)
+    );
+
+    let mut restarting = manifest.clone();
+    restarting[17] = 0;
+    assert_eq!(
+        validate_sdk_app(&restarting, "app.test", 1),
+        Err(Error::MissingHeartTransplant)
     );
 }

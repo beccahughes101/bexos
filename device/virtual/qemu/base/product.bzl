@@ -5,10 +5,10 @@ load(":assembly.bzl", "qemu_assembly")
 load(":images.bzl", "qemu_images")
 load(":launch.bzl", "QEMU_RUN_DATA", "QEMU_X86_SECURE_RUN_DATA", "qemu_launchers")
 
-def qemu_product(name, graphics = False, input_fixture = False):
-    qemu_assembly(product = name, graphics = graphics, input_fixture = input_fixture)
+def qemu_product(name, graphics = False, input_fixture = False, prebuilt_apps = []):
+    qemu_assembly(product = name, graphics = graphics, input_fixture = input_fixture, prebuilt_apps = prebuilt_apps)
 
-    qemu_images(graphics = graphics, input_fixture = input_fixture)
+    qemu_images(graphics = graphics, input_fixture = input_fixture, prebuilt_apps = prebuilt_apps)
 
     native.alias(
         name = "launch_config",

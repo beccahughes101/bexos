@@ -1,0 +1,15 @@
+package_name: "com.example.native_service"
+name: "Example native service"
+min_bexos_abi_version: 1
+processes {
+  name: "native_service"
+  runner: "elf"
+  service: true
+  wave: 7
+  lifecycle { update_strategy: HEART_TRANSPLANT }
+  runner_options {
+    [type.googleapis.com/bexos.app.ELFRunnerOptions] {
+      path: "/pkg/bin/native_service"
+    }
+  }
+}

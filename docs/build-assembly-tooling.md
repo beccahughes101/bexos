@@ -68,6 +68,14 @@ Current replacement archives exist for appd, debugd, vfsd, updated, prefsd, and 
 
 ## Product Assembly
 
+Out-of-tree application packages enter product assembly only through
+`bexos_prebuilt_app` in `build/rules/prebuilt_app.bzl`. Its analysis action
+verifies the BEXARCV2 signer, chunks, application/ABI/architecture contract,
+and extracts the manifest without executing package content. Reusable product
+and image rules then add the package as `SYSTEM_IMAGE`, extend the binary
+system-image install manifest, and copy the unchanged signed archive into the
+encrypted BexFS `STORAGE` image.
+
 `assembly_input_bundle`, `bexos_product`, and `product_app_config` in `build/rules/assembly.bzl` compile prototxt product inputs and produce:
 
 - product definition binary;

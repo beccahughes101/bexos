@@ -1,0 +1,24 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "sdk_packager_lib",
+    srcs = ["src/lib.rs"],
+    crate_name = "bexos_sdk_packager",
+    edition = "2024",
+    deps = ["@crates//:sha2"],
+)
+
+rust_binary(
+    name = "sdk_packager",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_sdk_packager_bin",
+    edition = "2024",
+    deps = [":sdk_packager_lib"],
+)
+
+rust_test(
+    name = "sdk_packager_tests",
+    crate = ":sdk_packager_lib",
+)

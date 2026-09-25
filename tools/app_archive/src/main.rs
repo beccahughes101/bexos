@@ -16,8 +16,55 @@ fn run() -> Result<(), String> {
     match args.first().map(String::as_str) {
         Some("create") => create(&args[1..]),
         Some("verify") | Some("inspect") => verify(&args[1..]),
-        _ => Err("usage: bex_archive create|verify ...".to_string()),
+        Some("extract-manifest") => extract_manifest(&args[1..]),
+        _ => Err("usage: bex_archive create|verify|extract-manifest ...".to_string()),
     }
+}
+
+fn extract_manifest(args: &[String]) -> Result<(), String> {
+    let archive_path = required(args, "--archive")?;
+    let public = parse_public_key(
+        &fs::read_to_string(required(args, "--public-key")?)
+            .map_err(|error| format!("read public key: {error}"))?,
+    )?;
+    let bytes = fs::read(&archive_path).map_err(|error| format!("read archive: {error}"))?;
+    let trusted = [TrustedKey {
+        key_id: public.key_id,
+        public_key: &public.public_key,
+    }];
+    let archive = OpenArchive::parse_and_verify(&bytes, &trusted)
+        .map_err(|error| format!("verify archive: {error:?}"))?;
+    let entry = archive
+        .find("package.bexmanifest")
+        .ok_or_else(|| "archive is missing package.bexmanifest".to_string())?;
+    let manifest = archive
+        .read_file(entry)
+        .map_err(|error| format!("read manifest: {error:?}"))?;
+    let architecture = match required(args, "--architecture")?.as_str() {
+        "AARCH64" => bexos_app_manifest::Architecture::Aarch64,
+        "X86_64" => bexos_app_manifest::Architecture::X86_64,
+        value => return Err(format!("unsupported architecture {value}")),
+    };
+    let declared = bexos_app_manifest::ManifestArchitecture::decode(&manifest)
+        .and_then(|metadata| metadata.validate(Some(architecture)))
+        .map_err(|error| format!("manifest architecture: {error:?}"))?;
+    let maximum_abi = required(args, "--maximum-abi-version")?
+        .parse::<u32>()
+        .map_err(|_| "invalid --maximum-abi-version".to_string())?;
+    bexos_app_manifest::validate_sdk_app(&manifest, &required(args, "--package-id")?, maximum_abi)
+        .map_err(|error| format!("manifest contract: {error:?}"))?;
+    for archive_entry in archive.entries() {
+        if archive_entry.path == "package.bexmanifest" {
+            continue;
+        }
+        let payload = archive
+            .read_file(archive_entry)
+            .map_err(|error| format!("read {}: {error:?}", archive_entry.path))?;
+        bexos_app_manifest::validate_payload(declared, &payload)
+            .map_err(|error| format!("payload {}: {error:?}", archive_entry.path))?;
+    }
+    fs::write(required(args, "--out")?, manifest)
+        .map_err(|error| format!("write manifest: {error}"))
 }
 
 fn create(args: &[String]) -> Result<(), String> {
@@ -48,6 +95,10 @@ fn create(args: &[String]) -> Result<(), String> {
     }
     let architecture = bexos_app_manifest::ManifestArchitecture::decode(&owned[0].1)
         .and_then(|m| m.validate(None)).map_err(|e| format!("manifest architecture: {e:?}; rebuild native packages with an explicit architecture"))?;
+    if args.iter().any(|arg| arg == "--sdk-contract") {
+        bexos_app_manifest::validate_sdk_app_contract(&owned[0].1, 1)
+            .map_err(|error| format!("SDK manifest contract: {error:?}"))?;
+    }
     for (path, bytes, _) in &owned[1..] {
         bexos_app_manifest::validate_payload(architecture, bytes)
             .map_err(|e| format!("payload {path}: {e:?}"))?;
@@ -119,9 +170,46 @@ fn parse_private_key(text: &str) -> Result<PrivateKey, String> {
 
 fn parse_public_key(text: &str) -> Result<PublicKey, String> {
     Ok(PublicKey {
-        key_id: parse_hex_field(text, "key_id_hex")?,
-        public_key: parse_hex_field(text, "public_key_hex")?,
+        key_id: parse_key_id(text)?,
+        public_key: parse_hex_field_flexible(text, "public_key_hex")?,
     })
+}
+
+fn parse_key_id(text: &str) -> Result<[u8; 32], String> {
+    if text
+        .lines()
+        .any(|line| line.trim().starts_with("key_id_hex="))
+    {
+        return parse_hex_field(text, "key_id_hex");
+    }
+    let value = parse_text_field(text, "key_id")?;
+    value
+        .as_bytes()
+        .try_into()
+        .map_err(|_| "key_id must contain exactly 32 bytes".to_string())
+}
+
+fn parse_hex_field_flexible<const N: usize>(text: &str, name: &str) -> Result<[u8; N], String> {
+    if text
+        .lines()
+        .any(|line| line.trim().starts_with(&format!("{name}=")))
+    {
+        return parse_hex_field(text, name);
+    }
+    let value = parse_text_field(text, name)?;
+    parse_hex_value(&value, name)
+}
+
+fn parse_text_field(text: &str, name: &str) -> Result<String, String> {
+    text.lines()
+        .find_map(|line| {
+            let value = line.trim().strip_prefix(&format!("{name}:"))?.trim();
+            value
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+                .map(str::to_string)
+        })
+        .ok_or_else(|| format!("missing {name}"))
 }
 
 fn parse_hex_field<const N: usize>(text: &str, name: &str) -> Result<[u8; N], String> {
@@ -129,6 +217,10 @@ fn parse_hex_field<const N: usize>(text: &str, name: &str) -> Result<[u8; N], St
         .lines()
         .find_map(|line| line.trim().strip_prefix(&format!("{name}=")))
         .ok_or_else(|| format!("missing {name}"))?;
+    parse_hex_value(value, name)
+}
+
+fn parse_hex_value<const N: usize>(value: &str, name: &str) -> Result<[u8; N], String> {
     if value.len() != N * 2 {
         return Err(format!("{name} must be {} hex chars", N * 2));
     }

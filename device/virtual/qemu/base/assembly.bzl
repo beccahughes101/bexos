@@ -1,6 +1,6 @@
 """Shared QEMU product configuration and package assembly."""
 load("//build/platforms:architecture.bzl", "guest_select")
-load("//build/rules:assembly.bzl", "assembly_input_bundle", "product_app_config", "starlark_product")
+load("//build/rules:assembly.bzl", "assembly_input_bundle", "product_app_config", "starlark_product", "system_image_with_prebuilt_apps")
 
 QEMU_PRODUCT_MANIFESTS = {
         "//services/pkgd:pkgd_elf": "//services/pkgd:package_manifest",
@@ -72,7 +72,7 @@ QEMU_PRODUCT_MANIFESTS = {
         "//services/vfsd:vfsd_elf": "//services/vfsd:package_manifest",
     }
 
-def qemu_assembly(product, graphics, input_fixture = False):
+def qemu_assembly(product, graphics, input_fixture = False, prebuilt_apps = []):
     native.filegroup(
         name = "config_sources",
         srcs = [
@@ -106,6 +106,7 @@ def qemu_assembly(product, graphics, input_fixture = False):
         entry = "virtual_aarch64",
         bundles = ["//device/base:base", ":aarch64_hardware_aib_bin"] + (["//device/base/graphics:graphics", "//device/virtual/qemu/base/graphics:qemu_graphics"] if graphics else []) + (["//testing/e2e/qemu/graphics/input_fixture:bundle_bin"] if input_fixture else []),
         manifests = {label: manifest for label, manifest in QEMU_PRODUCT_MANIFESTS.items() if "/pc/cmos" not in label},
+        prebuilt_apps = prebuilt_apps,
     )
 
     starlark_product(
@@ -118,6 +119,7 @@ def qemu_assembly(product, graphics, input_fixture = False):
         entry = "virtual_x86_64",
         bundles = ["//device/base:base", ":x86_64_hardware_aib_bin"] + (["//device/base/graphics:graphics", "//device/virtual/qemu/base/graphics:qemu_graphics"] if graphics else []) + (["//testing/e2e/qemu/graphics/input_fixture:bundle_bin"] if input_fixture else []),
         manifests = {label: manifest for label, manifest in QEMU_PRODUCT_MANIFESTS.items() if "/arm/" not in label},
+        prebuilt_apps = prebuilt_apps,
     )
 
     starlark_product(
@@ -130,6 +132,7 @@ def qemu_assembly(product, graphics, input_fixture = False):
         entry = "virtual_x86_64_development",
         bundles = ["//device/base:base", ":x86_64_hardware_aib_bin"] + (["//device/base/graphics:graphics", "//device/virtual/qemu/base/graphics:qemu_graphics"] if graphics else []) + (["//testing/e2e/qemu/graphics/input_fixture:bundle_bin"] if input_fixture else []),
         manifests = {label: ("//services/teed:package_manifest_software" if label == "//services/teed:teed_elf" else manifest) for label, manifest in QEMU_PRODUCT_MANIFESTS.items() if "/arm/" not in label},
+        prebuilt_apps = prebuilt_apps,
     )
 
     product_app_config(
@@ -246,14 +249,21 @@ def qemu_assembly(product, graphics, input_fixture = False):
     )
 
     native.genrule(
-        name = "system_image_bin",
+        name = "system_image_base_bin",
         srcs = [
             ":system_image_prototxt_source",
             "//idl:platform_config_proto_src",
         ],
-        outs = ["system_image.bin"],
+        outs = ["system_image.base.bin"],
         cmd = "$(location @protobuf//:protoc) --proto_path=. --encode=bexos.platform.SystemImageManifest idl/bexos/platform/device.proto < $(location :system_image_prototxt_source) > $@",
         tools = ["@protobuf//:protoc"],
+    )
+
+    system_image_with_prebuilt_apps(
+        name = "system_image_bin",
+        base = ":system_image_base_bin",
+        prebuilt_apps = prebuilt_apps,
+        out = "system_image.bin",
     )
 
     native.genrule(

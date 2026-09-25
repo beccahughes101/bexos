@@ -1,0 +1,13 @@
+package_name: "bexos.sdk.fixture.wasm"
+name: "Out-of-tree SDK WASM fixture"
+min_bexos_abi_version: 1
+processes {
+  name: "wasm_fixture"
+  runner: "wasm"
+  service: true
+  wave: 7
+  lifecycle { update_strategy: HEART_TRANSPLANT }
+  runner_options {
+    [type.googleapis.com/bexos.app.WasmRunnerOptions] { path: "/pkg/bin/wasm_app.wasm" }
+  }
+}

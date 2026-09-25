@@ -1,0 +1,5 @@
+package(default_visibility = ["//visibility:public"])
+
+alias(name = "wasm_app.bex", actual = "@bexos//testing/out_of_tree_sdk/in_tree:wasm_archive")
+alias(name = "native_aarch64_app.bex", actual = "@bexos//testing/out_of_tree_sdk/in_tree:native_archive")
+alias(name = "native_x86_64_app.bex", actual = "@bexos//testing/out_of_tree_sdk/in_tree:native_archive")

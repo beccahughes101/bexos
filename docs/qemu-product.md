@@ -153,3 +153,22 @@ The workstation graphics bundles package the D1 VirtIO-GPU driver, `splashd`,
 and a minimal CPU `scened`, with replacement archives and generated FIDL.
 See [boot UI](bootui.md) for ownership, boot ordering, migration, validation
 commands, and the boundary with the full desktop design.
+## SDK acceptance product
+
+`//device/virtual/qemu/sdk_acceptance` is the dedicated product used to prove
+out-of-tree application ingestion. The bounded E2E scenarios are
+`//testing/e2e/qemu/sdk:sdk_acceptance_aarch64` and
+`//testing/e2e/qemu/sdk:sdk_acceptance_x86_64`. The full external-workspace
+orchestrator is run with:
+
+```sh
+bazel run //testing/out_of_tree_sdk:acceptance -- aarch64 qemu
+bazel run //testing/out_of_tree_sdk:acceptance -- x86_64 qemu
+```
+
+For x86 firmware builds on hosts with a small system volume, set
+`BEXOS_BAZEL_OUTPUT_USER_ROOT` to an absolute directory on a larger build
+volume before invoking the wrapper.
+
+Existing QEMU products receive no imported applications unless their macro is
+passed `prebuilt_apps`.

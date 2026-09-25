@@ -1,0 +1,118 @@
+load(":sdk_archive.bzl", "sdk_archive", "sdk_checksum")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["sdk_archive.bzl"])
+
+filegroup(
+    name = "export_sources",
+    srcs = [
+        "//sdk/export:root_files",
+        "//sdk/export/examples:files",
+        "//sdk/export/idl:files",
+        "//sdk/export/meta:files",
+        "//sdk/export/platforms:files",
+        "//sdk/export/rules:files",
+        "//sdk/export/rust:files",
+        "//sdk/export/tools:files",
+    ],
+)
+
+config_setting(
+    name = "linux_x86_64_host",
+    constraint_values = ["@platforms//os:linux", "@platforms//cpu:x86_64"],
+)
+
+config_setting(
+    name = "macos_aarch64_host",
+    constraint_values = ["@platforms//os:macos", "@platforms//cpu:aarch64"],
+)
+
+sdk_archive(
+    name = "bexos_sdk_linux_x86_64",
+    srcs = [":export_sources", "//idl:sdk_public_sources"],
+    renamed_files = {
+        "//sdk/export/examples:sdk_build": "examples/BUILD.bazel",
+        "//sdk/export/rust:sdk_build": "rust/BUILD.bazel",
+        "meta/linux_x86_64.prototxt": "meta/sdk.prototxt",
+    },
+    tools = {
+        "//tools/app_archive:bex_archive": "tools/bin/bex_archive",
+        "//tools/app_manifest:stamp": "tools/bin/manifest_stamp",
+        "//tools/assembly:bexos_assembly": "tools/bin/bexos_assembly",
+        "//tools/config_compiler:config_compiler": "tools/bin/config_compiler",
+        "//tools/fidlc:fidlc": "tools/bin/fidlc",
+    },
+    out = "bexos-sdk-v0.1.0-linux-x86_64.tar.gz",
+    target_compatible_with = ["@platforms//os:linux", "@platforms//cpu:x86_64"],
+)
+
+sdk_checksum(
+    name = "bexos_sdk_linux_x86_64_sha256",
+    src = ":bexos_sdk_linux_x86_64",
+    out = "bexos-sdk-v0.1.0-linux-x86_64.tar.gz.sha256",
+    target_compatible_with = ["@platforms//os:linux", "@platforms//cpu:x86_64"],
+)
+
+sdk_archive(
+    name = "bexos_sdk_macos_aarch64",
+    srcs = [":export_sources", "//idl:sdk_public_sources"],
+    renamed_files = {
+        "//sdk/export/examples:sdk_build": "examples/BUILD.bazel",
+        "//sdk/export/rust:sdk_build": "rust/BUILD.bazel",
+        "meta/macos_aarch64.prototxt": "meta/sdk.prototxt",
+    },
+    tools = {
+        "//tools/app_archive:bex_archive": "tools/bin/bex_archive",
+        "//tools/app_manifest:stamp": "tools/bin/manifest_stamp",
+        "//tools/assembly:bexos_assembly": "tools/bin/bexos_assembly",
+        "//tools/config_compiler:config_compiler": "tools/bin/config_compiler",
+        "//tools/fidlc:fidlc": "tools/bin/fidlc",
+    },
+    out = "bexos-sdk-v0.1.0-macos-aarch64.tar.gz",
+    target_compatible_with = ["@platforms//os:macos", "@platforms//cpu:aarch64"],
+)
+
+sdk_checksum(
+    name = "bexos_sdk_macos_aarch64_sha256",
+    src = ":bexos_sdk_macos_aarch64",
+    out = "bexos-sdk-v0.1.0-macos-aarch64.tar.gz.sha256",
+    target_compatible_with = ["@platforms//os:macos", "@platforms//cpu:aarch64"],
+)
+
+alias(
+    name = "bexos_sdk",
+    actual = select({
+        ":linux_x86_64_host": ":bexos_sdk_linux_x86_64",
+        ":macos_aarch64_host": ":bexos_sdk_macos_aarch64",
+        "//conditions:default": ":unsupported_host",
+    }),
+)
+
+alias(
+    name = "bexos_sdk_sha256",
+    actual = select({
+        ":linux_x86_64_host": ":bexos_sdk_linux_x86_64_sha256",
+        ":macos_aarch64_host": ":bexos_sdk_macos_aarch64_sha256",
+        "//conditions:default": ":unsupported_host",
+    }),
+)
+
+sh_test(
+    name = "sdk_layout_test",
+    srcs = ["sdk_layout_test.sh"],
+    args = [
+        "$(location :bexos_sdk)",
+        "$(location :bexos_sdk_sha256)",
+    ],
+    data = [
+        ":bexos_sdk",
+        ":bexos_sdk_sha256",
+    ],
+)
+
+filegroup(
+    name = "unsupported_host",
+    srcs = [],
+    target_compatible_with = ["@platforms//:incompatible"],
+)

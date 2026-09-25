@@ -1,0 +1,15 @@
+package_name: "com.example.wasm_service"
+name: "Example portable WASM service"
+min_bexos_abi_version: 1
+processes {
+  name: "wasm_service"
+  runner: "wasm"
+  service: true
+  wave: 7
+  lifecycle { update_strategy: HEART_TRANSPLANT }
+  runner_options {
+    [type.googleapis.com/bexos.app.WasmRunnerOptions] {
+      path: "/pkg/bin/wasm_service.wasm"
+    }
+  }
+}

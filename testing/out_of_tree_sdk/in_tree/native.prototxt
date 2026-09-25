@@ -1,0 +1,13 @@
+package_name: "bexos.sdk.fixture.native"
+name: "Out-of-tree SDK native fixture"
+min_bexos_abi_version: 1
+processes {
+  name: "native_fixture"
+  runner: "elf"
+  service: true
+  wave: 7
+  lifecycle { update_strategy: HEART_TRANSPLANT }
+  runner_options {
+    [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/native_fixture" }
+  }
+}

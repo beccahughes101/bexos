@@ -29,6 +29,7 @@ fn run() -> Result<(), String> {
             fs::write(required(&args, "--out")?, blob).map_err(|e| e.to_string())
         }
         Some("config-rust") => config_rust(&args[1..]),
+        Some("system-image") => system_image(&args[1..]),
         _ => Err("usage: bexos_assembly product|config|config-rust ...".to_string()),
     }
 }
@@ -50,17 +51,28 @@ fn product(args: &[String]) -> Result<(), String> {
             fs::read(path).map_err(|error| format!("read manifest {path}: {error}"))?,
         ));
     }
+    let mut prebuilt_manifests = Vec::new();
+    for spec in repeated(args, "--prebuilt-manifest-bin") {
+        let (label, path) = spec
+            .split_once('=')
+            .ok_or_else(|| "--prebuilt-manifest-bin requires label=path".to_string())?;
+        prebuilt_manifests.push((
+            label.to_string(),
+            fs::read(path).map_err(|error| format!("read manifest {path}: {error}"))?,
+        ));
+    }
     let architecture = match required(args, "--architecture")?.as_str() {
         "aarch64" => bexos_app_manifest::Architecture::Aarch64,
         "x86_64" => bexos_app_manifest::Architecture::X86_64,
         value => return Err(format!("unsupported architecture {value}")),
     };
-    let manifest = bexos_assembly::validate_product_for(
+    let manifest = bexos_assembly::validate_product_with_prebuilt_for(
         ProductInput {
             product: &product,
             bundles: &bundles,
             manifests: &manifests,
         },
+        &prebuilt_manifests,
         architecture,
     )?;
     let index = required(args, "--out-index")?;
@@ -74,6 +86,25 @@ fn product(args: &[String]) -> Result<(), String> {
             .map_err(|error| format!("write system labels: {error}"))?;
     }
     Ok(())
+}
+
+fn system_image(args: &[String]) -> Result<(), String> {
+    let base_path = required(args, "--base")?;
+    let base = fs::read(&base_path).map_err(|error| format!("read {base_path}: {error}"))?;
+    let mut packages = Vec::new();
+    for spec in repeated(args, "--package") {
+        let (package_id, autoinstall) = spec
+            .split_once('=')
+            .ok_or_else(|| "--package requires package_id=true|false".to_string())?;
+        packages.push((
+            package_id.to_string(),
+            autoinstall
+                .parse::<bool>()
+                .map_err(|_| format!("invalid autoinstall value {autoinstall}"))?,
+        ));
+    }
+    let output = bexos_assembly::append_system_image_packages(&base, &packages)?;
+    fs::write(required(args, "--out")?, output).map_err(|error| error.to_string())
 }
 
 fn config(args: &[String]) -> Result<(), String> {

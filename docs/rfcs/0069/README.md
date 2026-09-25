@@ -1,17 +1,34 @@
 # RFC-0069: External SDK Generation, Out-of-Tree Component Development, and System Image Composition
 
 * **Author:** BexOS Toolchain, Infrastructure & Platform Architecture Working Group
-* **Status:** Proposed
+* **Status:** App SDK v1 implemented; later phases proposed
 * **Target Subsystems:** `//sdk`, `//build/rules`, `//tools`, `bex-pkg`, `image_assembler`, `sysui`, `driver_manager`
 * **Applicability:** Out-of-Tree (OOT) Drivers, Third-Party Application Developers, Enterprise Add-ons, System Release Engineering
 
 ---
 
+## Implementation selection (v1)
+
+The implemented first phase deliberately selects the application slice of this
+design: a source-based Bzlmod SDK, signed BEXARCV2 application archives, and
+verified product/image import. The driver/service SDK, distributed sysroot and
+libc binaries, Cargo/CMake interfaces, OCI publication, product-specific
+rewriting/resigning, and a general GPT image assembler remain proposed later
+phases. The longer-term sections below are retained as the design direction;
+[`CURRENT.md`](CURRENT.md) is authoritative for implemented behavior.
+
+The canonical v1 authoring format is a prototxt `bexos.app.Manifest` with
+`min_bexos_abi_version: 1`; `fidlc` is the combined parser and Rust generator;
+and the emitted package is a signed BEXARCV2 archive. Product import installs
+the unchanged archive into encrypted `STORAGE` and references it from the
+system-image manifest. Sysroots, Cargo/CMake, OCI, and a general GPT image
+assembler remain future phases rather than v1 interfaces.
+
 ## 1. Summary
 
 This RFC defines the end-to-end architecture for externalizing the BexOS development platform. It specifies:
 
-1. **The In-Tree SDK Export Pipeline:** A hermetic Bazel packaging target (`//sdk:bexos_sdk`) producing a redistributable sysroot, target Rust standard library wrappers, host compiler toolchains (`fidlc`, `fidlgen_rust`), system IDL definitions, and Bazel/Cargo integration rules.
+1. **The In-Tree SDK Export Pipeline:** A hermetic Bazel packaging target (`//sdk:bexos_sdk`) producing the source-based application runtime, the combined `fidlc` parser/Rust generator, system IDL definitions, host package tools, and Bazel rules. A binary sysroot and Cargo/CMake integration remain future phases.
 2. **The Out-of-Tree (OOT) Development Contract:** A standardized, decoupled developer environment consumed via Bazel Bzlmod (`@bexos_sdk`) or standalone Cargo tooling, allowing vendors to compile proprietary device drivers, services, and native Dioxus applications against stable system ABIs.
 3. **The `.bex` Canonical Package Format:** An authenticated, content-addressed package structure containing manifests, binary execution units (ELF/WASM), and component assets.
 4. **Declarative Product Assembly & Image Ingestion:** A configurable image generation pipeline enabling platform release engineering to compose bootable disk images (`system.raw`, `bootfs`) combining in-tree platform daemons with pre-compiled, out-of-tree vendor packages.
@@ -42,9 +59,9 @@ The platform externalization lifecycle operates as a two-phase unidirectional lo
                                        │ `bazel build //sdk:sdk`
                                        ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ `bexos-sdk-v1.tar.gz` (Redistributable Architecture Bundle)                 │
-│ • Sysroot (libbexos_vdso.so, headers)      • Compilers (fidlc, fidlgen_rust)│
-│ • Bzlmod rules (@bexos_sdk)                • Crate stubs (bexos_driver)     │
+│ `bexos-sdk-v0.1.0-<host>.tar.gz` (Redistributable App SDK)                  │
+│ • Rust app/WASM runtime source             • Combined fidlc generator       │
+│ • Bzlmod rules (@bexos_sdk)                • Signed BEXARCV2 tooling        │
 └──────────────────────────────────────┬──────────────────────────────────────┘
                                        │ Consumed via Bzlmod / Registry
                                        ▼
@@ -63,7 +80,7 @@ The platform externalization lifecycle operates as a two-phase unidirectional lo
 │  ├── In-Tree Base Targets (`//services/networkd`, `//services/pkgd`)       │
 │  └── External Prebuilt Packages (`@prebuilts//:acme_nic.bex`)               │
 │                                                                             │
-│  Emits: GPT Partitioned Disk (`system.raw`, `bootfs.img`)                   │
+│  Emits: system install manifest + encrypted STORAGE image                   │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ```
@@ -72,92 +89,53 @@ The platform externalization lifecycle operates as a two-phase unidirectional lo
 
 ## 4. The SDK Archive Architecture
 
-The SDK is exposed as a single versioned artifact, structured to be consumable by Bazel (via Bzlmod), CMake, or plain Rust Cargo workspaces.
+The v1 SDK is exposed as a versioned Bzlmod artifact. Cargo/CMake consumption
+and binary sysroots remain later phases.
 
 ### 4.1 Archive Physical Structure
 
 ```
 bexos-sdk/
-├── MODULE.bazel                      # Exported module definition
-├── WORKSPACE.bzlmod                  # Legacy workspace compatibility marker
-├── sdk.json                          # Manifest schema, target triple, and API level
-├── sysroot/
-│   ├── include/
-│   │   ├── bexos/
-│   │   │   ├── syscalls.h            # Microkernel syscall definitions
-│   │   │   ├── types.h               # ABI types (zx_handle_t, zx_status_t)
-│   │   │   └── vmar.h
-│   │   └── zircon/                   # Compatibility layer headers
-│   └── lib/
-│       ├── x86_64-unknown-bexos/
-│       │   ├── crt0.o                # C runtime startup stub
-│       │   ├── libc.a                # Bare-metal musl-derived static libc
-│       │   └── libbexos_vdso.so      # Virtual Dynamic Shared Object
-│       └── aarch64-unknown-bexos/
-│           ├── crt0.o
-│           ├── libc.a
-│           └── libbexos_vdso.so
-├── tools/
-│   ├── x86_64-linux/
-│   │   ├── fidlc                     # IDL compiler binary
-│   │   ├── fidlgen_rust              # Rust binding generator
-│   │   ├── bex-pkg                   # Packaging & metadata serialization tool
-│   │   └── image_assembler           # Disk image builder
-│   └── aarch64-linux/
-├── fidl/
-│   ├── bexos.kernel/                 # Base kernel types
-│   ├── bexos.hardware/               # Driver, PCI, DMA, and DeviceDataPlane
-│   ├── bexos.net/                    # Stack, SocketProvider, and Routing
-│   └── bexos.media/                  # CodecFactory, FrameBufferPool
-├── rules/
-│   ├── defs.bzl                      # Public Bazel build rules
-│   ├── driver.bzl                    # bexos_driver rule implementation
-│   ├── app.bzl                       # bexos_app rule implementation
-│   └── fidl.bzl                      # bexos_fidl_library rule
-└── rust/
-    └── crates/
-        ├── bexos_sys/                # Raw vDSO FFI bindings
-        ├── bexos_driver/             # High-level libdriver traits
-        ├── bexos_component/          # Namespace and startup handle bindings
-        └── libpkg_client/            # IPC client for package resolution
-
+├── MODULE.bazel                      # Pinned, self-contained Bzlmod module
+├── sdk-Cargo.lock                    # Pinned WASM binding dependencies
+├── sdk-crates-lock.json
+├── meta/sdk.prototxt                 # SDK version and host metadata
+├── idl/                              # Public FIDL and manifest protos
+├── rules/                            # Public app, archive, FIDL rules/linkers
+├── rust/                             # Native and portable app runtime source
+├── platforms/                        # Native AArch64/x86-64 and WASI platforms
+├── examples/                         # Prototxt WASM/native service examples
+└── tools/bin/
+    ├── fidlc                         # Combined parser and Rust generator
+    ├── manifest_stamp
+    ├── config_compiler
+    ├── bexos_assembly
+    └── bex_archive                   # Signed BEXARCV2 tooling
 ```
+
+Future phases may add the sysroot, libc/vDSO binaries, external driver/service
+runtime crates, Cargo/CMake facades, and a general disk image assembler shown
+in the longer-term architecture.
 
 ### 4.2 In-Tree Build Target Definition
 
-Inside the monorepo, `//sdk/BUILD.bazel` coordinates sysroot compilation, host tool cross-compilation, and tarball packaging:
+Inside the monorepo, `//sdk/BUILD.bazel` packages normalized source files and
+host tools into the two supported host archives:
 
 ```python
 # //sdk/BUILD.bazel
-load("//build/rules:sdk.bzl", "bexos_sdk_archive")
+load(":sdk_archive.bzl", "sdk_archive")
 
-bexos_sdk_archive(
-    name = "bexos_sdk",
-    api_level = 1,
-    host_tools = [
-        "//tools/fidlc:fidlc",
-        "//tools/fidlgen_rust:fidlgen_rust",
-        "//tools/bex_pkg:bex_pkg",
-        "//tools/image_assembler:image_assembler",
-    ],
-    fidl_libraries = [
-        "//sdk/fidl/bexos.kernel:bexos.kernel",
-        "//sdk/fidl/bexos.hardware:bexos.hardware",
-        "//sdk/fidl/bexos.net:bexos.net",
-        "//sdk/fidl/bexos.media:bexos.media",
-        "//sdk/fidl/bexos.ui:bexos.ui",
-    ],
-    rust_crates = [
-        "//sdk/rust/bexos_sys",
-        "//sdk/rust/bexos_driver",
-        "//sdk/rust/bexos_component",
-        "//sdk/rust/libpkg_client",
-    ],
-    sysroots = {
-        "x86_64-unknown-bexos": "//kernel/sysroot:sysroot_x86_64",
-        "aarch64-unknown-bexos": "//kernel/sysroot:sysroot_aarch64",
+sdk_archive(
+    name = "bexos_sdk_linux_x86_64",
+    srcs = [":export_sources", "//idl:sdk_public_sources"],
+    renamed_files = {"meta/linux_x86_64.prototxt": "meta/sdk.prototxt"},
+    tools = {
+        "//tools/fidlc:fidlc": "tools/bin/fidlc",
+        "//tools/app_archive:bex_archive": "tools/bin/bex_archive",
+        # manifest/config/assembly tools omitted here for brevity
     },
-    visibility = ["//visibility:public"],
+    out = "bexos-sdk-v0.1.0-linux-x86_64.tar.gz",
 )
 
 ```
@@ -178,13 +156,13 @@ module(
     version = "1.2.0",
 )
 
-bazel_dep(name = "bexos_sdk", version = "1.0.0")
+bazel_dep(name = "bexos_sdk", version = "0.1.0")
 
 # Pull published SDK from remote release storage or corporate mirror
 archive_override(
     module_name = "bexos_sdk",
     urls = [
-        "https://dl.bexos.org/sdk/releases/v1.0.0/bexos-sdk-v1.0.0-linux-x86_64.tar.gz",
+        "https://github.com/beccahughes101/bexos/releases/download/sdk-v0.1.0/bexos-sdk-v0.1.0-linux-x86_64.tar.gz",
     ],
     integrity = "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=",
     strip_prefix = "bexos-sdk",
@@ -192,46 +170,61 @@ archive_override(
 
 ```
 
-### 5.2 Compiling an Out-of-Tree Component (`BUILD.bazel`)
+### 5.2 Compiling an Out-of-Tree Application (`BUILD.bazel`)
 
-The external `BUILD.bazel` leverages SDK rules to build a compliant driver package:
+The external `BUILD.bazel` uses the exported v1 rules to build signed app
+packages. The private key is supplied by the consumer and is not in the SDK:
 
 ```python
-load("@bexos_sdk//rules:driver.bzl", "bexos_driver_package")
-load("@bexos_sdk//rules:fidl.bzl", "bexos_fidl_rust_library")
+load(
+    "@bexos_sdk//rules:defs.bzl",
+    "bexos_fidl_rust_library",
+    "bexos_native_app",
+    "bexos_wasm_app",
+)
 
 # Compile local vendor-specific protocols if necessary
 bexos_fidl_rust_library(
     name = "acme_diagnostics_rust",
     srcs = ["fidl/acme.diagnostics.fidl"],
-    deps = ["@bexos_sdk//fidl:bexos.hardware"],
 )
 
-bexos_driver_package(
-    name = "acme_nic_pkg",
-    driver_name = "acme-pcie-100g",
-    manifest = "meta/acme_nic.json",
-    srcs = glob(["src/**/*.rs"]),
-    deps = [
-        ":acme_diagnostics_rust",
-        "@bexos_sdk//rust:bexos_driver",
-        "@bexos_sdk//fidl:bexos_hardware_rust",
-    ],
+bexos_wasm_app(
+    name = "diagnostics",
+    srcs = ["src/diagnostics.rs"],
+    deps = ["@bexos_sdk//rust:bexos_wasm_guest"],
+    manifest = "meta/diagnostics.prototxt",
+    signing_key = "//keys:release_signing.key",
+)
+
+bexos_native_app(
+    name = "diagnostics_aarch64",
+    srcs = ["src/native.rs"],
+    architecture = "aarch64",
+    manifest = "meta/diagnostics.prototxt",
+    signing_key = "//keys:release_signing.key",
 )
 
 ```
+
+External driver and platform-service rules remain future work. Their proposed
+source/sysroot model and ABI requirements are retained in the later sections.
 
 ---
 
 ## 6. Package Specification: The `.bex` Archive
 
-All components—whether built in-tree or out-of-tree—must produce a standardized `.bex` package. A `.bex` archive is an uncompressed, deterministic tarball structured with content-addressable BLAKE3 hashing.
+V1 applications produce signed BEXARCV2 `.bex` archives. BEXARCV2 is a binary
+container with a sorted entry table, optional per-entry zstd compression,
+4-KiB BLAKE3 chunk hashes, a signed BLAKE3 content root, signer key ID, and an
+Ed25519 signature. `package.bexmanifest` is the compiled protobuf manifest;
+`config/component.bexconfig` carries the signed default configuration.
 
 ```
 +-----------------------------------------------------------------------+
-| package.manifest (JSON: component name, version, ABI level, sandbox)  |
+| BEXARCV2 header and sorted entry metadata                            |
 +-----------------------------------------------------------------------+
-| meta/contents (Sorted table: internal path -> BLAKE3 byte digest)     |
+| package.bexmanifest (compiled bexos.app.Manifest protobuf)           |
 +-----------------------------------------------------------------------+
 | bin/executable (ELF64 PIC shared object or dynamic binary)            |
 +-----------------------------------------------------------------------+
@@ -239,38 +232,29 @@ All components—whether built in-tree or out-of-tree—must produce a standardi
 +-----------------------------------------------------------------------+
 | data/ (Immutable read-only assets, config defaults, style sheets)     |
 +-----------------------------------------------------------------------+
-| signature.tuf (TUF cryptographic envelope & metadata signature block) |
+| BEXSIGV2 trailer (key ID, content root, Ed25519 signature)           |
 +-----------------------------------------------------------------------+
 
 ```
 
-### 6.1 Package Manifest Schema (`package.manifest`)
+### 6.1 Package Manifest Source (`package.prototxt`)
 
-```json
-{
-  "schema_version": "1.0.0",
-  "package_type": "driver",
-  "name": "acme-pcie-100g",
-  "version": "1.2.0",
-  "abi_version": 1,
-  "entrypoint": "bin/libacme_nic.so",
-  "match_rules": [
-    {
-      "bus": "pci",
-      "vendor_id": "0x1d0f",
-      "device_ids": ["0x1000", "0x1001"]
+```textproto
+package_name: "com.acme.diagnostics"
+name: "ACME diagnostics"
+min_bexos_abi_version: 1
+processes {
+  name: "diagnostics"
+  runner: "wasm"
+  service: true
+  wave: 7
+  lifecycle { update_strategy: HEART_TRANSPLANT }
+  runner_options {
+    [type.googleapis.com/bexos.app.WasmRunnerOptions] {
+      path: "/pkg/bin/diagnostics.wasm"
     }
-  ],
-  "sandbox": {
-    "colocation_policy": "isolated",
-    "required_capabilities": [
-      "bexos.hardware.PciDevice",
-      "bexos.hardware.Interrupt",
-      "bexos.hardware.Iommu"
-    ]
   }
 }
-
 ```
 
 ---
@@ -279,36 +263,18 @@ All components—whether built in-tree or out-of-tree—must produce a standardi
 
 The image generation subsystem merges in-tree binaries and out-of-tree `.bex` packages into final deployable operating system images.
 
-### 7.1 Declarative Product Specification (`product.json`)
+### 7.1 Declarative Product and System-Image Inputs
 
-Product definitions govern the content of the target image:
+Product definitions and system-image manifests are prototxt. Out-of-tree apps
+are appended by the reusable image rules, so the checked-in base manifest can
+remain product-owned:
 
-```json
-{
-  "product_name": "bexos_datacenter_node",
-  "target_arch": "x86_64-unknown-bexos",
-  "partitions": {
-    "bootfs": {
-      "compression": "zstd",
-      "packages": [
-        "//services/driver_manager:driver_manager_pkg",
-        "//services/pkgd:pkgd_pkg",
-        "@acme_vendor//:acme_nic_pkg"
-      ]
-    },
-    "system": {
-      "filesystem": "bexfs",
-      "read_only": true,
-      "packages": [
-        "//apps/sysui:sysui_pkg",
-        "//services/networkd:networkd_pkg",
-        "//services/scened:scened_pkg",
-        "//prebuilts/enterprise:monitoring_agent_pkg"
-      ]
-    }
-  }
+```textproto
+base_packages: "//services/appd:appd_elf"
+base_packages: "//services/netstack:netstackd_archive"
+autoinstall_packages {
+  package: "//services/netstack:netstackd_archive"
 }
-
 ```
 
 ### 7.2 Ingesting External Packages into the Monorepo Build Graph
@@ -324,57 +290,49 @@ http_file(
     name = "prebuilt_acme_nic",
     urls = ["https://packages.acme.corp/bexos/acme_nic-1.2.0.bex"],
     sha256 = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-)
-
-# Pattern B: Fetching an external Git repository that builds with the SDK
-git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
-git_repository(
-    name = "acme_vendor",
-    remote = "git@github.com:acme-corp/acme-bexos-drivers.git",
-    commit = "a1b2c3d4e5f6...",
+    downloaded_file_path = "acme_nic.bex",
 )
 
 ```
 
-### 7.3 System Image Assembler (`image_assembler`)
+### 7.3 Verified Image Flow
 
-The `image_assembler` host tool reads the product specification, extracts all `.bex` packages, verifies dependencies, and lays out the target disk structure:
+Product assembly verifies every external archive as passive bytes, validates
+its extracted manifest with the in-tree product graph, adds its ID to the
+system-image install manifest, and installs the unchanged archive into the
+encrypted `STORAGE` BexFS image:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ `image_assembler` PROCESSING RUN                                            │
+│ PRODUCT/IMAGE RULE PROCESSING                                               │
 │                                                                             │
 │ 1. Validate ABI Level:                                                      │
-│    Verifies all in-tree and external .bex packages match `abi_version == 1`.│
+│    Verifies all external packages have `min_bexos_abi_version <= 1`.        │
 │                                                                             │
-│ 2. Deduplicate Shared Blobs:                                                │
-│    Extracts package layers into a flat, content-addressed block store.      │
+│ 2. Verify Signed Package:                                                   │
+│    Validates BEXARCV2 chunks/content root/signature and expected signer.    │
 │                                                                             │
-│ 3. Build BootFS Partition:                                                  │
-│    Serializes critical bring-up drivers and services into an uncompressed,  │
-│    linearly indexed microkernel ramdisk image (`bootfs.img`).               │
+│ 3. Extend System Manifest:                                                  │
+│    Adds package IDs to base_packages and requested autoinstall entries.     │
 │                                                                             │
-│ 4. Build System Partition:                                                  │
-│    Constructs an immutable, cryptographically hashed Merkle-tree filesystem │
-│    (`system.img`) containing applications, non-boot drivers, and fonts.     │
+│ 4. Build STORAGE:                                                           │
+│    Encrypts BexFS and stores exact bytes at pkg/<package_id>.bex.            │
 │                                                                             │
-│ 5. GPT Packaging:                                                           │
-│    Generates standard GPT partition table with EFI System Partition (ESP),  │
-│    BootFS (A/B), and System (A/B) containers.                               │
+│ 5. Preserve Base Product:                                                   │
+│    Existing products change only when explicitly passed prebuilt_apps.      │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ```
 
 ```python
-# //build/images/BUILD.bazel
-load("//build/rules:image.bzl", "bexos_disk_image")
+load("//build/rules:prebuilt_app.bzl", "bexos_prebuilt_app")
 
-bexos_disk_image(
-    name = "bexos_install_image",
-    product_config = "//products:datacenter_node.json",
-    kernel = "//kernel:bexos_kernel",
-    bootloader = "//bootloader:uefi_bootloader",
-    output = "bexos_x86_64.raw",
+bexos_prebuilt_app(
+    name = "acme_diagnostics",
+    archive = "@prebuilt_acme_nic//file",
+    package_id = "com.acme.diagnostics",
+    public_key = "//products/keys:acme_signer.prototxt",
+    autoinstall = True,
 )
 
 ```
@@ -401,8 +359,8 @@ To guarantee out-of-tree binaries run reliably across OS upgrades, BexOS enforce
 
 ## 9. Security & Verification
 
-1. **Mandatory Package Signatures:** Out-of-tree packages bundled into production release images must include valid TUF metadata (`signature.tuf`). Unsigned or developer-signed packages are rejected unless the image assembler is invoked with `--allow-unsigned-packages` (enforced via hardware secure boot fuses).
-2. **Capability Auditing:** During image composition, `image_assembler` evaluates the permissions declared in every external driver's manifest. If an out-of-tree package demands unattenuated hardware access or undocumented capabilities, the build halts with a policy violation.
+1. **Mandatory Package Signatures:** Every v1 import must be BEXARCV2-signed with Ed25519. Assembly requires the expected signer prototxt and rejects unsigned, malformed, tampered, or wrongly signed inputs. The signer must also be authorized by the product trust roots; there is no unsigned bypass in this path.
+2. **Capability Auditing (future driver phase):** A general image assembler will evaluate permissions declared by external drivers. V1 is restricted to application packages and rejects other package kinds.
 3. **No Dynamic Execution During Assembly:** The image assembler treats all `.bex` inputs strictly as passive data streams. No installation scripts, maintainer hooks, or pre/post-install code are executed during image creation.
 
 ---
@@ -411,16 +369,128 @@ To guarantee out-of-tree binaries run reliably across OS upgrades, BexOS enforce
 
 ### Phase 1: Toolchain Scaffolding & SDK Archive Export
 
-* Construct the `//sdk:bexos_sdk` rule in Bazel, packaging host binaries (`fidlc`, `fidlgen_rust`, `bex-pkg`), sysroots, and core FIDL protocols.
-* Publish `bexos-sdk` tarball releases via GitHub Actions automation.
+* Implemented for apps: construct `//sdk:bexos_sdk` with combined `fidlc`, BEXARCV2/config tools, public runtime source, FIDL, examples, and rules.
+* Implemented: publish host-specific `bexos-sdk` tarballs and checksums from `sdk-v*` tags.
+* Future: package binary sysroots/libc and external driver/service runtime APIs.
 
 ### Phase 2: Standalone Out-of-Tree Proving Ground
 
-* Create an external sample repository (`[github.com/beccahughes101/bexos-samples](https://github.com/beccahughes101/bexos-samples)`) containing an out-of-tree PCIe driver and a Dioxus Native user app.
-* Configure Bzlmod to pull the published SDK and verify independent, hermetic compilation into `.bex` packages.
+* Implemented for apps: maintain a separate fixture workspace proving FIDL,
+  portable WASM, and both native architectures against only the unpacked SDK.
+* Future: add the external PCIe-driver and native-Dioxus samples once those SDK
+  surfaces exist.
 
 ### Phase 3: Declarative Image Assembler
 
-* Build the `image_assembler` host tool in Rust.
-* Implement `bexos_disk_image` Bazel rules consuming `product.json` definitions.
-* Validate bootable QEMU execution of a disk image composed of in-tree services alongside external `.bex` driver binaries.
+* Implemented for apps: verified prebuilt ingestion through reusable product,
+  system-manifest, and encrypted BexFS image rules, with dual-architecture QEMU
+  acceptance.
+* Future: implement a general GPT `image_assembler` and out-of-tree driver image
+  composition.
+
+---
+
+## 11. Retained later-phase design
+
+This section preserves the longer-term driver, platform-service, binary
+sysroot, non-Bazel, OCI, and general image-assembler design. None of these
+interfaces are part of App SDK v1, and their eventual implementation must keep
+the prototxt manifest, BEXARCV2 signature, and passive-assembly security model
+defined above.
+
+### 11.1 Binary sysroot and runtime distribution
+
+A later SDK revision may extend the current source archive with a stable binary
+sysroot for both guest architectures:
+
+```
+bexos-sdk/
+├── sysroot/
+│   ├── include/
+│   │   ├── bexos/
+│   │   │   ├── syscalls.h
+│   │   │   ├── types.h
+│   │   │   └── vmar.h
+│   │   └── zircon/                   # compatibility headers, if retained
+│   └── lib/
+│       ├── x86_64-unknown-bexos/
+│       │   ├── crt0.o
+│       │   ├── libc.a
+│       │   └── libbexos_vdso.so
+│       └── aarch64-unknown-bexos/
+│           ├── crt0.o
+│           ├── libc.a
+│           └── libbexos_vdso.so
+├── rust/crates/
+│   ├── bexos_sys/                    # raw vDSO ABI bindings
+│   ├── bexos_component/              # namespace/startup handles
+│   ├── bexos_driver/                 # future driver runtime
+│   └── libpkg_client/
+├── cmake/                            # future toolchain/config packages
+└── cargo/                            # future target/linker configuration
+```
+
+Those binaries require an explicit compatibility and release policy. The
+sysroot must be built hermetically for both guest targets, versioned with the
+SDK ABI, and tested against an independently built consumer. Distributing it is
+not implied by the v1 source runtime.
+
+### 11.2 External drivers and platform services
+
+Future rules may add `bexos_driver`, `bexos_driver_package`, and
+`bexos_service` surfaces backed by the sysroot and stable public FIDL. They are
+expected to cover PCI/MMIO/DMA/interrupt access, driver match metadata,
+component namespaces, startup handles, and capability declarations without
+exposing monorepo-private implementation libraries.
+
+Driver and service outputs will still use signed BEXARCV2 packages and
+prototxt manifests. Every SDK-built service process must declare
+`HEART_TRANSPLANT`; importing a driver or service must additionally validate
+its package kind, target architecture, ABI level, signer authorization, and
+capability policy before assembly. No package hook or binary may execute on the
+build host.
+
+The proving ground for that phase should remain outside the monorepo build
+graph and include at least a PCIe driver and a native platform service for both
+guest architectures. A separately versioned source repository can consume the
+published SDK through Bzlmod; checking out a vendor repository with a pinned
+commit remains a product-integration option, but it is not a substitute for
+verifying the resulting signed archive.
+
+### 11.3 Cargo and CMake consumers
+
+Cargo and CMake facades remain proposed for consumers that cannot adopt Bazel.
+They should select only published target triples and linker definitions, use
+the same combined `fidlc` generator and manifest/config compilers, and produce
+byte-for-byte equivalent BEXARCV2 package inputs. They must not introduce an
+alternate JSON manifest, an unsigned development package format, or a second
+ABI contract.
+
+### 11.4 OCI publication
+
+An OCI distribution may mirror immutable SDK archives and signed package
+artifacts after the tarball release process is stable. OCI manifests should
+carry the SDK version, host platform, guest target set, checksum, and ABI level;
+the archive checksum and package signer remain the trust inputs. OCI is an
+additional transport, not a replacement for GitHub release assets or BEXARCV2
+verification.
+
+### 11.5 General image assembler
+
+The proposed general assembler expands the v1 product/image flow into a tool
+that consumes prototxt product definitions and emits complete GPT media. Its
+planned stages are:
+
+1. Verify every in-tree and external package, signer, package kind,
+   architecture, ABI, dependency, service, and capability declaration.
+2. Resolve duplicate package IDs and destinations before writing any image.
+3. Generate the boot filesystem and system install manifest.
+4. Populate encrypted `STORAGE` with unchanged signed packages and other
+   declared filesystem content.
+5. Construct the target GPT/boot partitions and secure-boot metadata for the
+   selected architecture.
+
+The assembler must remain hermetic and deterministic, must never run package
+code, and must fail closed on malformed or incompatible inputs. Product-specific
+rewriting or resigning requires a separate policy and is not inherited from
+App SDK v1.

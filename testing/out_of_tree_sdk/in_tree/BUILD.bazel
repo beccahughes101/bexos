@@ -1,0 +1,37 @@
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "userspace_binary")
+load("//build/rules:wasm.bzl", "wasi_component")
+
+package(default_visibility = ["//visibility:public"])
+
+wasi_component(
+    name = "wasm",
+    srcs = ["wasm.rs"],
+    crate_name = "bexos_sdk_fixture_wasm",
+    deps = ["//lib/wasm_guest"],
+)
+
+app_manifest(name = "wasm_manifest", src = "wasm.prototxt", architecture = "MULTI")
+
+app_archive(
+    name = "wasm_archive",
+    manifest = ":wasm_manifest",
+    entries = {"bin/wasm_app.wasm": ":wasm"},
+    compression = "zstd",
+)
+
+userspace_binary(
+    name = "native",
+    srcs = ["native.rs"],
+    crate_name = "bexos_sdk_fixture_native",
+    deps = [],
+)
+
+app_manifest(name = "native_manifest", src = "native.prototxt")
+
+app_archive(
+    name = "native_archive",
+    manifest = ":native_manifest",
+    entries = {"bin/native_fixture": ":native"},
+    compression = "zstd",
+)

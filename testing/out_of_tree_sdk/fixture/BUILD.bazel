@@ -1,0 +1,49 @@
+load(
+    "@bexos_sdk//rules:defs.bzl",
+    "bexos_fidl_rust_library",
+    "bexos_native_app",
+    "bexos_wasm_app",
+)
+
+package(default_visibility = ["//visibility:public"])
+
+bexos_fidl_rust_library(
+    name = "echo_fidl",
+    srcs = ["echo.fidl"],
+)
+
+bexos_wasm_app(
+    name = "wasm_app",
+    srcs = ["wasm.rs"],
+    deps = ["@bexos_sdk//rust:bexos_wasm_guest"],
+    manifest = "wasm.prototxt",
+    signing_key = "fixture_signer.key",
+)
+
+bexos_native_app(
+    name = "native_aarch64_app",
+    srcs = ["native.rs"],
+    manifest = "native.prototxt",
+    signing_key = "fixture_signer.key",
+    architecture = "aarch64",
+    binary_name = "native_fixture",
+)
+
+bexos_native_app(
+    name = "native_x86_64_app",
+    srcs = ["native.rs"],
+    manifest = "native.prototxt",
+    signing_key = "fixture_signer.key",
+    architecture = "x86_64",
+    binary_name = "native_fixture",
+)
+
+filegroup(
+    name = "archives",
+    srcs = [
+        ":wasm_app",
+        ":native_aarch64_app",
+        ":native_x86_64_app",
+        ":echo_fidl",
+    ],
+)

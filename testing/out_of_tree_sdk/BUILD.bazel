@@ -1,0 +1,10 @@
+package(default_visibility = ["//visibility:public"])
+
+sh_binary(
+    name = "acceptance",
+    srcs = ["acceptance.sh"],
+    data = [
+        "//:MODULE.bazel",
+        "//sdk:bexos_sdk",
+    ],
+)

@@ -1,0 +1,96 @@
+name: BexOS SDK release
+
+on:
+  push:
+    tags:
+      - sdk-v*
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Build SDK (${{ matrix.host }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: linux-x86_64
+            os: ubuntu-26.04
+            archive: bexos-sdk-v0.1.0-linux-x86_64.tar.gz
+          - host: macos-aarch64
+            os: macos-15
+            archive: bexos-sdk-v0.1.0-macos-aarch64.tar.gz
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
+        with:
+          cache-role: sdk-${{ matrix.host }}
+      - name: Verify release version
+        env:
+          SDK_TAG: ${{ github.ref_name }}
+        run: |
+          test "$SDK_TAG" = "sdk-v0.1.0"
+          grep -q 'version = "0.1.0"' sdk/export/MODULE.bazel
+      - name: Build archive and checksum
+        run: bazel build //sdk:bexos_sdk //sdk:bexos_sdk_sha256
+      - name: Smoke-test standalone fixture
+        run: |
+          bazel run //testing/out_of_tree_sdk:acceptance -- aarch64 smoke
+          bazel run //testing/out_of_tree_sdk:acceptance -- x86_64 smoke
+      - name: Run Linux QEMU acceptance
+        if: runner.os == 'Linux'
+        run: |
+          bazel run //testing/out_of_tree_sdk:acceptance -- aarch64 qemu
+          bazel run //testing/out_of_tree_sdk:acceptance -- x86_64 qemu
+      - name: Stage release assets
+        env:
+          SDK_ARCHIVE: ${{ matrix.archive }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/sdk-assets"
+          cp "bazel-bin/sdk/$SDK_ARCHIVE" "$RUNNER_TEMP/sdk-assets/"
+          cp "bazel-bin/sdk/$SDK_ARCHIVE.sha256" "$RUNNER_TEMP/sdk-assets/"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: sdk-${{ matrix.host }}
+          path: ${{ runner.temp }}/sdk-assets/*
+          if-no-files-found: error
+          retention-days: 7
+      - name: Clean up guest processes
+        if: always() && runner.os == 'Linux'
+        run: bash tools/ci/cleanup.sh
+
+  publish:
+    name: Publish SDK release
+    needs: build
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: sdk-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/sdk-assets
+      - name: Refuse an existing release or incomplete asset set
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SDK_TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$SDK_TAG" >/dev/null 2>&1; then
+            echo "release $SDK_TAG already exists" >&2
+            exit 1
+          fi
+          test "$(find "$RUNNER_TEMP/sdk-assets" -type f | wc -l | tr -d ' ')" = 4
+      - name: Create immutable SDK release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SDK_TAG: ${{ github.ref_name }}
+        run: gh release create "$SDK_TAG" "$RUNNER_TEMP"/sdk-assets/* --generate-notes --verify-tag

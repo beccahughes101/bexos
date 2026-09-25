@@ -75,6 +75,9 @@ pub(super) fn launch<K: KernelOps, R: PackageImageResolver>(
     // Platform code only; never load manifest-declared native libraries into a
     // consumer WASM process. Identity, namespace and scheduling remain its own.
     let mut manifest = request.manifest.clone();
+    // A portable package is MULTI, but its platform-authenticated runner is a
+    // native image selected for the current guest.
+    manifest.architecture = crate::manifest::Architecture::current_guest();
     manifest.library_dependencies.clear();
     let mut process = request.process.clone();
     process.runner = "elf".into();

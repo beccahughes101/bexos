@@ -385,6 +385,21 @@ impl QemuDevice {
         Self::new_inner(artifacts, false)
     }
 
+    /// Boots until every requested serial marker is present, then validates
+    /// that the observed boot contained no guest panic or fault.  Scenarios
+    /// that only need boot-time evidence should use this instead of waiting
+    /// for debugd and its later-wave shell dependencies.
+    pub fn boot_until_markers(&mut self, markers: &[&[u8]]) -> Result<Vec<u8>, String> {
+        if markers.is_empty() {
+            return Err("boot_until_markers requires at least one marker".into());
+        }
+        let mut child = self.spawn(None)?;
+        let mut output = Vec::new();
+        read_until_done(&mut child.qemu, None, &mut output, markers)?;
+        validate_boot(&output, markers)?;
+        Ok(output)
+    }
+
     fn new_inner(mut artifacts: QemuArtifacts, preflight: bool) -> Result<Self, String> {
         artifacts.validate_architecture()?;
         if preflight {
@@ -1694,10 +1709,11 @@ fn read_until_done_mode(
                 progressed_at = Instant::now();
             }
             if (!stop_markers.is_empty() && stop_markers.iter().all(|m| contains(output, m)))
-                || contains(
-                    output,
-                    b"guest persistence and disk-only application verified",
-                )
+                || (stop_markers.is_empty()
+                    && contains(
+                        output,
+                        b"guest persistence and disk-only application verified",
+                    ))
                 || (!rpmb_critical_exit && contains(output, b"panic"))
                 || contains(output, b"guest fault")
                 || (stop_markers.is_empty()

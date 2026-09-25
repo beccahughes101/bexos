@@ -157,3 +157,19 @@ mounting those archives with ArchiveFS signature verification. App manifests
 remain source `.prototxt` files compiled by Bazel before archive creation.
 
 The workstation UI is available through `bazel run --config=aarch64 //device/virtual/qemu/workstation:run` or `--config=x86_64`. It shares the existing firmware dependencies; see [QEMU products](qemu-product.md).
+## Out-of-tree application SDK
+
+`bazel build //sdk:bexos_sdk //sdk:bexos_sdk_sha256` produces the host-selected
+SDK 0.1.0 archive and checksum. Supported hosts are Linux x86-64 and macOS
+arm64; both archives target AArch64 and x86-64 BexOS applications. Extract the
+archive, declare `bazel_dep(name = "bexos_sdk", version = "0.1.0")`, and use
+`--override_module=bexos_sdk=/absolute/path/to/bexos-sdk` together with
+`--override_repository=bexos_sdk=/absolute/path/to/bexos-sdk` for a local
+checkout. Public application rules are loaded from
+`@bexos_sdk//rules:defs.bzl`.
+
+Application manifests are prototxt, must declare
+`min_bexos_abi_version: 1`, and every SDK-built service process must select
+`HEART_TRANSPLANT`. Archive creation always requires an explicit private key;
+release SDK archives contain no private key. See
+`docs/rfcs/0069/CURRENT.md` for a complete rule example and supported scope.

@@ -1,0 +1,35 @@
+load(
+    "@bexos_sdk//rules:defs.bzl",
+    "bexos_native_app",
+    "bexos_wasm_app",
+)
+
+package(default_visibility = ["//visibility:public"])
+
+# Supply signing.key locally before building these targets. Private signing
+# material is intentionally not included in the SDK archive.
+bexos_wasm_app(
+    name = "wasm_service",
+    srcs = ["wasm_service.rs"],
+    deps = ["@bexos_sdk//rust:bexos_wasm_guest"],
+    manifest = "wasm_service.prototxt",
+    signing_key = "signing.key",
+)
+
+bexos_native_app(
+    name = "native_service_aarch64",
+    srcs = ["native_service.rs"],
+    architecture = "aarch64",
+    binary_name = "native_service",
+    manifest = "native_service.prototxt",
+    signing_key = "signing.key",
+)
+
+bexos_native_app(
+    name = "native_service_x86_64",
+    srcs = ["native_service.rs"],
+    architecture = "x86_64",
+    binary_name = "native_service",
+    manifest = "native_service.prototxt",
+    signing_key = "signing.key",
+)

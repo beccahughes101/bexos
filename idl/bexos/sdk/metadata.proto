@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package bexos.sdk;
+
+import "idl/bexos/version/version.proto";
+
+message SdkManifest {
+  bexos.version.SemVer sdk_version = 1;
+  uint32 api_level = 2;
+  string host = 3;
+  repeated string target_architectures = 4;
+  string archive_format = 5;
+}

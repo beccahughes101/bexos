@@ -1,0 +1,33 @@
+load("//build/platforms:architecture.bzl", "guest_select")
+load("//build/rules:prebuilt_app.bzl", "bexos_prebuilt_app")
+load("//device/virtual/qemu/base:product.bzl", "qemu_product")
+
+package(default_visibility = ["//visibility:public"])
+
+bexos_prebuilt_app(
+    name = "sdk_wasm_app",
+    archive = "@bexos_sdk_fixture_prebuilt//:wasm_app.bex",
+    package_id = "bexos.sdk.fixture.wasm",
+    public_key = "fixture_signer_public.prototxt",
+    autoinstall = True,
+)
+
+bexos_prebuilt_app(
+    name = "sdk_native_app",
+    archive = guest_select(
+        "@bexos_sdk_fixture_prebuilt//:native_aarch64_app.bex",
+        "@bexos_sdk_fixture_prebuilt//:native_x86_64_app.bex",
+    ),
+    package_id = "bexos.sdk.fixture.native",
+    public_key = "fixture_signer_public.prototxt",
+    autoinstall = True,
+)
+
+qemu_product(
+    name = "sdk_acceptance",
+    graphics = False,
+    prebuilt_apps = [
+        ":sdk_wasm_app",
+        ":sdk_native_app",
+    ],
+)

@@ -1,0 +1,15 @@
+package bexos:wasm@1.0.0;
+
+/// Lifecycle required by the BexOS portable service runner.
+interface lifecycle {
+  /// Dispatch resource 0 for a scheduler tick; other IDs identify clients.
+  dispatch: func(resource-id: u32);
+  checkpoint: func() -> list<u8>;
+  restore: func(checkpoint: list<u8>) -> result;
+  activate: func();
+  abort: func();
+}
+
+world service {
+  export lifecycle;
+}

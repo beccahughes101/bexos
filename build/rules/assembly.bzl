@@ -1,4 +1,93 @@
 load("//build/platforms:architecture.bzl", "guest_select")
+load("//build/rules:prebuilt_app.bzl", "BexosPrebuiltAppInfo")
+
+def _one_file(target, description):
+    files = target[DefaultInfo].files.to_list()
+    if len(files) != 1:
+        fail("%s must provide exactly one file" % description)
+    return files[0]
+
+def _product_assembly_impl(ctx):
+    args = ctx.actions.args()
+    args.add("product")
+    args.add("--architecture", ctx.attr.architecture)
+    args.add("--product-bin", ctx.file.product)
+    inputs = [ctx.file.product]
+    for bundle in ctx.attr.bundles:
+        bundle_file = _one_file(bundle, "assembly bundle")
+        inputs.append(bundle_file)
+        args.add("--bundle-bin", bundle_file)
+    for target, label in ctx.attr.manifests.items():
+        manifest = _one_file(target, "package manifest")
+        inputs.append(manifest)
+        args.add("--manifest-bin", "%s=%s" % (label, manifest.path))
+    seen_prebuilt = {}
+    for target in ctx.attr.prebuilt_apps:
+        info = target[BexosPrebuiltAppInfo]
+        if info.package_id in seen_prebuilt:
+            fail("duplicate prebuilt package id %s" % info.package_id)
+        seen_prebuilt[info.package_id] = True
+        inputs.append(info.manifest)
+        args.add("--prebuilt-manifest-bin", "prebuilt://%s=%s" % (info.package_id, info.manifest.path))
+    args.add("--out-index", ctx.outputs.index)
+    args.add("--out-bootfs-labels", ctx.outputs.bootfs_labels)
+    args.add("--out-system-image-labels", ctx.outputs.system_image_labels)
+    ctx.actions.run(
+        executable = ctx.executable._assembly,
+        inputs = depset(inputs),
+        outputs = [ctx.outputs.index, ctx.outputs.bootfs_labels, ctx.outputs.system_image_labels],
+        arguments = [args],
+        mnemonic = "BexosProductAssembly",
+    )
+    return [DefaultInfo(files = depset([ctx.outputs.index, ctx.outputs.bootfs_labels, ctx.outputs.system_image_labels]))]
+
+_product_assembly = rule(
+    implementation = _product_assembly_impl,
+    attrs = {
+        "product": attr.label(mandatory = True, allow_single_file = True),
+        "bundles": attr.label_list(allow_files = True),
+        "manifests": attr.label_keyed_string_dict(allow_files = True),
+        "prebuilt_apps": attr.label_list(providers = [BexosPrebuiltAppInfo]),
+        "architecture": attr.string(mandatory = True, values = ["aarch64", "x86_64"]),
+        "index": attr.output(mandatory = True),
+        "bootfs_labels": attr.output(mandatory = True),
+        "system_image_labels": attr.output(mandatory = True),
+        "_assembly": attr.label(default = "//tools/assembly:bexos_assembly", executable = True, cfg = "exec"),
+    },
+)
+
+def _system_image_impl(ctx):
+    args = ctx.actions.args()
+    args.add("system-image")
+    args.add("--base", ctx.file.base)
+    inputs = [ctx.file.base]
+    seen = {}
+    for target in ctx.attr.prebuilt_apps:
+        info = target[BexosPrebuiltAppInfo]
+        if info.package_id in seen:
+            fail("duplicate prebuilt package id %s" % info.package_id)
+        seen[info.package_id] = True
+        inputs.extend([info.archive, info.manifest])
+        args.add("--package", "%s=%s" % (info.package_id, "true" if info.autoinstall else "false"))
+    args.add("--out", ctx.outputs.out)
+    ctx.actions.run(
+        executable = ctx.executable._assembly,
+        inputs = depset(inputs),
+        outputs = [ctx.outputs.out],
+        arguments = [args],
+        mnemonic = "BexosSystemImageManifest",
+    )
+    return [DefaultInfo(files = depset([ctx.outputs.out]))]
+
+system_image_with_prebuilt_apps = rule(
+    implementation = _system_image_impl,
+    attrs = {
+        "base": attr.label(mandatory = True, allow_single_file = True),
+        "prebuilt_apps": attr.label_list(providers = [BexosPrebuiltAppInfo]),
+        "out": attr.output(mandatory = True),
+        "_assembly": attr.label(default = "//tools/assembly:bexos_assembly", executable = True, cfg = "exec"),
+    },
+)
 
 def _proto_root_cmd():
     return "PROTOBUF_SRC=; for proto in $(locations @protobuf//:well_known_type_protos); do case $$proto in */google/protobuf/any.proto) PROTOBUF_SRC=$${proto%/google/protobuf/any.proto};; esac; done; "
@@ -105,34 +194,22 @@ def product_definition(name, src):
         tools = ["@protobuf//:protoc"],
     )
 
-def bexos_product(name, src, bundles, manifests):
+def bexos_product(name, src, bundles, manifests, prebuilt_apps = []):
     product_definition(name = name, src = src)
 
-    bundle_args = "".join([" --bundle-bin $(location %s)" % bundle for bundle in bundles])
-    manifest_args = "".join([
-        " --manifest-bin %s=$(location %s)" % (label, manifest)
-        for label, manifest in sorted(manifests.items())
-    ])
-    native.genrule(
+    _product_assembly(
         name = name,
-        srcs = [":" + name + "_bin"] + bundles + manifests.values(),
-        outs = [
-            name + ".assembly",
-            name + ".bootfs.labels",
-            name + ".system_image.labels",
-        ],
-        cmd = guest_select("$(location //tools/assembly:bexos_assembly) product --architecture aarch64 ", "$(location //tools/assembly:bexos_assembly) product --architecture x86_64 ") + "--product-bin $(location :%s_bin)%s%s --out-index $(location %s.assembly) --out-bootfs-labels $(location %s.bootfs.labels) --out-system-image-labels $(location %s.system_image.labels)" % (
-            name,
-            bundle_args,
-            manifest_args,
-            name,
-            name,
-            name,
-        ),
-        tools = ["//tools/assembly:bexos_assembly"],
+        product = ":" + name + "_bin",
+        bundles = bundles,
+        manifests = {manifest: label for label, manifest in manifests.items()},
+        prebuilt_apps = prebuilt_apps,
+        architecture = guest_select("aarch64", "x86_64"),
+        index = name + ".assembly",
+        bootfs_labels = name + ".bootfs.labels",
+        system_image_labels = name + ".system_image.labels",
     )
 
-def starlark_product(name, src, loads, entry, bundles, manifests):
+def starlark_product(name, src, loads, entry, bundles, manifests, prebuilt_apps = []):
     definition = name + "_definition"
     load_args = "".join([
         " --load %s=$(location %s)" % (label, target)
@@ -167,28 +244,16 @@ def starlark_product(name, src, loads, entry, bundles, manifests):
         tools = ["@protobuf//:protoc"],
     )
 
-    bundle_args = "".join([" --bundle-bin $(location %s)" % bundle for bundle in bundles])
-    manifest_args = "".join([
-        " --manifest-bin %s=$(location %s)" % (label, manifest)
-        for label, manifest in sorted(manifests.items())
-    ])
-    native.genrule(
+    _product_assembly(
         name = name,
-        srcs = [":" + definition + "_bin"] + bundles + manifests.values(),
-        outs = [
-            name + ".assembly",
-            name + ".bootfs.labels",
-            name + ".system_image.labels",
-        ],
-        cmd = guest_select("$(location //tools/assembly:bexos_assembly) product --architecture aarch64 ", "$(location //tools/assembly:bexos_assembly) product --architecture x86_64 ") + "--product-bin $(location :%s_bin)%s%s --out-index $(location %s.assembly) --out-bootfs-labels $(location %s.bootfs.labels) --out-system-image-labels $(location %s.system_image.labels)" % (
-            definition,
-            bundle_args,
-            manifest_args,
-            name,
-            name,
-            name,
-        ),
-        tools = ["//tools/assembly:bexos_assembly"],
+        product = ":" + definition + "_bin",
+        bundles = bundles,
+        manifests = {manifest: label for label, manifest in manifests.items()},
+        prebuilt_apps = prebuilt_apps,
+        architecture = guest_select("aarch64", "x86_64"),
+        index = name + ".assembly",
+        bootfs_labels = name + ".bootfs.labels",
+        system_image_labels = name + ".system_image.labels",
     )
 
 def product_app_config_policy(name, manifest, product, package_id):

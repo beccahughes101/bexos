@@ -1,8 +1,29 @@
 use bexos_assembly::test_proto::{bytes_field, concat, message_field, string_field, varint_field};
 use bexos_assembly::{
-    CompileConfigInput, ProductInput, compile_config_blob, compile_config_blob_from_product,
-    validate_product,
+    CompileConfigInput, ProductInput, append_system_image_packages, compile_config_blob,
+    compile_config_blob_from_product, validate_product, validate_product_with_prebuilt_for,
 };
+
+#[test]
+fn system_image_appends_prebuilt_base_and_autoinstall_packages() {
+    let base = concat(vec![string_field(1, "base.app")]);
+    let output = append_system_image_packages(
+        &base,
+        &[("vendor.app".into(), true), ("optional.app".into(), false)],
+    )
+    .expect("system image should extend");
+    assert!(
+        output
+            .windows("vendor.app".len())
+            .any(|value| value == b"vendor.app")
+    );
+    assert!(
+        output
+            .windows("optional.app".len())
+            .any(|value| value == b"optional.app")
+    );
+    assert!(append_system_image_packages(&base, &[("base.app".into(), true)]).is_err());
+}
 
 #[test]
 fn valid_product_assembly_indexes_selected_bundle_packages() {
@@ -83,6 +104,59 @@ fn product_rejects_missing_manifest_labels_and_duplicate_package_ids() {
     })
     .expect_err("duplicate id should fail");
     assert!(duplicate.contains("duplicate package id"));
+}
+
+#[test]
+fn product_places_prebuilt_apps_in_system_image_and_rejects_duplicate_ids() {
+    let product = product(
+        "qemu_dev",
+        "//device/virtual/qemu/base/aarch64",
+        ":pcfg",
+        vec!["core_platform"],
+        vec![],
+    );
+    let bundle = bundle(
+        "core_platform",
+        vec![package("//pkg:base", "com.example.base", 1)],
+    );
+    let base_manifest = manifest_with_schema("com.example.base", vec![]);
+    let prebuilt_manifest = manifest_with_schema("com.example.vendor", vec![]);
+    let bundles = [bundle.clone()];
+    let manifests = [("//pkg:base".into(), base_manifest.clone())];
+    let input = ProductInput {
+        product: &product,
+        bundles: &bundles,
+        manifests: &manifests,
+    };
+    let output = validate_product_with_prebuilt_for(
+        input,
+        &[("prebuilt://com.example.vendor".into(), prebuilt_manifest)],
+        bexos_app_manifest::Architecture::Aarch64,
+    )
+    .expect("prebuilt app should assemble");
+    let vendor = output
+        .packages
+        .iter()
+        .find(|package| package.package_id == "com.example.vendor")
+        .expect("prebuilt package should be indexed");
+    assert_eq!(vendor.placement, bexos_assembly::Placement::SystemImage);
+
+    let duplicate_bundles = [bundle];
+    let duplicate_manifests = [("//pkg:base".into(), base_manifest)];
+    let duplicate = validate_product_with_prebuilt_for(
+        ProductInput {
+            product: &product,
+            bundles: &duplicate_bundles,
+            manifests: &duplicate_manifests,
+        },
+        &[(
+            "prebuilt://com.example.base".into(),
+            manifest_with_schema("com.example.base", vec![]),
+        )],
+        bexos_app_manifest::Architecture::Aarch64,
+    )
+    .expect_err("prebuilt package ID colliding with an in-tree package must fail");
+    assert!(duplicate.contains("duplicate package id com.example.base"));
 }
 
 #[test]

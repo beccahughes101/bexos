@@ -199,6 +199,14 @@ pub fn validate_product_for(
     input: ProductInput<'_>,
     architecture: bexos_app_manifest::Architecture,
 ) -> Result<AssemblyOutput, String> {
+    validate_product_with_prebuilt_for(input, &[], architecture)
+}
+
+pub fn validate_product_with_prebuilt_for(
+    input: ProductInput<'_>,
+    prebuilt_manifests: &[(String, Vec<u8>)],
+    architecture: bexos_app_manifest::Architecture,
+) -> Result<AssemblyOutput, String> {
     let product = decode_product(input.product)?;
     let selected = product.bundles.iter().cloned().collect::<BTreeSet<_>>();
     let mut bundle_names = BTreeSet::new();
@@ -218,9 +226,16 @@ pub fn validate_product_for(
         }
     }
 
+    packages.extend(prebuilt_manifests.iter().map(|(label, _)| Package {
+        label: label.clone(),
+        package_id: String::new(),
+        placement: Placement::SystemImage,
+    }));
+
     let manifests = input
         .manifests
         .iter()
+        .chain(prebuilt_manifests.iter())
         .map(|(label, bytes)| {
             bexos_app_manifest::ManifestArchitecture::decode(bytes)
                 .and_then(|manifest| manifest.validate(Some(architecture)))
@@ -373,6 +388,48 @@ pub fn validate_product_for(
         platform_config: product.platform_config,
         packages: assembled,
     })
+}
+
+pub fn append_system_image_packages(
+    base: &[u8],
+    packages: &[(String, bool)],
+) -> Result<Vec<u8>, String> {
+    let mut seen = BTreeSet::new();
+    let mut cursor = Cursor::new(base);
+    while let Some(field) = cursor.next_field()? {
+        match field.number {
+            1 => {
+                seen.insert(field.string()?);
+            }
+            2 => {
+                let mut package = Cursor::new(field.bytes()?);
+                while let Some(package_field) = package.next_field()? {
+                    if package_field.number == 1 {
+                        seen.insert(package_field.string()?);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = base.to_vec();
+    let mut sorted = packages.to_vec();
+    sorted.sort();
+    for (package_id, autoinstall) in sorted {
+        if package_id.is_empty() || !seen.insert(package_id.clone()) {
+            return Err(format!(
+                "duplicate or empty system image package {package_id}"
+            ));
+        }
+        out.extend(test_proto::string_field(1, &package_id));
+        if autoinstall {
+            out.extend(test_proto::message_field(
+                2,
+                vec![test_proto::string_field(1, &package_id)],
+            ));
+        }
+    }
+    Ok(out)
 }
 
 fn validate_consumed_services(

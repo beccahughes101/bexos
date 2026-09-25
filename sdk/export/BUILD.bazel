@@ -1,0 +1,8 @@
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["README.md", "LICENSE"])
+
+filegroup(
+    name = "root_files",
+    srcs = ["BUILD.bazel", "LICENSE", "MODULE.bazel", "README.md", "sdk-Cargo.lock", "sdk-crates-lock.json"],
+)

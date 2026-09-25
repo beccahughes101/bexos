@@ -1,6 +1,7 @@
 """Product-local boot, AVB, and writable storage images."""
 load("//build/platforms:architecture.bzl", "guest_select")
 load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:image.bzl", "bexfs_image_with_prebuilt_apps")
 load("//lib/flatland_text:BUILD.fonts.bzl", "FONT_LICENSES", "SYSTEM_FONT_ENTRIES")
 
 # BexFS retains two complete namespace snapshots. Keep enough room for the
@@ -111,7 +112,7 @@ QEMU_STORAGE_PREINSTALLS_SHELL_FIXTURE = QEMU_STORAGE_PREINSTALLS_WITHOUT_BRUSH 
     },
 ]
 
-def qemu_images(graphics = False, input_fixture = False):
+def qemu_images(graphics = False, input_fixture = False, prebuilt_apps = []):
     graphics_packages = [('drivers/d1/input/virtio', 'bexos.driver.input.virtio', 'input', 'input_driver'), ('drivers/d1/display/virtio/gpu', 'bexos.driver.display.virtio_gpu', 'gpu', 'gpu_driver'), ('services/splashd', 'bexos.service.splashd', 'splashd', 'splashd_elf'), ('services/fontd', 'bexos.service.fontd', 'fontd', 'fontd_elf'), ('services/scened', 'bexos.service.scened', 'scened', 'scened_elf')] if graphics else []
     if input_fixture:
         graphics_packages.append(('testing/e2e/qemu/graphics/input_fixture', 'bexos.testing.input_fixture', 'input_fixture', 'fixture_elf'))
@@ -522,24 +523,21 @@ def qemu_images(graphics = False, input_fixture = False):
         compression = "none",
     )
 
-    native.genrule(
+    storage_entries = {
+        "//device/virtual/qemu/base:pkg.keep": "pkg/.keep",
+        "//device/virtual/qemu/base:storage_data.keep": "data/.keep",
+    }
+    for entry in storage_preinstalls:
+        storage_entries[entry["archive"]] = entry["path"]
+    bexfs_image_with_prebuilt_apps(
         name = "qemu_storage",
-        srcs = ["//device/virtual/qemu/base:pkg.keep", "//device/virtual/qemu/base:qemu_bexfs_test.key", "//device/virtual/qemu/base:storage_data.keep"] +
-               [entry["archive"] for entry in storage_preinstalls],
-        outs = ["storage.bexfs.img"],
-        # BexFS keeps two full snapshots. The local font baseline and the
-        # heart-transplant archives must fit in both, with headroom for user
-        # font installs and other runtime writes. The shared size matches the
-        # STORAGE partition in generate_gpt_disk.py.
-        cmd = ("$(location //tools/image:bexfs_image) --out $@ --size-bytes %d --label STORAGE " % QEMU_STORAGE_SIZE_BYTES) +
-              "--volume-uuid 53544f52-4147-4500-0000-000000000004 --key-file $(location //device/virtual/qemu/base:qemu_bexfs_test.key) " +
-              "--entry pkg/.keep=$(location //device/virtual/qemu/base:pkg.keep) " +
-              "".join([
-                  "--entry %s=$(location %s) " % (entry["path"], entry["archive"])
-                  for entry in storage_preinstalls
-              ]) +
-              "--entry data/.keep=$(location //device/virtual/qemu/base:storage_data.keep)",
-        tools = ["//tools/image:bexfs_image"],
+        entries = storage_entries,
+        prebuilt_apps = prebuilt_apps,
+        size_bytes = QEMU_STORAGE_SIZE_BYTES,
+        label = "STORAGE",
+        volume_uuid = "53544f52-4147-4500-0000-000000000004",
+        key_file = "//device/virtual/qemu/base:qemu_bexfs_test.key",
+        out = "storage.bexfs.img",
     )
 
     native.genrule(

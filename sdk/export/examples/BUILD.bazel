@@ -1,0 +1,16 @@
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["BUILD.sdk.bazel"])
+
+filegroup(
+    name = "files",
+    srcs = [
+        "README.md",
+        "native_service.prototxt",
+        "native_service.rs",
+        "wasm_service.prototxt",
+        "wasm_service.rs",
+    ],
+)
+
+filegroup(name = "sdk_build", srcs = ["BUILD.sdk.bazel"])

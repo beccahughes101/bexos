@@ -1,6 +1,6 @@
 package(default_visibility = ["//visibility:public"])
 
-exports_files([".cargo/config.toml", "docs/cli.md"])
+exports_files([".cargo/config.toml", "MODULE.bazel", "docs/cli.md"])
 
 sh_test(
     name = "heart_transplant_coverage_test",

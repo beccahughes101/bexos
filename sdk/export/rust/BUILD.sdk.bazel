@@ -1,0 +1,22 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "bexos_app",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "bexos_app",
+    edition = "2024",
+)
+
+rust_library(
+    name = "bexos_wasm_guest",
+    srcs = ["wasm_guest.rs"],
+    crate_name = "bexos_wasm_guest",
+    compile_data = ["wasm.wit"],
+    edition = "2024",
+    rustc_env = {"CARGO_MANIFEST_DIR": "."},
+    deps = ["@sdk_crates//:wit-bindgen"],
+)
+
+filegroup(name = "files", srcs = glob(["**"]))

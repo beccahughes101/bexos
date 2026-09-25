@@ -1,4 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+load("//build/platforms:architecture.bzl", "guest_select")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -16,4 +17,23 @@ rust_test(
     crate_name = "app_archive_tool_tests",
     edition = "2024",
     deps = ["//lib/app_archive:app_archive_host", "//lib/app_manifest"],
+)
+
+sh_test(
+    name = "extract_manifest_test",
+    srcs = ["tests/extract_manifest_test.sh"],
+    args = [
+        "$(location :bex_archive)",
+        "$(location //testing/out_of_tree_sdk/in_tree:wasm_archive)",
+        "$(location //testing/out_of_tree_sdk/in_tree:native_archive)",
+        "$(location tests/fixture_public.prototxt)",
+        "$(location tests/wrong_public.prototxt)",
+    ] + guest_select(["X86_64"], ["AARCH64"]),
+    data = [
+        ":bex_archive",
+        "//testing/out_of_tree_sdk/in_tree:wasm_archive",
+        "//testing/out_of_tree_sdk/in_tree:native_archive",
+        "tests/fixture_public.prototxt",
+        "tests/wrong_public.prototxt",
+    ],
 )
