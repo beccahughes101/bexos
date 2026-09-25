@@ -21,10 +21,10 @@ jobs:
         include:
           - host: linux-x86_64
             os: ubuntu-26.04
-            archive: bexos-sdk-v0.1.0-linux-x86_64.tar.gz
+            archive: bexos-sdk-v0.2.0-linux-x86_64.tar.gz
           - host: macos-aarch64
             os: macos-15
-            archive: bexos-sdk-v0.1.0-macos-aarch64.tar.gz
+            archive: bexos-sdk-v0.2.0-macos-aarch64.tar.gz
     runs-on: ${{ matrix.os }}
     timeout-minutes: 360
     steps:
@@ -39,8 +39,8 @@ jobs:
         env:
           SDK_TAG: ${{ github.ref_name }}
         run: |
-          test "$SDK_TAG" = "sdk-v0.1.0"
-          grep -q 'version = "0.1.0"' sdk/export/MODULE.bazel
+          test "$SDK_TAG" = "sdk-v0.2.0"
+          grep -q 'version = "0.2.0"' sdk/export/MODULE.bazel
       - name: Build archive and checksum
         run: bazel build //sdk:bexos_sdk //sdk:bexos_sdk_sha256
       - name: Smoke-test standalone fixture

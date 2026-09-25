@@ -1,0 +1,22 @@
+package(default_visibility = ["//visibility:public"])
+
+exports_files(glob(["include/**", "licenses/**"]))
+
+filegroup(
+    name = "files",
+    srcs = ["BUILD.bazel"] + glob(["include/**", "licenses/**"]),
+)
+
+[
+    filegroup(name = architecture + "_" + name, srcs = [path])
+    for architecture in ["aarch64", "x86_64"]
+    for name, path in [
+        ("assert", "include/assert.h"),
+        ("component", "include/bexos/component.h"),
+        ("stddef", "include/stddef.h"),
+        ("stdint", "include/stdint.h"),
+        ("string", "include/string.h"),
+        ("bexos_license", "licenses/BEXOS.txt"),
+        ("gnu_license", "licenses/GNU-LIBC.txt"),
+    ]
+]

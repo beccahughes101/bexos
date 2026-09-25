@@ -205,6 +205,7 @@ impl<B: Backend> Runtime<B> {
                         }
                         Object::IommuDomain(id) => (10, id, 0),
                         Object::Interrupt(id) => (11, id, 0),
+                        Object::ResourceGroup(id) => (12, id as usize, 0),
                     };
                     for v in [kind, id as u64, end as u64, c.rights as u64, c.owner as u64] {
                         w.word(v)?;
@@ -471,6 +472,7 @@ impl<B: Backend> Runtime<B> {
                         (9, value) => Object::ReplyToken(id, value & 1, (value >> 1) as u64),
                         (10, 0) => Object::IommuDomain(id),
                         (11, 0) => Object::Interrupt(id),
+                        (12, 0) => Object::ResourceGroup(u32::try_from(id).map_err(|_| bad)?),
                         _ => return Err(bad),
                     };
                     Some(Capability {

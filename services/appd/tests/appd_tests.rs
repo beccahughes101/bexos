@@ -3357,6 +3357,41 @@ fn platform_config_decoder_reads_aarch64_runner_tee_and_driver_policy() {
 }
 
 #[test]
+fn platform_config_decoder_accepts_proto3_packed_network_table_ids() {
+    let resource_template = message(&[
+        string_field(1, "system_network"),
+        varint_field(2, 8),
+        varint_field(3, 100),
+        varint_field(4, 134_217_728),
+    ]);
+    let isolation_group = message(&[
+        string_field(1, "system_default"),
+        string_field(2, "bexos.service.networkd"),
+        string_field(3, "networkd"),
+        string_field(4, "bexos.service.netstackd"),
+        string_field(5, "netstackd"),
+        string_field(6, "system_network"),
+        bytes_field(7, &[0, 42]),
+    ]);
+    let domain = message(&[
+        string_field(1, "system_default"),
+        string_field(2, "system_default"),
+        varint_field(3, 0),
+        varint_field(4, 1),
+    ]);
+    let network_policy = message(&[
+        message_field(1, &isolation_group),
+        message_field(2, &domain),
+        message_field(6, &resource_template),
+        varint_field(7, 64),
+    ]);
+
+    let config = PlatformConfig::decode(&message(&[message_field(8, &network_policy)]))
+        .expect("packed repeated scalar fields should decode");
+    assert_eq!(config.network_policy.isolation_groups[0].table_ids, [0, 42]);
+}
+
+#[test]
 fn install_app_from_url_rejects_non_https_and_reports_fetch_failure() {
     let mut state = bexos_appd::guest::state::AppdState::empty();
     let mut fetcher = FailingBundleFetcher;

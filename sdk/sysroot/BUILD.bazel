@@ -1,0 +1,70 @@
+package(default_visibility = ["//visibility:public"])
+
+[
+    genrule(
+        name = architecture + "_crt0",
+        srcs = ["crt0.S"],
+        outs = [architecture + "/crt0.o"],
+        cmd = "$(location @llvm//tools:clang) --target=%s -ffreestanding -nostdlib -c $(location crt0.S) -o $@" % triple,
+        tools = ["@llvm//tools:clang"],
+    )
+    for architecture, triple in [
+        ("aarch64", "aarch64-unknown-linux-gnu"),
+        ("x86_64", "x86_64-unknown-linux-gnu"),
+    ]
+]
+
+[
+    genrule(
+        name = architecture + "_link_smoke_elf",
+        srcs = [
+            "link_smoke.c",
+            ":" + architecture + "_crt0",
+            ":" + architecture + "_libc",
+            "//sdk/export/sysroot:include/stddef.h",
+            "//sdk/export/sysroot:include/string.h",
+        ],
+        outs = [architecture + "/link_smoke.elf"],
+        cmd = "$(location @llvm//tools:clang) --target=%s -ffreestanding -fno-stack-protector -nostdlib -Isdk/export/sysroot/include -c $(location link_smoke.c) -o $(@D)/link_smoke.o && " % triple +
+              "$(location @llvm//tools:ld.lld) -static -e _start $(location :%s_crt0) $(@D)/link_smoke.o $(location :%s_libc) -o $@" % (architecture, architecture),
+        tools = ["@llvm//tools:clang", "@llvm//tools:ld.lld"],
+    )
+    for architecture, triple in [
+        ("aarch64", "aarch64-unknown-linux-gnu"),
+        ("x86_64", "x86_64-unknown-linux-gnu"),
+    ]
+]
+
+sh_test(
+    name = "sysroot_link_test",
+    srcs = ["sysroot_link_test.sh"],
+    args = [
+        "$(location :aarch64_link_smoke_elf)",
+        "$(location :x86_64_link_smoke_elf)",
+        "$(location @llvm//tools:llvm-nm)",
+    ],
+    data = [
+        ":aarch64_link_smoke_elf",
+        ":x86_64_link_smoke_elf",
+        "@llvm//tools:llvm-nm",
+    ],
+)
+
+[
+    genrule(
+        name = architecture + "_" + archive,
+        srcs = [source] + (["//sdk/export/sysroot:include/bexos/component.h"] if archive == "runtime" else []),
+        outs = [architecture + "/" + output],
+        cmd = "$(location @llvm//tools:clang) --target=%s -ffreestanding -fno-stack-protector -nostdlib %s -c $(location %s) -o $(@D)/%s.o && " % (triple, "-Isdk/export/sysroot/include" if archive == "runtime" else "", source, archive) +
+              "$(location @llvm//tools:llvm-ar) rcs $@ $(@D)/%s.o" % archive,
+        tools = ["@llvm//tools:clang", "@llvm//tools:llvm-ar"],
+    )
+    for architecture, triple in [
+        ("aarch64", "aarch64-unknown-linux-gnu"),
+        ("x86_64", "x86_64-unknown-linux-gnu"),
+    ]
+    for archive, source, output in [
+        ("libc", "libc.c", "libc.a"),
+        ("runtime", "runtime.c", "libbexos_runtime.a"),
+    ]
+]

@@ -1,0 +1,12 @@
+name: "qemu_hardware"
+
+packages { label: "//drivers/d1/storage/bexos/bexfs:user_bexfs_driver" package_id: "bexos.driver.storage.user_bexfs" placement: BOOTFS }
+packages { label: "//drivers/d1/bus/generic/pci:pci_root_bus" package_id: "bexos.driver.pci_root" placement: BOOTFS }
+packages { label: "//drivers/d1/serial/arm/pl011:pl011" package_id: "bexos.driver.uart.pl011" placement: BOOTFS }
+packages { label: "//drivers/d1/rtc/arm/pl031:pl031" package_id: "bexos.driver.rtc.pl031" placement: BOOTFS }
+packages { label: "//drivers/d1/storage/nvmexpress/nvme:nvme_driver" package_id: "bexos.driver.storage.nvme" placement: BOOTFS }
+packages { label: "//drivers/d1/usb/xhci:xhcid" package_id: "bexos.driver.usb.xhcid" placement: BOOTFS }
+packages { label: "//services/usbd:usbd" package_id: "bexos.service.usbd" placement: BOOTFS }
+packages { label: "//drivers/d1/input/usb_hid:usb_hid" package_id: "bexos.driver.input.usb_hid" placement: BOOTFS }
+packages { label: "//drivers/d1/storage/usb/bot:usb_bot" package_id: "bexos.driver.storage.usb_bot" placement: BOOTFS }
+packages { label: "//drivers/d1/serial/virtio/console:virtio_console_driver" package_id: "bexos.driver.serial.virtio_console" placement: BOOTFS }

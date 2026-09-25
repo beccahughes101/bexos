@@ -1,0 +1,3 @@
+The GNU-compatible declarations in this sysroot are interface definitions only.
+They are curated for the BexOS ABI; no GNU C Library implementation is bundled.
+The GNU C Library is licensed under LGPL-2.1-or-later.

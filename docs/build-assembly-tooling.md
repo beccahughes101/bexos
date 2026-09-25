@@ -68,13 +68,17 @@ Current replacement archives exist for appd, debugd, vfsd, updated, prefsd, and 
 
 ## Product Assembly
 
-Out-of-tree application packages enter product assembly only through
-`bexos_prebuilt_app` in `build/rules/prebuilt_app.bzl`. Its analysis action
-verifies the BEXARCV2 signer, chunks, application/ABI/architecture contract,
-and extracts the manifest without executing package content. Reusable product
-and image rules then add the package as `SYSTEM_IMAGE`, extend the binary
-system-image install manifest, and copy the unchanged signed archive into the
-encrypted BexFS `STORAGE` image.
+Out-of-tree packages enter through `bexos_prebuilt_component` in
+`build/rules/prebuilt_app.bzl`; `bexos_prebuilt_app` remains the system-image
+application compatibility wrapper. The verification action checks BEXARCV2
+structure, chunks, product signing root, package/role/ABI/architecture,
+heart-transplant policy, driver resources/bind rules, signed boot wave and ELF
+payloads before extracting a passive package tree. `SYSTEM_IMAGE` retains the
+unchanged archive in encrypted `STORAGE`. Explicit, non-autoinstall `BOOTFS`
+components are overlaid under `/boot/pkg/<package-id>/` from the verified tree.
+Assembly rejects collisions and requires exact product runner grants for
+external native code plus exact driver grants for drivers. The assembly index
+carries verified signer-root and role provenance for appd policy evaluation.
 
 `assembly_input_bundle`, `bexos_product`, and `product_app_config` in `build/rules/assembly.bzl` compile prototxt product inputs and produce:
 
@@ -115,7 +119,7 @@ stores.
 
 `//tools/image` provides:
 
-- `assemble_bootfs.py`: builds BootFS image contents from explicit entries and ELF files.
+- `assemble_bootfs.py`: builds BootFS image contents from explicit entries and ELF files, and overlays verified external package trees on an existing base image.
 - `validate_bootfs_manifest.py`: validates bootfs manifest package labels against assembled product labels.
 - `boot_handoff`: writes the versioned kernel handoff, verified-boot evidence,
   and layout script. Secure/RPMB flags are valid only when their verified

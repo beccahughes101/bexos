@@ -17,7 +17,98 @@ fn run() -> Result<(), String> {
         Some("create") => create(&args[1..]),
         Some("verify") | Some("inspect") => verify(&args[1..]),
         Some("extract-manifest") => extract_manifest(&args[1..]),
-        _ => Err("usage: bex_archive create|verify|extract-manifest ...".to_string()),
+        Some("extract-component") => extract_component(&args[1..]),
+        _ => Err(
+            "usage: bex_archive create|verify|extract-manifest|extract-component ...".to_string(),
+        ),
+    }
+}
+
+fn component_type(args: &[String]) -> Result<bexos_app_manifest::SdkComponentType, String> {
+    match required(args, "--component-type")?.as_str() {
+        "application" => Ok(bexos_app_manifest::SdkComponentType::Application),
+        "service" => Ok(bexos_app_manifest::SdkComponentType::Service),
+        "driver" => Ok(bexos_app_manifest::SdkComponentType::Driver),
+        value => Err(format!("unsupported component type {value}")),
+    }
+}
+
+fn extract_component(args: &[String]) -> Result<(), String> {
+    let archive_path = required(args, "--archive")?;
+    let key_text = fs::read_to_string(required(args, "--signing-root")?)
+        .map_err(|error| format!("read signing root: {error}"))?;
+    let public = parse_public_key(&key_text)?;
+    let signer_id = parse_text_field(&key_text, "anchor_id")?;
+    if signer_id != required(args, "--signer-id")? {
+        return Err("signing root anchor_id does not match --signer-id".to_string());
+    }
+    let bytes = fs::read(&archive_path).map_err(|error| format!("read archive: {error}"))?;
+    let trusted = [TrustedKey {
+        key_id: public.key_id,
+        public_key: &public.public_key,
+    }];
+    let archive = OpenArchive::parse_and_verify(&bytes, &trusted)
+        .map_err(|error| format!("verify archive: {error:?}"))?;
+    let entry = archive
+        .find("package.bexmanifest")
+        .ok_or_else(|| "archive is missing package.bexmanifest".to_string())?;
+    let manifest = archive
+        .read_file(entry)
+        .map_err(|error| format!("read manifest: {error:?}"))?;
+    let architecture = parse_architecture(args)?;
+    let declared = bexos_app_manifest::ManifestArchitecture::decode(&manifest)
+        .and_then(|metadata| metadata.validate(Some(architecture)))
+        .map_err(|error| format!("manifest architecture: {error:?}"))?;
+    let maximum_abi = required(args, "--maximum-abi-version")?
+        .parse::<u32>()
+        .map_err(|_| "invalid --maximum-abi-version".to_string())?;
+    let boot_wave = optional(args, "--boot-wave")
+        .map(|value| {
+            value
+                .parse::<u32>()
+                .map_err(|_| "invalid --boot-wave".to_string())
+        })
+        .transpose()?;
+    bexos_app_manifest::validate_sdk_component(
+        &manifest,
+        &required(args, "--package-id")?,
+        maximum_abi,
+        component_type(args)?,
+        boot_wave,
+    )
+    .map_err(|error| format!("manifest contract: {error:?}"))?;
+    let out = PathBuf::from(required(args, "--out-tree")?);
+    fs::create_dir_all(&out).map_err(|error| format!("create output tree: {error}"))?;
+    for archive_entry in archive.entries() {
+        let path = std::path::Path::new(&archive_entry.path);
+        if path.is_absolute()
+            || path
+                .components()
+                .any(|part| !matches!(part, std::path::Component::Normal(_)))
+        {
+            return Err(format!("unsafe archive path {}", archive_entry.path));
+        }
+        let payload = archive
+            .read_file(archive_entry)
+            .map_err(|error| format!("read {}: {error:?}", archive_entry.path))?;
+        bexos_app_manifest::validate_payload(declared, &payload)
+            .map_err(|error| format!("payload {}: {error:?}", archive_entry.path))?;
+        let destination = out.join(path);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("create {}: {error}", parent.display()))?;
+        }
+        fs::write(&destination, payload)
+            .map_err(|error| format!("write {}: {error}", destination.display()))?;
+    }
+    Ok(())
+}
+
+fn parse_architecture(args: &[String]) -> Result<bexos_app_manifest::Architecture, String> {
+    match required(args, "--architecture")?.as_str() {
+        "AARCH64" => Ok(bexos_app_manifest::Architecture::Aarch64),
+        "X86_64" => Ok(bexos_app_manifest::Architecture::X86_64),
+        value => Err(format!("unsupported architecture {value}")),
     }
 }
 
@@ -40,11 +131,7 @@ fn extract_manifest(args: &[String]) -> Result<(), String> {
     let manifest = archive
         .read_file(entry)
         .map_err(|error| format!("read manifest: {error:?}"))?;
-    let architecture = match required(args, "--architecture")?.as_str() {
-        "AARCH64" => bexos_app_manifest::Architecture::Aarch64,
-        "X86_64" => bexos_app_manifest::Architecture::X86_64,
-        value => return Err(format!("unsupported architecture {value}")),
-    };
+    let architecture = parse_architecture(args)?;
     let declared = bexos_app_manifest::ManifestArchitecture::decode(&manifest)
         .and_then(|metadata| metadata.validate(Some(architecture)))
         .map_err(|error| format!("manifest architecture: {error:?}"))?;
@@ -95,7 +182,16 @@ fn create(args: &[String]) -> Result<(), String> {
     }
     let architecture = bexos_app_manifest::ManifestArchitecture::decode(&owned[0].1)
         .and_then(|m| m.validate(None)).map_err(|e| format!("manifest architecture: {e:?}; rebuild native packages with an explicit architecture"))?;
-    if args.iter().any(|arg| arg == "--sdk-contract") {
+    if let Some(component) = optional(args, "--sdk-component") {
+        let component_type = match component.as_str() {
+            "application" => bexos_app_manifest::SdkComponentType::Application,
+            "service" => bexos_app_manifest::SdkComponentType::Service,
+            "driver" => bexos_app_manifest::SdkComponentType::Driver,
+            _ => return Err(format!("unsupported --sdk-component {component}")),
+        };
+        bexos_app_manifest::validate_sdk_component_contract(&owned[0].1, 1, component_type, None)
+            .map_err(|error| format!("SDK manifest contract: {error:?}"))?;
+    } else if args.iter().any(|arg| arg == "--sdk-contract") {
         bexos_app_manifest::validate_sdk_app_contract(&owned[0].1, 1)
             .map_err(|error| format!("SDK manifest contract: {error:?}"))?;
     }

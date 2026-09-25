@@ -1,5 +1,6 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 package(default_visibility = ["//visibility:public"])
+filegroup(name = "sdk_files", srcs = ["BUILD.bazel"] + glob(["src/**/*.rs"]))
 rust_library(
     name = "component_config",
     srcs = glob(["src/**/*.rs"]),
@@ -9,8 +10,7 @@ rust_library(
 
 rust_test(
     name = "tests",
-    srcs = glob(["tests/**/*.rs"]),
+    srcs = glob(["tests/**/*.rs"], allow_empty = True),
     edition = "2024",
     deps = [":component_config"],
 )
-

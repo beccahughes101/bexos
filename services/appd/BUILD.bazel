@@ -39,6 +39,7 @@ rust_library(
         "//lib/distribution",
         "//lib/package_version",
         "//lib/redb:redb_bexos_std",
+        "//lib/trust_store:trust_store_bexos_std",
         "//lib/boot",
         "//lib/crypto",
         "//idl:bootstrap_fidl_rust",

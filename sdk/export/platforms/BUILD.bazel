@@ -1,7 +1,10 @@
 load(":cc_toolchain.bzl", "sdk_cc_toolchain_config")
+load(":host_tools.bzl", "host_tools", "llvm_resource_headers")
 load("@rules_cc//cc/toolchains:cc_toolchain.bzl", "cc_toolchain")
 
 package(default_visibility = ["//visibility:public"])
+
+exports_files(glob(["*.sh"]))
 
 constraint_setting(name = "bexos_application_abi")
 constraint_value(name = "application_abi_v1", constraint_setting = ":bexos_application_abi")
@@ -9,13 +12,31 @@ constraint_value(name = "application_abi_v1", constraint_setting = ":bexos_appli
 platform(
     name = "native_aarch64",
     flags = [
-        "--noincompatible_enable_cc_toolchain_resolution",
         "--@rules_rust//rust/settings:toolchain_linker_preference=rust",
     ],
     constraint_values = [
         "@platforms//cpu:aarch64",
         "@platforms//os:linux",
         ":application_abi_v1",
+    ],
+)
+
+alias(name = "llvm_headers", actual = llvm_resource_headers())
+
+host_tools(
+    name = "host_llvm",
+    tools = [":llvm_headers", "@llvm//tools:clang", "@llvm//tools:llvm-ar", "@llvm//tools:llvm-nm"],
+)
+
+filegroup(
+    name = "cc_files",
+    srcs = [
+        "ar.sh",
+        "clang_aarch64.sh",
+        "clang_common.sh",
+        "clang_x86_64.sh",
+        "nm.sh",
+        ":host_llvm",
     ],
 )
 
@@ -37,13 +58,13 @@ sdk_cc_toolchain_config(
 [
     cc_toolchain(
         name = architecture + "_cc",
-        all_files = ":empty_cc_files",
-        ar_files = ":empty_cc_files",
-        compiler_files = ":empty_cc_files",
-        dwp_files = ":empty_cc_files",
-        linker_files = ":empty_cc_files",
-        objcopy_files = ":empty_cc_files",
-        strip_files = ":empty_cc_files",
+        all_files = ":cc_files",
+        ar_files = ":cc_files",
+        compiler_files = ":cc_files",
+        dwp_files = ":cc_files",
+        linker_files = ":cc_files",
+        objcopy_files = ":cc_files",
+        strip_files = ":cc_files",
         toolchain_config = ":" + architecture + "_cc_config",
     )
     for architecture in ["aarch64", "x86_64"]
@@ -85,12 +106,11 @@ toolchain(
     toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",
 )
 
-filegroup(name = "files", srcs = glob(["**"]))
+filegroup(name = "files", srcs = glob(["**"], exclude = ["*.sh"]))
 
 platform(
     name = "native_x86_64",
     flags = [
-        "--noincompatible_enable_cc_toolchain_resolution",
         "--@rules_rust//rust/settings:toolchain_linker_preference=rust",
     ],
     constraint_values = [
@@ -102,7 +122,7 @@ platform(
 
 platform(
     name = "wasip2",
-    flags = ["--noincompatible_enable_cc_toolchain_resolution"],
+    flags = [],
     constraint_values = [
         "@platforms//cpu:wasm32",
         "@platforms//os:wasi",

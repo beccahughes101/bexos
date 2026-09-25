@@ -1,5 +1,10 @@
 package_name: "bexos.service.networkd"
 name: "Scoped network service"
+permissions {
+  name: "BEXOS_SYSTEM_PRIVILEGED"
+  requirement: PERMISSION_REQUIRED
+  usage_description: "Bind privileged per-instance netstack control protocols."
+}
 processes {
   name: "networkd"
   runner: "elf"

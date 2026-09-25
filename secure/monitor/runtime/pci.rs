@@ -14,10 +14,10 @@ const REQUESTERS: [u8; 3] = [24, 32, 40];
 #[cfg(not(feature = "secure_product"))]
 const IDENTITIES: [u32; 3] = [0x00101b36, 0x10431af4, 0x10411af4];
 #[cfg(feature = "secure_product")]
-const REQUESTERS: [u8; 7] = [24, 32, 40, 48, 56, 64, 72];
+const REQUESTERS: [u8; 8] = [24, 32, 40, 48, 56, 64, 72, 80];
 #[cfg(feature = "secure_product")]
-const IDENTITIES: [u32; 7] = [
-    0x00101b36, 0x10431af4, 0x10411af4, 0x10431af4, 0x10501af4, 0x10521af4, 0x10521af4,
+const IDENTITIES: [u32; 8] = [
+    0x00101b36, 0x10431af4, 0x10411af4, 0x10431af4, 0x10501af4, 0x10521af4, 0x10521af4, 0x10d38086,
 ];
 #[derive(Clone)]
 pub struct Pci {
@@ -38,10 +38,10 @@ impl Pci {
             for (device, expected) in IDENTITIES.into_iter().enumerate() {
                 let requester = REQUESTERS[device];
                 let identity = pci_config::read(requester, 0);
-                // Product headless boots omit the workstation devices in
-                // slots 7-9. Their protected policy remains empty, while a
-                // graphical boot must expose exactly the expected virtio GPU
-                // and two virtio input functions at those fixed requesters.
+                // Product headless boots omit the optional workstation devices
+                // in slots 7-9 and the SDK e1000e fixture in slot 10. Their
+                // protected policy remains empty, while a populated slot must
+                // expose exactly the identity authenticated for that requester.
                 if cfg!(feature = "secure_product") && device >= 4 && identity == u32::MAX {
                     continue;
                 }
@@ -51,7 +51,14 @@ impl Pci {
                 while index < 6 {
                     let register = 0x10 + index as u8 * 4;
                     let flags = pci_config::read(requester, register) as u8 & 15;
-                    assert_eq!(flags & 1, 0);
+                    // Legacy I/O BARs are never exposed to the guest. The
+                    // virtual command register forbids I/O decode, while MMIO
+                    // BARs continue through the size and protected-window
+                    // checks below.
+                    if flags & 1 != 0 {
+                        index += 1;
+                        continue;
+                    }
                     let wide = flags & 6 == 4;
                     assert!(!wide || index < 5);
                     pci_config::write(requester, register, u32::MAX);
@@ -95,7 +102,13 @@ impl Pci {
                         }
                         cap = (header >> 8) as u8;
                     }
-                    assert!(result.functions[device].common_bar.is_some());
+                    // Virtio PCI functions must expose the modern common
+                    // configuration capability. The polling e1000e acceptance
+                    // fixture is deliberately non-virtio and remains confined
+                    // by the same BAR and VT-d policy.
+                    if expected as u16 == 0x1af4 {
+                        assert!(result.functions[device].common_bar.is_some());
+                    }
                 }
             }
             result.retain_policy();

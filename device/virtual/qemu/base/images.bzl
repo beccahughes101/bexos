@@ -1,6 +1,7 @@
 """Product-local boot, AVB, and writable storage images."""
 load("//build/platforms:architecture.bzl", "guest_select")
 load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:bootfs.bzl", "bootfs_with_prebuilt_components")
 load("//build/rules:image.bzl", "bexfs_image_with_prebuilt_apps")
 load("//lib/flatland_text:BUILD.fonts.bzl", "FONT_LICENSES", "SYSTEM_FONT_ENTRIES")
 
@@ -116,7 +117,10 @@ QEMU_STORAGE_PREINSTALLS_SHELL_FIXTURE = QEMU_STORAGE_PREINSTALLS_WITHOUT_BRUSH 
     },
 ]
 
-def qemu_images(graphics = False, input_fixture = False, prebuilt_apps = []):
+def qemu_images(graphics = False, input_fixture = False, prebuilt_apps = [], prebuilt_updates = {}, base_storage_preinstalls = None, include_boot_wasm = True):
+    boot_wasm_inputs = ["//testing/wasm:boot_wasm", "//testing/wasm:boot_manifest"] if include_boot_wasm else []
+    boot_wasm_entries = ("--entry /boot/pkg/bexos.test.wasm.boot/package.bexmanifest=$(location //testing/wasm:boot_manifest) " +
+                         "--entry /boot/pkg/bexos.test.wasm.boot/bin/boot.wasm=$(location //testing/wasm:boot_wasm) ") if include_boot_wasm else ""
     graphics_packages = [('drivers/d1/input/virtio', 'bexos.driver.input.virtio', 'input', 'input_driver'), ('drivers/d1/display/virtio/gpu', 'bexos.driver.display.virtio_gpu', 'gpu', 'gpu_driver'), ('services/splashd', 'bexos.service.splashd', 'splashd', 'splashd_elf'), ('services/fontd', 'bexos.service.fontd', 'fontd', 'fontd_elf'), ('services/scened', 'bexos.service.scened', 'scened', 'scened_elf')] if graphics else []
     if input_fixture:
         graphics_packages.append(('testing/e2e/qemu/graphics/input_fixture', 'bexos.testing.input_fixture', 'input_fixture', 'fixture_elf'))
@@ -132,7 +136,7 @@ def qemu_images(graphics = False, input_fixture = False, prebuilt_apps = []):
         graphics_entries += "--entry /boot/pkg/bexos.service.scened/licenses/nanoprintf/LICENSE=$(location @nanoprintf//:LICENSE) "
         graphics_entries += "".join(["--entry /boot/pkg/bexos.service.scened/%s=$(location %s) " % (path, source) for path, source in FONT_LICENSES.items()])
         graphics_entries += "--entry /boot/pkg/bexos.service.scened/config/desktop.pb=$(location //services/scened:desktop_config) "
-    storage_preinstalls = QEMU_STORAGE_PREINSTALLS + [{"archive": "//%s:replacement_archive" % path, "path": "updates/%s.replacement.bex" % pkg} for path, pkg, name, target in graphics_packages]
+    storage_preinstalls = (QEMU_STORAGE_PREINSTALLS if base_storage_preinstalls == None else base_storage_preinstalls) + [{"archive": "//%s:replacement_archive" % path, "path": "updates/%s.replacement.bex" % pkg} for path, pkg, name, target in graphics_packages]
     if graphics:
         storage_preinstalls += [
             {"archive": "//drivers/d1/input/virtio:input_archive", "path": "pkg/bexos.driver.input.virtio.bex"},
@@ -151,15 +155,14 @@ def qemu_images(graphics = False, input_fixture = False, prebuilt_apps = []):
             {"archive": "//testing/e2e/qemu/graphics:gpu_reject_archive", "path": "updates/bexos.driver.display.virtio_gpu.rejected.bex"},
         ]
     native.genrule(
-        name = "bootfs_image",
-        srcs = graphics_inputs + [
+        name = "bootfs_base_image",
+        srcs = graphics_inputs + boot_wasm_inputs + [
             "//drivers/d1/serial/virtio/console:package_manifest",
             "//drivers/d1/serial/virtio/console:virtio_console_driver",
             ":bootfs_manifest_bin", ":platform_config_bin", ":product_assembly_index", "//device/virtual/qemu/base:qemu_bexfs_test.key",
             "//services/appd:appd_elf",
             "//services/appd:package_manifest",
             "//services/wasm_runner:wasm_runner_elf",
-            "//testing/wasm:boot_wasm", "//testing/wasm:boot_manifest",
             "//drivers/d1/bus/generic/pci:package_manifest",
             "//drivers/d1/storage/nvmexpress/nvme:package_manifest", "//drivers/d1/storage/bexos/bexfs:package_manifest",
             "//drivers/d1/storage/bexos/bexfs:user_package_manifest",
@@ -202,7 +205,7 @@ def qemu_images(graphics = False, input_fixture = False, prebuilt_apps = []):
             "//services/usersd:usersd_elf",
             "//services/keychaind:keychaind_elf",
         ] + guest_select(["//drivers/d1/serial/arm/pl011:package_manifest", "//drivers/d1/rtc/arm/pl031:package_manifest", "//drivers/d1/serial/arm/pl011:pl011", "//drivers/d1/rtc/arm/pl031:pl031"], ["//drivers/d1/rtc/pc/cmos:cmos", "//drivers/d1/rtc/pc/cmos:package_manifest"]),
-        outs = ["bootfs.img"],
+        outs = ["bootfs.base.img"],
         cmd = "$(location //tools/image:assemble_bootfs) --manifest-validator $(location //tools/app_manifest:stamp) --out $@ " + graphics_entries + guest_select("--architecture aarch64 ", "--architecture x86_64 ") +
               "--entry /boot/pkg/bexos.driver.serial.virtio_console/package.bexmanifest=$(location //drivers/d1/serial/virtio/console:package_manifest) " +
               "--entry /boot/manifest/bootfs_manifest.bin=$(location :bootfs_manifest_bin) " +
@@ -242,8 +245,7 @@ def qemu_images(graphics = False, input_fixture = False, prebuilt_apps = []):
               "--elf /boot/pkg/bexos.driver.serial.virtio_console/bin/virtio_console_driver=$(location //drivers/d1/serial/virtio/console:virtio_console_driver) " +
               "--elf /boot/pkg/bexos.platform.appd/bin/appd=$(location //services/appd:appd_elf) " +
               "--entry /boot/pkg/bexos.platform.wasm_runner/bin/wasm_runner=$(location //services/wasm_runner:wasm_runner_elf) " +
-              "--entry /boot/pkg/bexos.test.wasm.boot/package.bexmanifest=$(location //testing/wasm:boot_manifest) " +
-              "--entry /boot/pkg/bexos.test.wasm.boot/bin/boot.wasm=$(location //testing/wasm:boot_wasm) " +
+              boot_wasm_entries +
               "--elf /boot/pkg/bexos.driver.pci_root/bin/pci_root_bus=$(location //drivers/d1/bus/generic/pci:pci_root_bus) " +
               guest_select("--elf /boot/pkg/bexos.driver.uart.pl011/bin/pl011=$(location //drivers/d1/serial/arm/pl011:pl011) ", "") +
               guest_select("--elf /boot/pkg/bexos.driver.rtc.pl031/bin/pl031=$(location //drivers/d1/rtc/arm/pl031:pl031) ", "--elf /boot/pkg/bexos.driver.rtc.cmos/bin/cmos=$(location //drivers/d1/rtc/pc/cmos:cmos) ") +
@@ -266,15 +268,14 @@ def qemu_images(graphics = False, input_fixture = False, prebuilt_apps = []):
     )
 
     native.genrule(
-        name = "bootfs_image_emulated",
-        srcs = graphics_inputs + [
+        name = "bootfs_base_image_emulated",
+        srcs = graphics_inputs + boot_wasm_inputs + [
             "//drivers/d1/serial/virtio/console:package_manifest",
             "//drivers/d1/serial/virtio/console:virtio_console_driver",
             ":bootfs_manifest_bin", ":platform_config_emulated_bin", ":product_emulated_assembly_index", "//device/virtual/qemu/base:qemu_bexfs_test.key",
             "//services/appd:appd_elf",
             "//services/appd:package_manifest",
             "//services/wasm_runner:wasm_runner_elf",
-            "//testing/wasm:boot_wasm", "//testing/wasm:boot_manifest",
             "//drivers/d1/bus/generic/pci:package_manifest",
             "//drivers/d1/storage/nvmexpress/nvme:package_manifest", "//drivers/d1/storage/bexos/bexfs:package_manifest",
             "//drivers/d1/storage/bexos/bexfs:user_package_manifest",
@@ -317,7 +318,7 @@ def qemu_images(graphics = False, input_fixture = False, prebuilt_apps = []):
             "//services/usersd:usersd_elf",
             "//services/keychaind:keychaind_elf",
         ] + guest_select(["//drivers/d1/serial/arm/pl011:package_manifest", "//drivers/d1/rtc/arm/pl031:package_manifest", "//drivers/d1/serial/arm/pl011:pl011", "//drivers/d1/rtc/arm/pl031:pl031"], ["//drivers/d1/rtc/pc/cmos:cmos", "//drivers/d1/rtc/pc/cmos:package_manifest"]),
-        outs = ["bootfs.emulated.img"],
+        outs = ["bootfs.emulated.base.img"],
         cmd = "$(location //tools/image:assemble_bootfs) --manifest-validator $(location //tools/app_manifest:stamp) --out $@ " + graphics_entries + guest_select("--architecture aarch64 ", "--architecture x86_64 ") +
               "--entry /boot/pkg/bexos.driver.serial.virtio_console/package.bexmanifest=$(location //drivers/d1/serial/virtio/console:package_manifest) --elf /boot/pkg/bexos.driver.serial.virtio_console/bin/virtio_console_driver=$(location //drivers/d1/serial/virtio/console:virtio_console_driver) " +
               "--entry /boot/manifest/bootfs_manifest.bin=$(location :bootfs_manifest_bin) " +
@@ -356,8 +357,7 @@ def qemu_images(graphics = False, input_fixture = False, prebuilt_apps = []):
               "--entry /system/certs/app_signing_roots.redb=$(location //ecosystem/bexos:app_signing_roots_redb) " +
               "--elf /boot/pkg/bexos.platform.appd/bin/appd=$(location //services/appd:appd_elf) " +
               "--entry /boot/pkg/bexos.platform.wasm_runner/bin/wasm_runner=$(location //services/wasm_runner:wasm_runner_elf) " +
-              "--entry /boot/pkg/bexos.test.wasm.boot/package.bexmanifest=$(location //testing/wasm:boot_manifest) " +
-              "--entry /boot/pkg/bexos.test.wasm.boot/bin/boot.wasm=$(location //testing/wasm:boot_wasm) " +
+              boot_wasm_entries +
               "--elf /boot/pkg/bexos.driver.pci_root/bin/pci_root_bus=$(location //drivers/d1/bus/generic/pci:pci_root_bus) " +
               guest_select("--elf /boot/pkg/bexos.driver.uart.pl011/bin/pl011=$(location //drivers/d1/serial/arm/pl011:pl011) ", "") +
               guest_select("--elf /boot/pkg/bexos.driver.rtc.pl031/bin/pl031=$(location //drivers/d1/rtc/arm/pl031:pl031) ", "--elf /boot/pkg/bexos.driver.rtc.cmos/bin/cmos=$(location //drivers/d1/rtc/pc/cmos:cmos) ") +
@@ -377,6 +377,20 @@ def qemu_images(graphics = False, input_fixture = False, prebuilt_apps = []):
               "--elf /boot/pkg/bexos.service.usersd/bin/usersd=$(location //services/usersd:usersd_elf) " +
               "--elf /boot/pkg/bexos.service.keychaind/bin/keychaind=$(location //services/keychaind:keychaind_elf)",
         tools = ["//tools/image:assemble_bootfs", "//tools/app_manifest:stamp"],
+    )
+
+    bootfs_with_prebuilt_components(
+        name = "bootfs_image",
+        base = ":bootfs_base_image",
+        prebuilt_components = prebuilt_apps,
+        out = "bootfs.img",
+    )
+
+    bootfs_with_prebuilt_components(
+        name = "bootfs_image_emulated",
+        base = ":bootfs_base_image_emulated",
+        prebuilt_components = prebuilt_apps,
+        out = "bootfs.emulated.img",
     )
 
     native.genrule(
@@ -533,6 +547,7 @@ def qemu_images(graphics = False, input_fixture = False, prebuilt_apps = []):
     }
     for entry in storage_preinstalls:
         storage_entries[entry["archive"]] = entry["path"]
+    storage_entries.update(prebuilt_updates)
     bexfs_image_with_prebuilt_apps(
         name = "qemu_storage",
         entries = storage_entries,

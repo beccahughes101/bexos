@@ -10,13 +10,31 @@ rust_library(
 )
 
 rust_library(
+    name = "bexos_component",
+    srcs = ["component.rs"],
+    crate_name = "bexos_component",
+    edition = "2024",
+    deps = [
+        "//lib/bexos_libc",
+        "//lib/migration",
+        "//lib/userspace",
+    ],
+)
+
+alias(name = "bexos_driver_startup", actual = "//lib/userspace")
+alias(name = "bexos_hardware_resource", actual = "//lib/userspace")
+alias(name = "bexos_migration", actual = "//lib/migration")
+alias(name = "bexos_service_binding", actual = "//lib/userspace")
+alias(name = "bexos_libc", actual = "//lib/bexos_libc")
+
+rust_library(
     name = "bexos_wasm_guest",
     srcs = ["wasm_guest.rs"],
     crate_name = "bexos_wasm_guest",
     compile_data = ["wasm.wit"],
     edition = "2024",
     rustc_env = {"CARGO_MANIFEST_DIR": "."},
-    deps = ["@sdk_crates//:wit-bindgen"],
+    deps = ["@crates//:wit-bindgen"],
 )
 
 filegroup(name = "files", srcs = glob(["**"]))

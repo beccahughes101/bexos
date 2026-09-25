@@ -24,6 +24,8 @@ def _bexfs_image_impl(ctx):
         args.add("--entry", "%s=%s" % (destination, source.path))
     for target in ctx.attr.prebuilt_apps:
         info = target[BexosPrebuiltAppInfo]
+        if info.placement != "SYSTEM_IMAGE":
+            continue
         destination = "pkg/%s.bex" % info.package_id
         if destination in destinations:
             fail("duplicate BexFS destination %s" % destination)

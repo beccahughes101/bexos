@@ -2,12 +2,68 @@ load(":sdk_archive.bzl", "sdk_archive", "sdk_checksum")
 
 package(default_visibility = ["//visibility:public"])
 
+_SYSROOT_RENAMES = {
+    "//sdk/export/sysroot:aarch64_assert": "sysroot/aarch64/include/assert.h",
+    "//sdk/export/sysroot:aarch64_bexos_license": "sysroot/aarch64/licenses/BEXOS.txt",
+    "//sdk/export/sysroot:aarch64_component": "sysroot/aarch64/include/bexos/component.h",
+    "//sdk/export/sysroot:aarch64_gnu_license": "sysroot/aarch64/licenses/GNU-LIBC.txt",
+    "//sdk/export/sysroot:aarch64_stddef": "sysroot/aarch64/include/stddef.h",
+    "//sdk/export/sysroot:aarch64_stdint": "sysroot/aarch64/include/stdint.h",
+    "//sdk/export/sysroot:aarch64_string": "sysroot/aarch64/include/string.h",
+    "//sdk/export/sysroot:x86_64_assert": "sysroot/x86_64/include/assert.h",
+    "//sdk/export/sysroot:x86_64_bexos_license": "sysroot/x86_64/licenses/BEXOS.txt",
+    "//sdk/export/sysroot:x86_64_component": "sysroot/x86_64/include/bexos/component.h",
+    "//sdk/export/sysroot:x86_64_gnu_license": "sysroot/x86_64/licenses/GNU-LIBC.txt",
+    "//sdk/export/sysroot:x86_64_stddef": "sysroot/x86_64/include/stddef.h",
+    "//sdk/export/sysroot:x86_64_stdint": "sysroot/x86_64/include/stdint.h",
+    "//sdk/export/sysroot:x86_64_string": "sysroot/x86_64/include/string.h",
+    "//sdk/sysroot:aarch64_crt0": "sysroot/aarch64/lib/crt0.o",
+    "//sdk/sysroot:aarch64_libc": "sysroot/aarch64/lib/libc.a",
+    "//sdk/sysroot:aarch64_runtime": "sysroot/aarch64/lib/libbexos_runtime.a",
+    "//sdk/sysroot:x86_64_crt0": "sysroot/x86_64/lib/crt0.o",
+    "//sdk/sysroot:x86_64_libc": "sysroot/x86_64/lib/libc.a",
+    "//sdk/sysroot:x86_64_runtime": "sysroot/x86_64/lib/libbexos_runtime.a",
+}
+
+_LINUX_RENAMES = dict(_SYSROOT_RENAMES)
+_LINUX_RENAMES.update({
+    "//sdk/export/build/platforms:sdk_build": "build/platforms/BUILD.bazel",
+    "//sdk/export/examples:sdk_build": "examples/BUILD.bazel",
+    "//sdk/export/idl:sdk_build": "idl/BUILD.bazel",
+    "//sdk/export/rust:sdk_build": "rust/BUILD.bazel",
+    "//sdk:meta/linux_x86_64.prototxt": "meta/sdk.prototxt",
+})
+
+_MACOS_RENAMES = dict(_SYSROOT_RENAMES)
+_MACOS_RENAMES.update({
+    "//sdk/export/build/platforms:sdk_build": "build/platforms/BUILD.bazel",
+    "//sdk/export/examples:sdk_build": "examples/BUILD.bazel",
+    "//sdk/export/idl:sdk_build": "idl/BUILD.bazel",
+    "//sdk/export/rust:sdk_build": "rust/BUILD.bazel",
+    "//sdk:meta/macos_aarch64.prototxt": "meta/sdk.prototxt",
+})
+
+_SDK_TOOLS = {
+    "//sdk/export/platforms:ar.sh": "platforms/ar.sh",
+    "//sdk/export/platforms:clang_aarch64.sh": "platforms/clang_aarch64.sh",
+    "//sdk/export/platforms:clang_common.sh": "platforms/clang_common.sh",
+    "//sdk/export/platforms:clang_x86_64.sh": "platforms/clang_x86_64.sh",
+    "//sdk/export/platforms:false.sh": "platforms/false.sh",
+    "//sdk/export/platforms:nm.sh": "platforms/nm.sh",
+    "//tools/app_archive:bex_archive": "tools/bin/bex_archive",
+    "//tools/app_manifest:stamp": "tools/bin/manifest_stamp",
+    "//tools/assembly:bexos_assembly": "tools/bin/bexos_assembly",
+    "//tools/config_compiler:config_compiler": "tools/bin/config_compiler",
+    "//tools/fidlc:fidlc": "tools/bin/fidlc",
+}
+
 exports_files(["sdk_archive.bzl"])
 
 filegroup(
     name = "export_sources",
     srcs = [
         "//sdk/export:root_files",
+        "//sdk/export/build/platforms:files",
         "//sdk/export/examples:files",
         "//sdk/export/idl:files",
         "//sdk/export/meta:files",
@@ -15,6 +71,17 @@ filegroup(
         "//sdk/export/rules:files",
         "//sdk/export/rust:files",
         "//sdk/export/tools:files",
+        "//lib/allocator:sdk_files",
+        "//lib/bexos_libc:sdk_files",
+        "//lib/boot:sdk_files",
+        "//lib/component_config:sdk_files",
+        "//lib/elf:sdk_files",
+        "//lib/futex_sync:sdk_files",
+        "//lib/migration:sdk_files",
+        "//lib/restricted_abi:sdk_files",
+        "//lib/time_abi:sdk_files",
+        "//lib/trace:sdk_files",
+        "//lib/userspace:sdk_files",
     ],
 )
 
@@ -31,52 +98,32 @@ config_setting(
 sdk_archive(
     name = "bexos_sdk_linux_x86_64",
     srcs = [":export_sources", "//idl:sdk_public_sources"],
-    renamed_files = {
-        "//sdk/export/examples:sdk_build": "examples/BUILD.bazel",
-        "//sdk/export/rust:sdk_build": "rust/BUILD.bazel",
-        "meta/linux_x86_64.prototxt": "meta/sdk.prototxt",
-    },
-    tools = {
-        "//tools/app_archive:bex_archive": "tools/bin/bex_archive",
-        "//tools/app_manifest:stamp": "tools/bin/manifest_stamp",
-        "//tools/assembly:bexos_assembly": "tools/bin/bexos_assembly",
-        "//tools/config_compiler:config_compiler": "tools/bin/config_compiler",
-        "//tools/fidlc:fidlc": "tools/bin/fidlc",
-    },
-    out = "bexos-sdk-v0.1.0-linux-x86_64.tar.gz",
+    renamed_files = _LINUX_RENAMES,
+    tools = _SDK_TOOLS,
+    out = "bexos-sdk-v0.2.0-linux-x86_64.tar.gz",
     target_compatible_with = ["@platforms//os:linux", "@platforms//cpu:x86_64"],
 )
 
 sdk_checksum(
     name = "bexos_sdk_linux_x86_64_sha256",
     src = ":bexos_sdk_linux_x86_64",
-    out = "bexos-sdk-v0.1.0-linux-x86_64.tar.gz.sha256",
+    out = "bexos-sdk-v0.2.0-linux-x86_64.tar.gz.sha256",
     target_compatible_with = ["@platforms//os:linux", "@platforms//cpu:x86_64"],
 )
 
 sdk_archive(
     name = "bexos_sdk_macos_aarch64",
     srcs = [":export_sources", "//idl:sdk_public_sources"],
-    renamed_files = {
-        "//sdk/export/examples:sdk_build": "examples/BUILD.bazel",
-        "//sdk/export/rust:sdk_build": "rust/BUILD.bazel",
-        "meta/macos_aarch64.prototxt": "meta/sdk.prototxt",
-    },
-    tools = {
-        "//tools/app_archive:bex_archive": "tools/bin/bex_archive",
-        "//tools/app_manifest:stamp": "tools/bin/manifest_stamp",
-        "//tools/assembly:bexos_assembly": "tools/bin/bexos_assembly",
-        "//tools/config_compiler:config_compiler": "tools/bin/config_compiler",
-        "//tools/fidlc:fidlc": "tools/bin/fidlc",
-    },
-    out = "bexos-sdk-v0.1.0-macos-aarch64.tar.gz",
+    renamed_files = _MACOS_RENAMES,
+    tools = _SDK_TOOLS,
+    out = "bexos-sdk-v0.2.0-macos-aarch64.tar.gz",
     target_compatible_with = ["@platforms//os:macos", "@platforms//cpu:aarch64"],
 )
 
 sdk_checksum(
     name = "bexos_sdk_macos_aarch64_sha256",
     src = ":bexos_sdk_macos_aarch64",
-    out = "bexos-sdk-v0.1.0-macos-aarch64.tar.gz.sha256",
+    out = "bexos-sdk-v0.2.0-macos-aarch64.tar.gz.sha256",
     target_compatible_with = ["@platforms//os:macos", "@platforms//cpu:aarch64"],
 )
 

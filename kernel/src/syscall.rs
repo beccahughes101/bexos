@@ -750,6 +750,57 @@ fn route(
                 root_vmar_handle: h(root_vmar)
             })
         }
+        (4, Some("CreateResourceGroup")) => {
+            let q = decode!(SystemPrivilegedCreateResourceGroupRequest);
+            let r = if q.name.is_empty() || q.name.len() > 24 || q.cpu_shares == 0 {
+                Err(Status::ErrInvalidArgs)
+            } else {
+                rt.create_resource_group_v2(None, q.cpu_shares, 0, true)
+            };
+            let st = status(&r);
+            let (resource_group_id, group_handle) = r.unwrap_or((0, 0));
+            reply!(SystemPrivilegedCreateResourceGroupResponse {
+                status: st,
+                resource_group_id,
+                group_handle: h(group_handle)
+            })
+        }
+        (4, Some("OpenResourceGroup")) => {
+            let q = decode!(SystemPrivilegedOpenResourceGroupRequest);
+            let r = rt.open_resource_group(q.resource_group_id);
+            reply!(SystemPrivilegedOpenResourceGroupResponse {
+                status: status(&r),
+                group_handle: h(r.unwrap_or(0))
+            })
+        }
+        (4, Some("CreateResourceGroupV2")) => {
+            let q = decode!(SystemPrivilegedCreateResourceGroupV2Request);
+            let r = if q.name.is_empty()
+                || q.name.len() > 24
+                || q.cpu_shares == 0
+                || q.max_cpu_utilization_permille > 1000
+                || q.max_render_budget_percent > 100
+                || (q.memory_low_watermark_bytes != 0
+                    && q.memory_high_watermark_bytes != 0
+                    && q.memory_low_watermark_bytes > q.memory_high_watermark_bytes)
+            {
+                Err(Status::ErrInvalidArgs)
+            } else {
+                rt.create_resource_group_v2(
+                    (q.parent_group.raw != 0).then_some(q.parent_group.raw),
+                    q.cpu_shares,
+                    q.max_cpu_utilization_permille,
+                    q.allow_realtime,
+                )
+            };
+            let st = status(&r);
+            let (resource_group_id, group_handle) = r.unwrap_or((0, 0));
+            reply!(SystemPrivilegedCreateResourceGroupV2Response {
+                status: st,
+                resource_group_id,
+                group_handle: h(group_handle)
+            })
+        }
         (4, Some("StartThreadInProcess")) => {
             let q = decode!(SystemPrivilegedStartThreadInProcessRequest);
             let r = rt.start_with_thread_pointer(

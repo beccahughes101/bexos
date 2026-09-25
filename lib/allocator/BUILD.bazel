@@ -1,4 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 package(default_visibility = ["//visibility:public"])
+filegroup(name = "sdk_files", srcs = ["BUILD.bazel", "lib.rs", "free_tree.rs", "resize.rs"])
 rust_library(name = "allocator", srcs = ["lib.rs", "free_tree.rs", "resize.rs"], crate_root = "lib.rs", crate_name = "bexos_allocator", edition = "2024")
 rust_test(name = "tests", crate = ":allocator")

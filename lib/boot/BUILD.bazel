@@ -1,5 +1,6 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 load("//build/platforms:architecture.bzl", "guest_select")
 package(default_visibility = ["//visibility:public"])
+filegroup(name = "sdk_files", srcs = ["BUILD.bazel", "lib.rs", "framebuffer.rs", "handoff_compat.rs"])
 rust_library(name = "boot", rustc_flags = guest_select([], ["--cfg=bexos_arch_x86_64"]), srcs = ["lib.rs", "framebuffer.rs", "handoff_compat.rs"], crate_name = "bexos_boot", edition = "2024")
 rust_test(name = "tests", crate = ":boot")

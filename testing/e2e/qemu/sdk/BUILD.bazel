@@ -3,6 +3,13 @@ load("//testing/e2e/qemu:qemu_e2e.bzl", "QEMU_BOOT_ARTIFACTS", "qemu_e2e_test")
 
 package(default_visibility = ["//visibility:public"])
 
+SDK_NIC_QEMU_ARGS = [
+    "-netdev",
+    "user,id=sdke1000e",
+    "-device",
+    "e1000e,bus=pcie.0,addr=a,netdev=sdke1000e,mac=52:54:00:12:34:59,romfile=",
+]
+
 SDK_BOOT_ARTIFACTS = dict(QEMU_BOOT_ARTIFACTS)
 SDK_BOOT_ARTIFACTS.update({
     "disk": "//device/virtual/qemu/sdk_acceptance:qemu_nvme_gpt.img",
@@ -21,6 +28,7 @@ qemu_e2e_test(
     crate_name = "bexos_sdk_acceptance",
     deps = ["//host/debug_client", "//testing/e2e", "//tools/qemu:qemu_test"],
     boot_data = SDK_BOOT_ARTIFACTS,
+    qemu_args = SDK_NIC_QEMU_ARGS,
     # Integrated x86 boots hand the monitor an ELF kernel, so select the
     # product-local metadata signed over that ELF rather than the flat-kernel
     # metadata used by the AArch64 handoff path.
@@ -33,10 +41,11 @@ qemu_e2e_test(
         # The x86 integrated guest runs under software TCG on the supported
         # macOS host.  Instantiating the first WASM service can legitimately
         # leave the named boot milestones unchanged for more than the generic
-        # two-minute stall window, even though the runner is still working.
-        # Keep this acceptance bounded while allowing that one-time startup.
-        "BEXOS_QEMU_STALL_TIMEOUT_SECONDS": "900",
-        "BEXOS_QEMU_TIMEOUT_SECONDS": "2400",
+        # two-minute stall window, even though native relocation, Trusty, and
+        # encrypted-storage startup are still making serial progress. Keep the
+        # acceptance bounded while allowing the measured software-emulation path.
+        "BEXOS_QEMU_STALL_TIMEOUT_SECONDS": "1800",
+        "BEXOS_QEMU_TIMEOUT_SECONDS": "5400",
         "BEXOS_QEMU_VBMETA": "$(rootpath //device/virtual/qemu/sdk_acceptance:vbmeta.elf.img)",
     },
 )

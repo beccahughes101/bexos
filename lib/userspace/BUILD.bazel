@@ -1,5 +1,6 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 package(default_visibility = ["//visibility:public"])
+filegroup(name = "sdk_files", srcs = ["BUILD.bazel"] + glob(["src/**/*.rs", "*.ld"]))
 exports_files(["aarch64.ld", "x86_64.ld"])
 rust_library(
     rustc_flags = select({"//build/platforms:is_bexos_userspace": ["--cfg=bexos_guest"], "//conditions:default": []}),
@@ -9,7 +10,7 @@ rust_library(
 
 rust_test(
     name = "userspace_tests",
-    srcs = glob(["tests/**/*.rs"]),
+    srcs = glob(["tests/**/*.rs"], allow_empty = True),
     crate_name = "userspace_tests",
     edition = "2024",
     deps = [":userspace", "//idl:migration_fidl_rust", "//lib/migration"],

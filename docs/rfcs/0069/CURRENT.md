@@ -1,141 +1,120 @@
 # RFC 0069 current state
 
-RFC 0069 App SDK v1 is implemented. This file describes the selected,
-currently supported application scope; the RFC README retains the proposed
-driver, service, sysroot, Cargo/CMake, OCI, and general image-assembler phases.
+RFC 0069 SDK 0.2 is implemented at API level 1. The distributable SDK supports
+signed WASM/native applications, native services, D1 drivers, source-linked
+Rust `std`/libc, C helpers, and product-authorized early BootFS placement.
+The RFC README preserves the later Cargo, CMake, OCI, kernel-vDSO, package
+rewriting, and general GPT-assembler designs.
 
-## SDK artifacts
+## SDK artifacts and authoring API
 
-`//sdk:bexos_sdk` selects one deterministic archive for the execution host:
+`//sdk:bexos_sdk` selects a deterministic host archive:
 
-- `bexos-sdk-v0.1.0-linux-x86_64.tar.gz`
-- `bexos-sdk-v0.1.0-macos-aarch64.tar.gz`
+- `bexos-sdk-v0.2.0-linux-x86_64.tar.gz`
+- `bexos-sdk-v0.2.0-macos-aarch64.tar.gz`
 
-`//sdk:bexos_sdk_sha256` selects the matching `.sha256` companion. Entries are
-sorted and use normalized root ownership, modes, timestamps, a
-`bexos-sdk/` prefix, and deterministic gzip metadata. Executable host tools use
-mode 0755; source and metadata use 0644. The archive is a self-contained
-Bzlmod module with pinned dependencies, public Rust application runtime source,
-AArch64/x86-64 linker and platform definitions, public FIDL and manifest
-sources, `fidlc`, manifest/config compilers, the BEXARCV2 tool, public rules,
-examples, and `meta/sdk.prototxt`. It contains no private signing key.
-The native runtime includes the startup-channel readiness primitive used by
-SDK service processes.
+The matching `//sdk:bexos_sdk_sha256` output covers the complete archive. Both
+host archives target AArch64 and x86-64 and retain `api_level: 1` and
+`min_bexos_abi_version: 1`. They contain pinned Bzlmod dependencies, public
+FIDL sources and generation rules, host tools, source-distributed component,
+driver-startup, hardware-resource, service-binding, migration and libc crates,
+and per-architecture sysroots. Each sysroot contains curated BexOS/GNU ABI
+headers and license notices plus `crt0.o`, `libc.a`, and
+`libbexos_runtime.a`. Private signing keys are never included.
 
-Both host archives build portable `wasm32-wasip2` packages and native
-AArch64/x86-64 BexOS ELF packages. Linux x86-64 and macOS arm64 are the v1 host
-matrix.
-
-## Bzlmod consumption
-
-After extracting the archive, declare the SDK module and point Bazel at the
-unpacked root while developing locally:
+Consume the unpacked module with:
 
 ```starlark
-module(name = "example_app", version = "1.0.0")
-bazel_dep(name = "bexos_sdk", version = "0.1.0")
+module(name = "example_component", version = "1.0.0")
+bazel_dep(name = "bexos_sdk", version = "0.2.0")
 ```
 
-```sh
-bazel build \
-  --override_module=bexos_sdk=/opt/bexos-sdk \
-  --override_repository=bexos_sdk=/opt/bexos-sdk //...
-```
-
-Load the supported API from `@bexos_sdk//rules:defs.bzl`:
+The stable rule surface in `@bexos_sdk//rules:defs.bzl` is:
 
 - `bexos_fidl_rust_library`
-- `bexos_app_manifest`
-- `bexos_app_archive`
-- `bexos_wasm_app`
-- `bexos_native_app`
+- `bexos_app_manifest` and `bexos_app_archive`
+- `bexos_wasm_app` and `bexos_native_app`
+- `bexos_service` and `bexos_driver`
 
-Manifests are prototxt. SDK service processes must use
-`lifecycle { update_strategy: HEART_TRANSPLANT }`, and all SDK packages must
-declare `min_bexos_abi_version: 1`. Native rules require
-`architecture = "aarch64"` or `"x86_64"`; WASM rules stamp `MULTI`.
-Every archive rule requires an explicit signing key.
+`bexos_service` and `bexos_driver` select AArch64 or x86-64 explicitly, accept
+Rust/FIDL dependencies and C `link_deps`, and produce signed BEXARCV2 archives.
+`std = True` selects the source-distributed BexOS libc runtime; the default is
+freestanding Rust. Manifests remain prototxt. Every service/driver process must
+be a service process with `HEART_TRANSPLANT`; driver manifests additionally
+require exact driver identity, bounded hardware-resource declarations, bind
+rules, and a signed boot wave. Examples decode `Startup`, consume capability
+handles/resources, and use the versioned live-migration `State` protocol to
+adopt state and preserved handles.
 
-The standalone fixture at `testing/out_of_tree_sdk/fixture` depends only on the
-unpacked SDK module and builds generated Rust FIDL, a portable WASM service,
-and native service archives for both guest architectures. Its private key is a
-test-only key whose public half is already trusted by development images.
+## Verified product import
 
-## Verification and image flow
+Products import new content with:
 
-Platform products declare imported content with
-`bexos_prebuilt_app(name, archive, package_id, public_key, autoinstall)`. The
-provider exposes the original archive plus a manifest extracted only after the
-BEXARCV2 structure, chunk hashes, signature, and signer key have been verified.
-Extraction also enforces the expected package ID, application kind, ABI level,
-manifest architecture, embedded ELF machine, and heart-transplant policy.
-Malformed, unsigned, tampered, wrong-signer, duplicate, future-ABI, and
-architecture-mismatched inputs fail before image assembly; package code is not
-executed.
+```starlark
+bexos_prebuilt_component(
+    name = "vendor_driver",
+    archive = "@vendor//:driver.bex",
+    package_id = "com.vendor.driver.nic",
+    signing_root = "//product/roots:vendor.prototxt",
+    signer_id = "vendor-production-root",
+    component_type = "driver",
+    placement = "BOOTFS",
+    boot_wave = 4,
+    autoinstall = False,
+)
+```
 
-Product assembly validates imported manifests together with selected in-tree
-packages, dependencies, services, and duplicate IDs. Imported applications use
-`SYSTEM_IMAGE` placement. The system-image manifest receives each package in
-`base_packages` and, when `autoinstall = True`, in `autoinstall_packages`.
-The encrypted `STORAGE` BexFS image receives the unchanged signed bytes at
-`pkg/<package_id>.bex`; duplicate destinations fail. Signed default component
-configuration remains authoritative. Product-specific rewriting or resigning
-is outside v1. Existing QEMU products are unchanged unless passed
-`prebuilt_apps`.
+`component_type` is `application`, `service`, or `driver`; `placement` defaults
+to `SYSTEM_IMAGE`. `BOOTFS` requires an explicit `boot_wave` that must exactly
+match the signed manifest and can never be autoinstalled. The signing-root
+input supplies the Ed25519 key, key ID, and product root `anchor_id`.
+`bexos_prebuilt_app` remains the compatibility wrapper for system-image
+applications.
 
-The signer prototxt used by assembly contains the archive's 32-byte `key_id`
-and Ed25519 `public_key_hex`. The target product's application trust roots must
-also authorize that public key and package namespace.
+The importer verifies archive structure, chunks, signature/root, package ID,
+ABI, manifest architecture, every ELF payload machine, role contract,
+heart-transplant policy, boot wave, bind rules/resources, and normalized paths
+before creating a declared package tree. It never runs package code or hooks.
+Product assembly rejects duplicate package IDs and placements, incompatible
+library dependencies, and in-tree/prebuilt collisions. External native
+components require an exact `<package>@<root>` runner grant; drivers require a
+second exact driver grant.
 
-## Acceptance and release
+System-image imports retain the original signed archive bytes in encrypted
+`STORAGE/pkg/<package>.bex`. BootFS imports are overlaid at
+`/boot/pkg/<package-id>/` from verified trees. The assembly index carries the
+verified root and role into BootFS; appd uses that provenance for runner and
+driver policy rather than promoting external code to the official platform
+signer. Storage import loads product app-signing roots and records the actual
+verified root identity in the app registry.
 
-The dedicated product is `//device/virtual/qemu/sdk_acceptance`. Its maintained
-E2E scenarios require startup markers from both imported applications on
-AArch64 and x86-64. The full orchestrator builds/unpacks the SDK, builds the
-fixture in a separate Bazel output base using the repository override, creates
-a temporary prebuilt repository, rebuilds the product with that override, and
-uses the existing bounded QEMU harness:
+## Acceptance
+
+`testing/out_of_tree_sdk/fixture` builds WASM/native applications, a std/libc
+early service with a C helper, a D1 e1000e PCI driver, and replacement archives
+using only the unpacked SDK. The AArch64 and x86-64 QEMU acceptance products
+overlay the service and driver in BootFS, attach the e1000e device, prove the
+service starts before the storage pivot, verify structured driver resources,
+and apply live replacements while checking versioned state and handle/resource
+continuity. Wrong roots, architecture/ABI, wave, runner grant, driver grant,
+manifest shape, and unsafe archive paths fail closed in focused tests or
+analysis.
 
 ```sh
+bazel run //testing/out_of_tree_sdk:acceptance -- aarch64 smoke
+bazel run //testing/out_of_tree_sdk:acceptance -- x86_64 smoke
 bazel run //testing/out_of_tree_sdk:acceptance -- aarch64 qemu
 bazel run //testing/out_of_tree_sdk:acceptance -- x86_64 qemu
 ```
 
-The acceptance wrapper uses a disposable output base for the external fixture.
-On hosts where Bazel's default output volume is small, set an absolute
-`BEXOS_BAZEL_OUTPUT_USER_ROOT` on a larger volume; root-workspace SDK and QEMU
-actions then use that Bazel output root while fixture cleanup remains bounded.
+Release tags must exactly match `sdk-v0.2.0`. The release workflow builds both
+host archives, smoke-builds the external workspace, validates archive layout,
+and runs the Linux QEMU matrix.
 
-Tags matching `sdk-v*` trigger the SDK release workflow. The exact tag/version
-match is checked before Linux x86-64 and macOS arm64 archives are built and
-fixture-smoked. Linux also runs both QEMU acceptance targets. Publication
-creates, rather than overwrites, a GitHub release and uploads both archives and
-checksums.
+## Out of scope
 
-## Validation evidence
-
-Validation results are recorded here only after the corresponding Bazel
-commands complete. The implementation was verified with:
-
-- `bazel run @rules_rust//:rustfmt`
-- focused SDK packaging/layout, manifest, archive verification/extraction, and
-  product assembly tests under both `--config=aarch64` and
-  `--config=x86_64`
-- `bazel run //testing/e2e/qemu:check_matrix`
-- `bazel run //testing/out_of_tree_sdk:acceptance -- aarch64 qemu`
-- `bazel run //testing/out_of_tree_sdk:acceptance -- x86_64 qemu`
-
-Both acceptance runs built the fixture from the unpacked SDK in a separate
-Bazel output base, assembled the signed prebuilt archives into the requested
-guest image, and passed the bounded QEMU checks for native and WASM install,
-WASM compilation/instantiation, and service startup. The macOS arm64 host
-archive was built locally. Linux x86-64 host archive production and smoke tests
-remain enforced by the tag-only release workflow because that artifact cannot
-be produced on the macOS validation host.
-
-## Remaining phases
-
-External driver/service SDKs, binary sysroot/libc distribution, Cargo and
-CMake consumption, OCI SDK publication, product-specific external archive
-rewriting/resigning, and a general GPT image assembler remain proposed and are
-not v1 capabilities.
+Cargo/CMake consumption, OCI publication, a new kernel vDSO, product-side
+rewriting/resigning, and the general GPT image assembler remain future work.
+The shipped C ABI and Rust `std` support are Bazel-first and use the current
+kernel service/syscall ABI. Ordinary external packages remain storage-installed
+by default; early BootFS placement is always explicit and product-authorized.

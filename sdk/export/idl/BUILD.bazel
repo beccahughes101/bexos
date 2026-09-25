@@ -1,14 +1,10 @@
 package(default_visibility = ["//visibility:public"])
 
+exports_files(["BUILD.sdk.bazel"])
+
 filegroup(
-    name = "public_fidl",
-    srcs = glob(["bexos/**/*.fidl"], allow_empty = True),
+    name = "files",
+    srcs = ["BUILD.sdk.bazel"],
 )
 
-exports_files([
-    "bexos/app/manifest.proto",
-    "bexos/platform/assembly.proto",
-    "bexos/version/version.proto",
-])
-
-filegroup(name = "files", srcs = ["BUILD.bazel"])
+filegroup(name = "sdk_build", srcs = ["BUILD.sdk.bazel"])

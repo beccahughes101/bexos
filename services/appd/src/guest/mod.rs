@@ -26,6 +26,7 @@ use crate::{
     Visibility, app_storage_namespace_with_shared_vaults_and_dependencies, publish_kernel_services,
     register_manifest_openers,
 };
+use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -122,6 +123,7 @@ async fn boot(initial: Channel) -> Result<(), String> {
         .to_vec();
     let config = PlatformConfig::decode(&config_bytes).map_err(|e| format!("policy {e:?}"))?;
     let verified_boot = validate_secure_bootstrap(&startup, &config, &config_bytes)?;
+    let assembly_provenance = boot_package_provenance(&boot)?;
     let mut manifests = Vec::new();
     let mut manifest_caches = Vec::new();
     for i in 0..boot.count() {
@@ -214,11 +216,21 @@ async fn boot(initial: Channel) -> Result<(), String> {
             &manifests,
             &config.runner_policy,
             &config.driver_policy,
-            |m| PackageIdentity {
-                package_id: &m.package_name,
-                signer: "bexos_official_platform_v1",
-                trust_tier: PackageTrustTier::SystemHardware,
-                is_driver: m.driver_info.is_some() || m.package_name.starts_with("bexos.driver."),
+            |m| {
+                let external = assembly_provenance.get(&m.package_name);
+                PackageIdentity {
+                    package_id: &m.package_name,
+                    signer: external
+                        .map_or("bexos_official_platform_v1", |entry| entry.signer.as_str()),
+                    trust_tier: if external.is_some() {
+                        PackageTrustTier::StandardConsumer
+                    } else {
+                        PackageTrustTier::SystemHardware
+                    },
+                    is_driver: external.is_some_and(|entry| entry.role == "driver")
+                        || m.driver_info.is_some()
+                        || m.package_name.starts_with("bexos.driver."),
+                }
             },
             5,
             &mut kernel,
@@ -304,8 +316,12 @@ async fn boot(initial: Channel) -> Result<(), String> {
     }
     vfs::initialize_tmp_manager(vfsd, memfs).map_err(|e| format!("vfsd tmp manager init {e:?}"))?;
     log("appd: boot import disk manifests\n");
-    let disk_package_ids =
-        import_preinstalled_package_manifests(vfsd, &mut app_registry, &mut permission_store)?;
+    let disk_package_ids = import_preinstalled_package_manifests(
+        vfsd,
+        &mut app_registry,
+        &mut permission_store,
+        &gate.trust_app_roots,
+    )?;
     replay_trusted_app_packages(vfsd, teed, &app_registry)
         .map_err(|e| format!("trusted-app replay {e:?}"))?;
     bind_preinstalled_drivers(
@@ -1200,11 +1216,66 @@ fn restore_service_generation_floors(state: &mut state::AppdState) {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct BootPackageProvenance {
+    signer: String,
+    role: String,
+}
+
+fn boot_package_provenance(
+    boot: &Bootfs<'_>,
+) -> Result<BTreeMap<String, BootPackageProvenance>, String> {
+    let Some(entry) = boot
+        .find("/boot/manifest/product.assembly")
+        .map_err(|_| "assembly index")?
+    else {
+        return Ok(BTreeMap::new());
+    };
+    let text = core::str::from_utf8(entry.bytes).map_err(|_| "assembly index encoding")?;
+    let mut result = BTreeMap::new();
+    for line in text.lines().filter(|line| line.starts_with("package: ")) {
+        let mut fields = line.split_ascii_whitespace();
+        let _ = fields.next();
+        let Some(package_id) = fields.next() else {
+            continue;
+        };
+        let mut signer = None;
+        let mut role = None;
+        for field in fields {
+            signer = signer.or_else(|| field.strip_prefix("signer=").map(ToString::to_string));
+            role = role.or_else(|| field.strip_prefix("type=").map(ToString::to_string));
+        }
+        if let (Some(signer), Some(role)) = (signer, role) {
+            if !signer.is_empty() {
+                if result
+                    .insert(
+                        package_id.to_string(),
+                        BootPackageProvenance { signer, role },
+                    )
+                    .is_some()
+                {
+                    return Err(format!("duplicate assembly provenance for {package_id}"));
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
 fn import_preinstalled_package_manifests(
     vfsd: Channel,
     registry: &mut MemoryAppRegistry,
     permissions: &mut MemoryPermissionStore,
+    app_roots_redb: &[u8],
 ) -> Result<Vec<String>, String> {
+    use bexos_redb::{RedbStorageBackend, mem::MemBlockStore};
+    use bexos_trust_store::persistent::TrustStoreDb;
+
+    let roots = TrustStoreDb::open_with_backend(RedbStorageBackend::new(
+        MemBlockStore::from_bytes(app_roots_redb.to_vec()),
+    ))
+    .and_then(|database| database.list_app_roots())
+    .map_err(|error| format!("load product app signing roots {error:?}"))?;
     let package_ids =
         vfs::list_package_archives(vfsd).map_err(|e| format!("list package archives {e:?}"))?;
     let mut installed_keys = alloc::collections::BTreeSet::new();
@@ -1217,13 +1288,37 @@ fn import_preinstalled_package_manifests(
         }
         let archive_bytes = vfs::read_package_archive(vfsd, package_id)
             .map_err(|e| format!("package archive {package_id} {e:?}"))?;
-        let trusted = platform_app_trusted_keys();
+        let envelope = bexos_app_archive::OpenArchive::parse(&archive_bytes)
+            .map_err(|error| format!("parse archive signature {package_id} {error:?}"))?;
+        let public_key = envelope
+            .signer()
+            .certificate_chain
+            .first()
+            .ok_or_else(|| format!("archive {package_id} has no signer certificate"))?;
+        let anchor =
+            bexos_trust_store::validate_direct_app_signature(&roots, package_id, 0, public_key)
+                .map_err(|error| format!("authorize archive signer {package_id} {error:?}"))?;
+        let public_key: &[u8; 32] = anchor
+            .public_key_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| format!("signing root {} is not Ed25519", anchor.anchor_id))?;
+        let trusted = [bexos_app_archive::TrustedKey {
+            key_id: envelope.key_id(),
+            public_key,
+        }];
+        let verified_signer = bexos_app_registry::VerifiedSignerMetadata {
+            root_anchor_id: anchor.anchor_id.clone(),
+            leaf_certificate_fingerprint: *blake3::hash(public_key).as_bytes(),
+            signature_algorithm: 1,
+            granted_trust_tier: anchor.tier as u8,
+        };
         let archive_path = format!("pkg/{package_id}.bex");
         let record = registry
             .install_bundle(bexos_app_registry::InstallRequest {
                 archive_bytes: &archive_bytes,
                 trusted_keys: &trusted,
-                verified_signer: Some(bexos_app_registry::product_trust_metadata()),
+                verified_signer: Some(verified_signer),
                 source: InstallSource::SystemImage,
                 protected: true,
                 archive_path: &archive_path,
@@ -1246,18 +1341,6 @@ fn import_preinstalled_package_manifests(
         ));
     }
     Ok(installed_keys.into_iter().collect())
-}
-
-fn platform_app_trusted_keys() -> [bexos_app_archive::TrustedKey<'static>; 1] {
-    const PUBLIC: [u8; 32] = [
-        0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7, 0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64, 0x07,
-        0x3a, 0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25, 0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07,
-        0x51, 0x1a,
-    ];
-    [bexos_app_archive::TrustedKey {
-        key_id: *b"bexos-qemu-test-ed25519-key-v001",
-        public_key: &PUBLIC,
-    }]
 }
 
 fn replay_trusted_app_packages(
@@ -5432,6 +5515,9 @@ fn launch_application(
         .authorize_domain(&manifest.package_name, requested_network_domain)
         .is_none()
     {
+        log(&alloc::format!(
+            "appd: network domain denied package={package_id} process={process_name} domain={requested_network_domain}\n"
+        ));
         let _ = Memory::close(archive_root.0);
         return lifecycle::AppLifecycleStatus::AccessDenied;
     }
@@ -5487,7 +5573,11 @@ fn launch_application(
         match broker.bind_consumed_service(&client, &scoped, kernel) {
             Ok(mut bindings) => bound_capabilities.append(&mut bindings),
             Err(_) if consumed.link_type == LinkType::Optional => {}
-            Err(_) => {
+            Err(error) => {
+                log(&alloc::format!(
+                    "appd: consumed service bind denied package={package_id} process={process_name} service={} error={error:?}\n",
+                    consumed.name
+                ));
                 close_bound_capabilities(&bound_capabilities);
                 let _ = Memory::close(archive_root.0);
                 return lifecycle::AppLifecycleStatus::AccessDenied;
@@ -5891,10 +5981,14 @@ fn launch_application(
         };
     if package_id == "bexos.service.networkd" {
         let Some(instance_id) = instance_id else {
+            log("appd: networkd launch denied: missing isolation instance\n");
             close_bound_capabilities(&bound_capabilities);
             return lifecycle::AppLifecycleStatus::AccessDenied;
         };
         let Some(bytes) = networkd_config_snapshot(&manifest, config, instance_id) else {
+            log(&alloc::format!(
+                "appd: networkd launch denied: config snapshot failed instance={instance_id}\n"
+            ));
             close_bound_capabilities(&bound_capabilities);
             return lifecycle::AppLifecycleStatus::AccessDenied;
         };
@@ -6152,6 +6246,9 @@ fn create_network_instance_resource_group(
             && ((group.networkd_package == package && group.networkd_process == process)
                 || (group.netstackd_package == package && group.netstackd_process == process))
     }) else {
+        log(&alloc::format!(
+            "appd: network resource policy denied instance={instance_id} package={package} process={process}: isolation group missing\n"
+        ));
         return Err(lifecycle::AppLifecycleStatus::AccessDenied);
     };
     let Some(template) = config
@@ -6160,6 +6257,9 @@ fn create_network_instance_resource_group(
         .iter()
         .find(|template| template.name == group.resource_template)
     else {
+        log(&alloc::format!(
+            "appd: network resource policy denied instance={instance_id} process={process}: template missing\n"
+        ));
         return Err(lifecycle::AppLifecycleStatus::AccessDenied);
     };
     let active = services
@@ -6176,9 +6276,26 @@ fn create_network_instance_resource_group(
     if active >= template.max_instances as usize {
         return Err(lifecycle::AppLifecycleStatus::LaunchFailed);
     }
-    let parent = crate::runner::KernelOps::open_resource_group(kernel, "system")
-        .map_err(|_| lifecycle::AppLifecycleStatus::LaunchFailed)?;
-    let resource_name = alloc::format!("net-{instance_id}-{process}");
+    let parent = crate::runner::KernelOps::open_resource_group(kernel, "system").map_err(|error| {
+        log(&alloc::format!(
+            "appd: network resource parent open failed instance={instance_id} process={process} error={error:?}\n"
+        ));
+        lifecycle::AppLifecycleStatus::LaunchFailed
+    })?;
+    // Kernel resource-group names are limited to 24 bytes. Network instance
+    // and process names are signed policy identifiers and may be longer, so
+    // derive a deterministic bounded name from both instead of truncating and
+    // risking collisions between networkd and netstackd.
+    let mut identity_hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in instance_id
+        .bytes()
+        .chain(core::iter::once(0))
+        .chain(process.bytes())
+    {
+        identity_hash ^= u64::from(byte);
+        identity_hash = identity_hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    let resource_name = alloc::format!("net-{identity_hash:016x}");
     let created = crate::runner::KernelOps::create_resource_group_v2(
         kernel,
         &resource_name,
@@ -6194,7 +6311,12 @@ fn create_network_instance_resource_group(
         },
     );
     let _ = Memory::close(parent.handle.raw);
-    let created = created.map_err(|_| lifecycle::AppLifecycleStatus::LaunchFailed)?;
+    let created = created.map_err(|error| {
+        log(&alloc::format!(
+            "appd: network resource create failed instance={instance_id} process={process} name={resource_name} error={error:?}\n"
+        ));
+        lifecycle::AppLifecycleStatus::LaunchFailed
+    })?;
     Ok(Some(NetworkResourceJob {
         id: created.id,
         handle: Some(created.handle.raw),

@@ -18,7 +18,10 @@ runner_policy {
     allow_pci_passthrough: false
   }
 
-  allow_native_elf_runner: false
+  allow_native_elf_runner: true
+
+  native_elf_runner_allowlist { package_id: "bexos.sdk.fixture.service" expected_signer: "bexos-dev-app-root" }
+  native_elf_runner_allowlist { package_id: "bexos.sdk.fixture.driver.e1000e" expected_signer: "bexos-dev-app-root" }
 
   native_elf_runner_allowlist {
     package_id: "bexos.platform.appd"
@@ -45,6 +48,7 @@ tee_policy {
 }
 
 driver_policy {
+  tier_1_allowlist { package_id: "bexos.sdk.fixture.driver.e1000e" expected_signer: "bexos-dev-app-root" }
   tier_1_allowlist { package_id: "bexos.driver.input.virtio" expected_signer: "bexos_official_platform_v1" }
   tier_1_allowlist { package_id: "bexos.driver.rtc.cmos" expected_signer: "bexos_official_platform_v1" }
   default_unmatched_action: REJECT_AND_ISOLATE

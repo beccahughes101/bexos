@@ -1,34 +1,35 @@
 # RFC-0069: External SDK Generation, Out-of-Tree Component Development, and System Image Composition
 
 * **Author:** BexOS Toolchain, Infrastructure & Platform Architecture Working Group
-* **Status:** App SDK v1 implemented; later phases proposed
+* **Status:** Bazel SDK 0.2 implemented at API level 1; non-Bazel and general-image phases proposed
 * **Target Subsystems:** `//sdk`, `//build/rules`, `//tools`, `bex-pkg`, `image_assembler`, `sysui`, `driver_manager`
 * **Applicability:** Out-of-Tree (OOT) Drivers, Third-Party Application Developers, Enterprise Add-ons, System Release Engineering
 
 ---
 
-## Implementation selection (v1)
+## Implementation selection (SDK 0.2)
 
-The implemented first phase deliberately selects the application slice of this
-design: a source-based Bzlmod SDK, signed BEXARCV2 application archives, and
-verified product/image import. The driver/service SDK, distributed sysroot and
-libc binaries, Cargo/CMake interfaces, OCI publication, product-specific
-rewriting/resigning, and a general GPT image assembler remain proposed later
-phases. The longer-term sections below are retained as the design direction;
+The implemented Bazel-first slice includes applications, signed native
+services and D1 drivers, per-architecture sysroots/libc artifacts, verified
+system-image and explicit early-BootFS import, and live heart-transplant
+bindings. Cargo/CMake interfaces, OCI publication, a new kernel vDSO,
+product-specific rewriting/resigning, and a general GPT image assembler remain
+proposed later phases. The longer-term sections below are retained as design direction;
 [`CURRENT.md`](CURRENT.md) is authoritative for implemented behavior.
 
-The canonical v1 authoring format is a prototxt `bexos.app.Manifest` with
+The canonical authoring format is a prototxt `bexos.app.Manifest` with
 `min_bexos_abi_version: 1`; `fidlc` is the combined parser and Rust generator;
 and the emitted package is a signed BEXARCV2 archive. Product import installs
 the unchanged archive into encrypted `STORAGE` and references it from the
-system-image manifest. Sysroots, Cargo/CMake, OCI, and a general GPT image
-assembler remain future phases rather than v1 interfaces.
+system-image manifest or, with explicit product authorization, places its
+verified package tree in BootFS. Cargo/CMake, OCI, a kernel vDSO, and a general
+GPT image assembler remain future phases.
 
 ## 1. Summary
 
 This RFC defines the end-to-end architecture for externalizing the BexOS development platform. It specifies:
 
-1. **The In-Tree SDK Export Pipeline:** A hermetic Bazel packaging target (`//sdk:bexos_sdk`) producing the source-based application runtime, the combined `fidlc` parser/Rust generator, system IDL definitions, host package tools, and Bazel rules. A binary sysroot and Cargo/CMake integration remain future phases.
+1. **The In-Tree SDK Export Pipeline:** A hermetic Bazel packaging target (`//sdk:bexos_sdk`) producing source-based application/component runtimes, per-architecture sysroots, the combined `fidlc` parser/Rust generator, system IDL definitions, host package tools, and Bazel rules. Cargo/CMake integration remains a future phase.
 2. **The Out-of-Tree (OOT) Development Contract:** A standardized, decoupled developer environment consumed via Bazel Bzlmod (`@bexos_sdk`) or standalone Cargo tooling, allowing vendors to compile proprietary device drivers, services, and native Dioxus applications against stable system ABIs.
 3. **The `.bex` Canonical Package Format:** An authenticated, content-addressed package structure containing manifests, binary execution units (ELF/WASM), and component assets.
 4. **Declarative Product Assembly & Image Ingestion:** A configurable image generation pipeline enabling platform release engineering to compose bootable disk images (`system.raw`, `bootfs`) combining in-tree platform daemons with pre-compiled, out-of-tree vendor packages.
@@ -59,9 +60,9 @@ The platform externalization lifecycle operates as a two-phase unidirectional lo
                                        │ `bazel build //sdk:sdk`
                                        ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ `bexos-sdk-v0.1.0-<host>.tar.gz` (Redistributable App SDK)                  │
-│ • Rust app/WASM runtime source             • Combined fidlc generator       │
-│ • Bzlmod rules (@bexos_sdk)                • Signed BEXARCV2 tooling        │
+│ `bexos-sdk-v0.2.0-<host>.tar.gz` (Redistributable Bazel SDK)                │
+│ • Rust app/service/driver runtime source    • AArch64/x86-64 sysroots        │
+│ • Bzlmod rules and fidlc                    • Signed BEXARCV2 tooling        │
 └──────────────────────────────────────┬──────────────────────────────────────┘
                                        │ Consumed via Bzlmod / Registry
                                        ▼
@@ -89,8 +90,8 @@ The platform externalization lifecycle operates as a two-phase unidirectional lo
 
 ## 4. The SDK Archive Architecture
 
-The v1 SDK is exposed as a versioned Bzlmod artifact. Cargo/CMake consumption
-and binary sysroots remain later phases.
+SDK 0.2 is exposed as a versioned Bzlmod artifact. Cargo/CMake consumption
+remains a later phase.
 
 ### 4.1 Archive Physical Structure
 
@@ -104,7 +105,8 @@ bexos-sdk/
 ├── rules/                            # Public app, archive, FIDL rules/linkers
 ├── rust/                             # Native and portable app runtime source
 ├── platforms/                        # Native AArch64/x86-64 and WASI platforms
-├── examples/                         # Prototxt WASM/native service examples
+├── sysroot/{aarch64,x86_64}/         # Headers, licenses, crt0/libc/runtime archives
+├── examples/                         # Prototxt app/service/driver examples
 └── tools/bin/
     ├── fidlc                         # Combined parser and Rust generator
     ├── manifest_stamp
@@ -113,9 +115,8 @@ bexos-sdk/
     └── bex_archive                   # Signed BEXARCV2 tooling
 ```
 
-Future phases may add the sysroot, libc/vDSO binaries, external driver/service
-runtime crates, Cargo/CMake facades, and a general disk image assembler shown
-in the longer-term architecture.
+Future phases may add Cargo/CMake facades, a kernel vDSO, OCI publication, and
+the general disk image assembler shown in the longer-term architecture.
 
 ### 4.2 In-Tree Build Target Definition
 
@@ -135,7 +136,7 @@ sdk_archive(
         "//tools/app_archive:bex_archive": "tools/bin/bex_archive",
         # manifest/config/assembly tools omitted here for brevity
     },
-    out = "bexos-sdk-v0.1.0-linux-x86_64.tar.gz",
+    out = "bexos-sdk-v0.2.0-linux-x86_64.tar.gz",
 )
 
 ```
@@ -156,13 +157,13 @@ module(
     version = "1.2.0",
 )
 
-bazel_dep(name = "bexos_sdk", version = "0.1.0")
+bazel_dep(name = "bexos_sdk", version = "0.2.0")
 
 # Pull published SDK from remote release storage or corporate mirror
 archive_override(
     module_name = "bexos_sdk",
     urls = [
-        "https://github.com/beccahughes101/bexos/releases/download/sdk-v0.1.0/bexos-sdk-v0.1.0-linux-x86_64.tar.gz",
+        "https://github.com/beccahughes101/bexos/releases/download/sdk-v0.2.0/bexos-sdk-v0.2.0-linux-x86_64.tar.gz",
     ],
     integrity = "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=",
     strip_prefix = "bexos-sdk",
@@ -207,14 +208,14 @@ bexos_native_app(
 
 ```
 
-External driver and platform-service rules remain future work. Their proposed
-source/sysroot model and ABI requirements are retained in the later sections.
+`bexos_service` and `bexos_driver` are implemented with the source runtime,
+sysroot, FIDL, C `link_deps`, and signed manifest contracts described below.
 
 ---
 
 ## 6. Package Specification: The `.bex` Archive
 
-V1 applications produce signed BEXARCV2 `.bex` archives. BEXARCV2 is a binary
+SDK components produce signed BEXARCV2 `.bex` archives. BEXARCV2 is a binary
 container with a sorted entry table, optional per-entry zstd compression,
 4-KiB BLAKE3 chunk hashes, a signed BLAKE3 content root, signer key ID, and an
 Ed25519 signature. `package.bexmanifest` is the compiled protobuf manifest;
@@ -359,8 +360,8 @@ To guarantee out-of-tree binaries run reliably across OS upgrades, BexOS enforce
 
 ## 9. Security & Verification
 
-1. **Mandatory Package Signatures:** Every v1 import must be BEXARCV2-signed with Ed25519. Assembly requires the expected signer prototxt and rejects unsigned, malformed, tampered, or wrongly signed inputs. The signer must also be authorized by the product trust roots; there is no unsigned bypass in this path.
-2. **Capability Auditing (future driver phase):** A general image assembler will evaluate permissions declared by external drivers. V1 is restricted to application packages and rejects other package kinds.
+1. **Mandatory Package Signatures:** Every SDK import must be BEXARCV2-signed with Ed25519. Assembly requires the expected product signing root and rejects unsigned, malformed, tampered, or wrongly signed inputs. There is no unsigned bypass.
+2. **Capability Auditing:** SDK 0.2 validates driver resources/bind rules and requires exact product runner and driver grants. Broader general-image capability planning remains future work.
 3. **No Dynamic Execution During Assembly:** The image assembler treats all `.bex` inputs strictly as passive data streams. No installation scripts, maintainer hooks, or pre/post-install code are executed during image creation.
 
 ---
@@ -369,22 +370,21 @@ To guarantee out-of-tree binaries run reliably across OS upgrades, BexOS enforce
 
 ### Phase 1: Toolchain Scaffolding & SDK Archive Export
 
-* Implemented for apps: construct `//sdk:bexos_sdk` with combined `fidlc`, BEXARCV2/config tools, public runtime source, FIDL, examples, and rules.
+* Implemented: construct `//sdk:bexos_sdk` with combined `fidlc`, BEXARCV2/config tools, public runtime source, FIDL, examples, service/driver rules, and dual-architecture sysroots.
 * Implemented: publish host-specific `bexos-sdk` tarballs and checksums from `sdk-v*` tags.
-* Future: package binary sysroots/libc and external driver/service runtime APIs.
+* Implemented: package `crt0.o`, `libc.a`, the runtime archive, headers/licenses, and source-linked Rust std/libc.
 
 ### Phase 2: Standalone Out-of-Tree Proving Ground
 
-* Implemented for apps: maintain a separate fixture workspace proving FIDL,
-  portable WASM, and both native architectures against only the unpacked SDK.
-* Future: add the external PCIe-driver and native-Dioxus samples once those SDK
-  surfaces exist.
+* Implemented: maintain a separate fixture workspace proving FIDL, portable
+  WASM, std Rust plus C linkage, services, a PCI e1000e driver, replacements,
+  and both native architectures against only the unpacked SDK.
 
 ### Phase 3: Declarative Image Assembler
 
-* Implemented for apps: verified prebuilt ingestion through reusable product,
-  system-manifest, and encrypted BexFS image rules, with dual-architecture QEMU
-  acceptance.
+* Implemented: verified prebuilt ingestion through reusable product,
+  system-image, BootFS-overlay, and encrypted BexFS rules, with
+  dual-architecture QEMU acceptance and provenance-aware policy.
 * Future: implement a general GPT `image_assembler` and out-of-tree driver image
   composition.
 
@@ -392,16 +392,15 @@ To guarantee out-of-tree binaries run reliably across OS upgrades, BexOS enforce
 
 ## 11. Retained later-phase design
 
-This section preserves the longer-term driver, platform-service, binary
-sysroot, non-Bazel, OCI, and general image-assembler design. None of these
-interfaces are part of App SDK v1, and their eventual implementation must keep
-the prototxt manifest, BEXARCV2 signature, and passive-assembly security model
-defined above.
+This section preserves both the now-selected service/driver/sysroot shape and
+the longer-term non-Bazel, OCI, vDSO, and general image-assembler design. The
+future interfaces must keep the prototxt manifest, BEXARCV2 signature, and
+passive-assembly security model defined above.
 
 ### 11.1 Binary sysroot and runtime distribution
 
-A later SDK revision may extend the current source archive with a stable binary
-sysroot for both guest architectures:
+SDK 0.2 extends the source archive with a stable binary sysroot for both guest
+architectures:
 
 ```
 bexos-sdk/
@@ -424,7 +423,7 @@ bexos-sdk/
 ├── rust/crates/
 │   ├── bexos_sys/                    # raw vDSO ABI bindings
 │   ├── bexos_component/              # namespace/startup handles
-│   ├── bexos_driver/                 # future driver runtime
+│   ├── bexos_driver/                 # driver startup/resource bindings
 │   └── libpkg_client/
 ├── cmake/                            # future toolchain/config packages
 └── cargo/                            # future target/linker configuration
@@ -433,26 +432,25 @@ bexos-sdk/
 Those binaries require an explicit compatibility and release policy. The
 sysroot must be built hermetically for both guest targets, versioned with the
 SDK ABI, and tested against an independently built consumer. Distributing it is
-not implied by the v1 source runtime.
+is provided by SDK 0.2; the new kernel-vDSO portion of this sketch remains future work.
 
 ### 11.2 External drivers and platform services
 
-Future rules may add `bexos_driver`, `bexos_driver_package`, and
-`bexos_service` surfaces backed by the sysroot and stable public FIDL. They are
-expected to cover PCI/MMIO/DMA/interrupt access, driver match metadata,
+SDK 0.2 provides `bexos_driver` and `bexos_service` surfaces backed by the
+sysroot and stable public FIDL. They cover PCI/MMIO/DMA/interrupt startup
+resources, driver match metadata,
 component namespaces, startup handles, and capability declarations without
 exposing monorepo-private implementation libraries.
 
-Driver and service outputs will still use signed BEXARCV2 packages and
+Driver and service outputs use signed BEXARCV2 packages and
 prototxt manifests. Every SDK-built service process must declare
 `HEART_TRANSPLANT`; importing a driver or service must additionally validate
 its package kind, target architecture, ABI level, signer authorization, and
 capability policy before assembly. No package hook or binary may execute on the
 build host.
 
-The proving ground for that phase should remain outside the monorepo build
-graph and include at least a PCIe driver and a native platform service for both
-guest architectures. A separately versioned source repository can consume the
+The proving ground remains outside the monorepo build graph and includes a PCIe
+driver and native platform service for both guest architectures. A separately versioned source repository can consume the
 published SDK through Bzlmod; checking out a vendor repository with a pinned
 commit remains a product-integration option, but it is not a substitute for
 verifying the resulting signed archive.
@@ -493,4 +491,4 @@ planned stages are:
 The assembler must remain hermetic and deterministic, must never run package
 code, and must fail closed on malformed or incompatible inputs. Product-specific
 rewriting or resigning requires a separate policy and is not inherited from
-App SDK v1.
+SDK 0.2.

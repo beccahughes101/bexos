@@ -1,6 +1,7 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 load("//build/platforms:architecture.bzl", "guest_select")
 package(default_visibility = ["//visibility:public"])
+filegroup(name = "sdk_files", srcs = ["BUILD.bazel"] + glob(["src/**/*.rs"]))
 rust_library(
     name = "elf",
     srcs = glob(["src/**/*.rs"]),
@@ -9,4 +10,3 @@ rust_library(
     rustc_flags = guest_select([], ["--cfg=bexos_arch_x86_64"]),
 )
 rust_test(name = "elf_tests", crate = ":elf")
-

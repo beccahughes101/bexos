@@ -22,13 +22,30 @@ def _product_assembly_impl(ctx):
         inputs.append(manifest)
         args.add("--manifest-bin", "%s=%s" % (label, manifest.path))
     seen_prebuilt = {}
+    native_grants = {grant: True for grant in ctx.attr.native_runner_grants}
+    driver_grants = {grant: True for grant in ctx.attr.driver_grants}
     for target in ctx.attr.prebuilt_apps:
         info = target[BexosPrebuiltAppInfo]
         if info.package_id in seen_prebuilt:
             fail("duplicate prebuilt package id %s" % info.package_id)
         seen_prebuilt[info.package_id] = True
+        grant = "%s@%s" % (info.package_id, info.signer_id)
+        if info.component_type in ["service", "driver"] and grant not in native_grants:
+            fail("external native component %s is missing exact runner-policy grant %s" % (info.package_id, grant))
+        if info.component_type == "driver" and grant not in driver_grants:
+            fail("external driver %s is missing exact driver-policy grant %s" % (info.package_id, grant))
         inputs.append(info.manifest)
-        args.add("--prebuilt-manifest-bin", "prebuilt://%s=%s" % (info.package_id, info.manifest.path))
+        label = "prebuilt://%s" % info.package_id
+        if info.signer_id:
+            args.add("--prebuilt-component", "%s|%s|%s|%s|%s" % (
+                label,
+                info.placement,
+                info.component_type,
+                info.signer_id,
+                info.manifest.path,
+            ))
+        else:
+            args.add("--prebuilt-manifest-bin", "%s=%s" % (label, info.manifest.path))
     args.add("--out-index", ctx.outputs.index)
     args.add("--out-bootfs-labels", ctx.outputs.bootfs_labels)
     args.add("--out-system-image-labels", ctx.outputs.system_image_labels)
@@ -48,6 +65,8 @@ _product_assembly = rule(
         "bundles": attr.label_list(allow_files = True),
         "manifests": attr.label_keyed_string_dict(allow_files = True),
         "prebuilt_apps": attr.label_list(providers = [BexosPrebuiltAppInfo]),
+        "native_runner_grants": attr.string_list(),
+        "driver_grants": attr.string_list(),
         "architecture": attr.string(mandatory = True, values = ["aarch64", "x86_64"]),
         "index": attr.output(mandatory = True),
         "bootfs_labels": attr.output(mandatory = True),
@@ -64,6 +83,8 @@ def _system_image_impl(ctx):
     seen = {}
     for target in ctx.attr.prebuilt_apps:
         info = target[BexosPrebuiltAppInfo]
+        if info.placement != "SYSTEM_IMAGE":
+            continue
         if info.package_id in seen:
             fail("duplicate prebuilt package id %s" % info.package_id)
         seen[info.package_id] = True
@@ -194,7 +215,7 @@ def product_definition(name, src):
         tools = ["@protobuf//:protoc"],
     )
 
-def bexos_product(name, src, bundles, manifests, prebuilt_apps = []):
+def bexos_product(name, src, bundles, manifests, prebuilt_apps = [], native_runner_grants = [], driver_grants = []):
     product_definition(name = name, src = src)
 
     _product_assembly(
@@ -203,13 +224,15 @@ def bexos_product(name, src, bundles, manifests, prebuilt_apps = []):
         bundles = bundles,
         manifests = {manifest: label for label, manifest in manifests.items()},
         prebuilt_apps = prebuilt_apps,
+        native_runner_grants = native_runner_grants,
+        driver_grants = driver_grants,
         architecture = guest_select("aarch64", "x86_64"),
         index = name + ".assembly",
         bootfs_labels = name + ".bootfs.labels",
         system_image_labels = name + ".system_image.labels",
     )
 
-def starlark_product(name, src, loads, entry, bundles, manifests, prebuilt_apps = []):
+def starlark_product(name, src, loads, entry, bundles, manifests, prebuilt_apps = [], native_runner_grants = [], driver_grants = []):
     definition = name + "_definition"
     load_args = "".join([
         " --load %s=$(location %s)" % (label, target)
@@ -250,6 +273,8 @@ def starlark_product(name, src, loads, entry, bundles, manifests, prebuilt_apps 
         bundles = bundles,
         manifests = {manifest: label for label, manifest in manifests.items()},
         prebuilt_apps = prebuilt_apps,
+        native_runner_grants = native_runner_grants,
+        driver_grants = driver_grants,
         architecture = guest_select("aarch64", "x86_64"),
         index = name + ".assembly",
         bootfs_labels = name + ".bootfs.labels",

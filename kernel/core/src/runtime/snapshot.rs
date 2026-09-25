@@ -266,6 +266,7 @@ impl<B: Backend> Runtime<B> {
                     Object::ReplyToken(id, end, call_id) => (9, id, (call_id << 1) | end as u64),
                     Object::IommuDomain(id) => (10, id, 0),
                     Object::Interrupt(id) => (11, id, 0),
+                    Object::ResourceGroup(id) => (12, id as usize, 0),
                 };
                 for v in [kind, id as u64, end as u64, c.rights as u64, c.owner as u64] {
                     w.word(v)?;
@@ -574,6 +575,9 @@ impl<B: Backend> Runtime<B> {
                     (9, value) => Object::ReplyToken(id, value & 1, (value >> 1) as u64),
                     (10, 0) => Object::IommuDomain(id),
                     (11, 0) if version >= INTERRUPT_VERSION => Object::Interrupt(id),
+                    (12, 0) => Object::ResourceGroup(
+                        u32::try_from(id).map_err(|_| TransplantError::InvalidRuntimeSnapshot)?,
+                    ),
                     _ => return Err(TransplantError::InvalidRuntimeSnapshot),
                 };
                 Some(Capability {
@@ -920,6 +924,11 @@ impl<B: Backend> Runtime<B> {
                         .and_then(|interrupt| interrupt.as_ref())
                         .is_none()
                     {
+                        return Err(bad);
+                    }
+                }
+                Object::ResourceGroup(id) => {
+                    if self.scheduler.resource_group(id).is_none() {
                         return Err(bad);
                     }
                 }

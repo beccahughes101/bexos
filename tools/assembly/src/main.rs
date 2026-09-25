@@ -51,28 +51,50 @@ fn product(args: &[String]) -> Result<(), String> {
             fs::read(path).map_err(|error| format!("read manifest {path}: {error}"))?,
         ));
     }
-    let mut prebuilt_manifests = Vec::new();
+    let mut prebuilt_components = Vec::new();
     for spec in repeated(args, "--prebuilt-manifest-bin") {
         let (label, path) = spec
             .split_once('=')
             .ok_or_else(|| "--prebuilt-manifest-bin requires label=path".to_string())?;
-        prebuilt_manifests.push((
-            label.to_string(),
-            fs::read(path).map_err(|error| format!("read manifest {path}: {error}"))?,
-        ));
+        prebuilt_components.push(bexos_assembly::PrebuiltComponent {
+            label: label.to_string(),
+            manifest: fs::read(path).map_err(|error| format!("read manifest {path}: {error}"))?,
+            placement: bexos_assembly::Placement::SystemImage,
+            signer_id: String::new(),
+            component_type: "application".into(),
+        });
+    }
+    for spec in repeated(args, "--prebuilt-component") {
+        let fields = spec.splitn(5, '|').collect::<Vec<_>>();
+        if fields.len() != 5 {
+            return Err("--prebuilt-component requires label|placement|type|signer|path".into());
+        }
+        let placement = match fields[1] {
+            "BOOTFS" => bexos_assembly::Placement::Bootfs,
+            "SYSTEM_IMAGE" => bexos_assembly::Placement::SystemImage,
+            value => return Err(format!("unsupported prebuilt placement {value}")),
+        };
+        prebuilt_components.push(bexos_assembly::PrebuiltComponent {
+            label: fields[0].to_string(),
+            manifest: fs::read(fields[4])
+                .map_err(|error| format!("read manifest {}: {error}", fields[4]))?,
+            placement,
+            signer_id: fields[3].to_string(),
+            component_type: fields[2].to_string(),
+        });
     }
     let architecture = match required(args, "--architecture")?.as_str() {
         "aarch64" => bexos_app_manifest::Architecture::Aarch64,
         "x86_64" => bexos_app_manifest::Architecture::X86_64,
         value => return Err(format!("unsupported architecture {value}")),
     };
-    let manifest = bexos_assembly::validate_product_with_prebuilt_for(
+    let manifest = bexos_assembly::validate_product_with_components_for(
         ProductInput {
             product: &product,
             bundles: &bundles,
             manifests: &manifests,
         },
-        &prebuilt_manifests,
+        &prebuilt_components,
         architecture,
     )?;
     let index = required(args, "--out-index")?;

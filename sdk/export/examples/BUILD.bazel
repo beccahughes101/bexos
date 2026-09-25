@@ -6,8 +6,12 @@ filegroup(
     name = "files",
     srcs = [
         "README.md",
+        "c_helper.c",
+        "driver.prototxt",
+        "driver.rs",
         "native_service.prototxt",
         "native_service.rs",
+        "state.rs",
         "wasm_service.prototxt",
         "wasm_service.rs",
     ],

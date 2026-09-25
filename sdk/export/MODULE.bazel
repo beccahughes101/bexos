@@ -1,10 +1,11 @@
-module(name = "bexos_sdk", version = "0.1.0")
+module(name = "bexos_sdk", version = "0.2.0")
 
 bazel_dep(name = "platforms", version = "1.1.0")
 bazel_dep(name = "protobuf", version = "36.0.bcr.1")
 bazel_dep(name = "rules_proto", version = "7.1.0")
 bazel_dep(name = "rules_rust", version = "0.73.0")
 bazel_dep(name = "rules_cc", version = "0.2.22")
+bazel_dep(name = "llvm", version = "0.8.19")
 
 rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
 rust.toolchain(
@@ -36,11 +37,12 @@ register_toolchains(
 # universe isolated so consuming workspaces do not need to supply or align a
 # wit-bindgen dependency of their own.
 sdk_crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+sdk_crate.spec(package = "libm", version = "=0.2.16", default_features = False)
 sdk_crate.spec(package = "wit-bindgen", version = "=0.58.0")
 sdk_crate.from_specs(
     cargo_lockfile = "//:sdk-Cargo.lock",
     lockfile = "//:sdk-crates-lock.json",
-    name = "sdk_crates",
+    name = "crates",
     supported_platform_triples = [
         "aarch64-apple-darwin",
         "aarch64-unknown-linux-gnu",
@@ -48,4 +50,4 @@ sdk_crate.from_specs(
         "wasm32-wasip2",
     ],
 )
-use_repo(sdk_crate, "sdk_crates")
+use_repo(sdk_crate, "crates")

@@ -5,10 +5,28 @@ load(":assembly.bzl", "qemu_assembly")
 load(":images.bzl", "qemu_images")
 load(":launch.bzl", "QEMU_RUN_DATA", "QEMU_X86_SECURE_RUN_DATA", "qemu_launchers")
 
-def qemu_product(name, graphics = False, input_fixture = False, prebuilt_apps = []):
-    qemu_assembly(product = name, graphics = graphics, input_fixture = input_fixture, prebuilt_apps = prebuilt_apps)
+def qemu_product(name, graphics = False, input_fixture = False, prebuilt_apps = [], prebuilt_updates = {}, native_runner_grants = [], driver_grants = [], system_image_manifest = None, base_bundle = None, aarch64_hardware_bundle = None, x86_64_hardware_bundle = None, storage_preinstalls = None, include_boot_wasm = True):
+    qemu_assembly(
+        product = name,
+        graphics = graphics,
+        input_fixture = input_fixture,
+        prebuilt_apps = prebuilt_apps,
+        native_runner_grants = native_runner_grants,
+        driver_grants = driver_grants,
+        system_image_manifest = system_image_manifest,
+        base_bundle = base_bundle,
+        aarch64_hardware_bundle = aarch64_hardware_bundle,
+        x86_64_hardware_bundle = x86_64_hardware_bundle,
+    )
 
-    qemu_images(graphics = graphics, input_fixture = input_fixture, prebuilt_apps = prebuilt_apps)
+    qemu_images(
+        graphics = graphics,
+        input_fixture = input_fixture,
+        prebuilt_apps = prebuilt_apps,
+        prebuilt_updates = prebuilt_updates,
+        base_storage_preinstalls = storage_preinstalls,
+        include_boot_wasm = include_boot_wasm,
+    )
 
     native.alias(
         name = "launch_config",

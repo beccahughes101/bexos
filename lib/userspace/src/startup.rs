@@ -643,18 +643,48 @@ impl Startup {
             driver_host_controller: &driver_host_handles,
             driver_recovery: &driver_recovery_handles,
         };
-        let mut bytes = [0; 8192];
-        let mut handles = [HandleRef { raw: 0 }; 80];
-        let e = s
-            .encode(&mut bytes, &mut handles)
-            .map_err(|_| Status::ErrInvalidArgs)?;
-        channel.send(
+        // Startup descriptors include namespace paths, structured service
+        // grants, component config, locale state, and migration metadata. Use
+        // the kernel IPC byte ceiling so valid policy growth does not become a
+        // component-specific boot limit. The syscall ABI caps transferred
+        // handles at 64.
+        let mut bytes = alloc::vec![0; crate::ipc::MAX_MESSAGE];
+        let mut handles = [HandleRef { raw: 0 }; 64];
+        let e = match s.encode(&mut bytes, &mut handles) {
+            Ok(encoded) => encoded,
+            Err(error) => {
+                crate::log(&alloc::format!(
+                    "startup: encode failed error={error:?} resources={} driver_resources={} namespace={} service_grants={} incoming_grants={}\n",
+                    resources.len(),
+                    driver_resources.len(),
+                    namespace.len(),
+                    service_grants.len(),
+                    incoming_service_grants.len(),
+                ));
+                return Err(match error {
+                    bootstrap_fidl::FidlWireError::BufferTooSmall
+                    | bootstrap_fidl::FidlWireError::HandleTableTooSmall => {
+                        Status::ErrBufferTooSmall
+                    }
+                    _ => Status::ErrInvalidArgs,
+                });
+            }
+        };
+        let result = channel.send(
             &bytes[..e.bytes],
             &handles[..e.handles]
                 .iter()
                 .map(|h| h.raw)
                 .collect::<Vec<_>>(),
-        )
+        );
+        if let Err(error) = result {
+            crate::log(&alloc::format!(
+                "startup: channel send failed error={error:?} bytes={} handles={}\n",
+                e.bytes,
+                e.handles
+            ));
+        }
+        result
     }
     pub fn ready(channel: Channel) -> Result<(), Status> {
         channel.send(&0i32.to_le_bytes(), &[])
@@ -790,13 +820,20 @@ fn encode_service_grant_descriptors(grants: &[ServiceGrant]) -> Result<String, S
                 .provider_instance_id
                 .as_deref()
                 .is_some_and(|value| value.contains('|') || value.contains(';'))
-            || grant.permission_values.iter().any(|value| {
-                value.contains('|')
-                    || value.contains(';')
-                    || value.contains(',')
-                    || value.contains('=')
-            })
+            || grant
+                .permission_values
+                .iter()
+                .any(|value| value.contains('|') || value.contains(';') || value.contains(','))
         {
+            crate::log(&alloc::format!(
+                "startup: invalid service grant descriptor service={:?} protocol={:?} capability={:?} caller={:?} instance={:?} values={:?}\n",
+                grant.service,
+                grant.protocol,
+                grant.capability,
+                grant.caller_package,
+                grant.provider_instance_id,
+                grant.permission_values,
+            ));
             return Err(Status::ErrInvalidArgs);
         }
         if index != 0 {
@@ -842,8 +879,12 @@ fn encode_service_grant_descriptors(grants: &[ServiceGrant]) -> Result<String, S
             }
         }
     }
-    if out.len() > 1024 {
-        Err(Status::ErrInvalidArgs)
+    // A service may receive many independently scoped FIDL capabilities. Keep
+    // each descriptor table bounded, but leave enough of the 64 KiB startup
+    // envelope for namespace, config, locale, and the opposite-direction
+    // service table.
+    if out.len() > 16 * 1024 {
+        Err(Status::ErrBufferTooSmall)
     } else {
         Ok(out)
     }

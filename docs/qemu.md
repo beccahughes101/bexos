@@ -35,6 +35,12 @@ room for the 64 MiB early BootFS reservation plus appd, early drivers,
 the storage-preinstalled networkd/netstackd services, vswitchd, service replacement archives, and
 the disk-only verifier heaps.
 
+The base BootFS is assembled once and then passed through a reusable verified
+package-tree overlay. Product-authorized SDK services and drivers therefore
+enter `/boot/pkg/<package-id>/` without duplicating the base entry list; appd
+starts them from their signed process wave and evaluates the signer/role
+provenance recorded by product assembly.
+
 CPU topology is declared in `device/virtual/qemu/base/aarch64/device.prototxt`. Bazel passes
 `cpu_topology.max_cpus` through the boot handoff generator, emits it as
 `MAX_CPUS` in `boot_layout.sh`, and the QEMU harness uses that value for

@@ -1,0 +1,29 @@
+package_name: "bexos.sdk.fixture.driver.e1000e"
+name: "Out-of-tree SDK e1000e fixture driver"
+min_bexos_abi_version: 1
+driver_info {
+  name: "sdk_e1000e_fixture"
+  package_id: "bexos.sdk.fixture.driver.e1000e"
+  version: "1.0.0"
+  execution { colocation_policy: DRIVER_ISOLATED max_instances_per_host: 1 restart_strategy: DRIVER_HEART_TRANSPLANT }
+  required_resources { kind: DRIVER_RESOURCE_MMIO min_count: 1 }
+  required_resources { kind: DRIVER_RESOURCE_INTERRUPT min_count: 1 }
+  required_resources { kind: DRIVER_RESOURCE_IOMMU_DOMAIN min_count: 1 }
+  required_resources { kind: DRIVER_RESOURCE_BUS_CONTROL min_count: 1 }
+}
+bind_rules {
+  priority: 200
+  condition {
+    bus: BUS_PCI
+    property { key: "pci.vendor_id" value: 0x8086 }
+    property { key: "pci.device_id" value: 0x10d3 }
+  }
+}
+processes {
+  name: "sdk_e1000e_fixture"
+  runner: "elf"
+  service: true
+  wave: 4
+  lifecycle { update_strategy: HEART_TRANSPLANT migration_timeout_ms: 3000 preparation_timeout_ms: 3000 }
+  runner_options { [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/sdk_driver" } }
+}

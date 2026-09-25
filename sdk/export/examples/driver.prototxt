@@ -1,0 +1,21 @@
+package_name: "com.example.driver.e1000e"
+name: "Example D1 PCI driver"
+min_bexos_abi_version: 1
+driver_info {
+  name: "example_e1000e"
+  package_id: "com.example.driver.e1000e"
+  version: "1.0.0"
+  execution { colocation_policy: DRIVER_ISOLATED max_instances_per_host: 1 restart_strategy: DRIVER_HEART_TRANSPLANT }
+  required_resources { kind: DRIVER_RESOURCE_MMIO min_count: 1 }
+  required_resources { kind: DRIVER_RESOURCE_INTERRUPT min_count: 1 }
+  required_resources { kind: DRIVER_RESOURCE_IOMMU_DOMAIN min_count: 1 }
+}
+bind_rules { priority: 200 condition { bus: BUS_PCI property { key: "pci.vendor_id" value: 0x8086 } property { key: "pci.device_id" value: 0x10d3 } } }
+processes {
+  name: "example_driver"
+  runner: "elf"
+  service: true
+  wave: 4
+  lifecycle { update_strategy: HEART_TRANSPLANT }
+  runner_options { [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/example_driver" } }
+}

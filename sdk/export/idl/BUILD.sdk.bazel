@@ -1,0 +1,61 @@
+load("//rules:fidl.bzl", "bexos_fidl_rust_library")
+
+package(default_visibility = ["//visibility:public"])
+
+_RUST_FIDL = {
+    "app_service_directory": ["bexos/app/service_directory.fidl"],
+    "app_worker": ["bexos/app/worker.fidl"],
+    "archive": ["bexos/storage/archive.fidl"],
+    "block": ["bexos/storage/block.fidl"],
+    "bootstrap": ["bexos/app/bootstrap.fidl"],
+    "ethernet": ["bexos/hardware/ethernet.fidl"],
+    "fs": ["bexos/fs/fs.fidl"],
+    "hardware_manager": ["bexos/hardware/manager.fidl"],
+    "job": ["bexos/job/scheduler.fidl"],
+    "kernel": glob(["bexos/kernel/*.fidl"]),
+    "migration": ["bexos/app/migration.fidl"],
+    "net": ["bexos/net/net.fidl"],
+    "power": ["bexos/power/power.fidl"],
+    "preferences": ["bexos/preferences/preferences.fidl"],
+    "tee_manager": ["bexos/tee/manager.fidl"],
+    "time": ["bexos/time/time.fidl"],
+    "trust": ["bexos/security/trust.fidl"],
+    "user_manager": ["bexos/user/manager.fidl"],
+    "vfs_manager": ["bexos/vfs/manager.fidl"],
+}
+
+_FIDL_DEPS = {
+    "app_service_directory": _RUST_FIDL["kernel"],
+    "block": _RUST_FIDL["kernel"],
+    "fs": _RUST_FIDL["block"],
+    "hardware_manager": _RUST_FIDL["kernel"],
+}
+
+_RUST_DEPS = {
+    "app_service_directory": [":kernel_fidl_rust"],
+    "block": [":kernel_fidl_rust"],
+    "fs": [":block_fidl_rust"],
+    "hardware_manager": [":kernel_fidl_rust"],
+}
+
+[
+    bexos_fidl_rust_library(
+        name = name + "_fidl_rust",
+        srcs = srcs,
+        crate_name = name + "_fidl",
+        fidl_deps = _FIDL_DEPS.get(name, []),
+        deps = _RUST_DEPS.get(name, []),
+    )
+    for name, srcs in _RUST_FIDL.items()
+]
+
+filegroup(
+    name = "public_fidl",
+    srcs = glob(["bexos/**/*.fidl"], allow_empty = True),
+)
+
+exports_files([
+    "bexos/app/manifest.proto",
+    "bexos/platform/assembly.proto",
+    "bexos/version/version.proto",
+])

@@ -1,0 +1,2 @@
+BexOS SDK runtime and ABI headers are distributed under the repository license.
+See ../../LICENSE for the complete license text.

@@ -124,8 +124,8 @@ exactly match the checked-in SDK version. Linux x86-64 and macOS arm64 jobs
 build and smoke-test the standalone fixture; Linux additionally runs both QEMU
 guest architectures. Publication creates a new GitHub release and uploads:
 
-- `bexos-sdk-v0.1.0-linux-x86_64.tar.gz` and its `.sha256`
-- `bexos-sdk-v0.1.0-macos-aarch64.tar.gz` and its `.sha256`
+- `bexos-sdk-v0.2.0-linux-x86_64.tar.gz` and its `.sha256`
+- `bexos-sdk-v0.2.0-macos-aarch64.tar.gz` and its `.sha256`
 
 The workflow fails on an existing release, a version mismatch, or an
 incomplete asset set; it never overwrites a release.

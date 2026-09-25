@@ -23,7 +23,7 @@ def parse_entry(spec):
     return parts[0], parts[1]
 
 
-def build(entries):
+def build_data(entries):
     entries = sorted(entries)
     if len({path for path, _ in entries}) != len(entries):
         raise ValueError("duplicate BootFS path")
@@ -32,12 +32,10 @@ def build(entries):
     table = bytearray()
     payload = bytearray()
 
-    for path, source in entries:
+    for path, data in entries:
         encoded = path.encode("utf-8")
         if len(encoded) > 255:
             raise ValueError(f"BootFS path is too long: {path}")
-        with open(source, "rb") as handle:
-            data = handle.read()
         offset = payload_offset + len(payload)
         table += ENTRY.pack(encoded + b"\0" * (256 - len(encoded)), offset, len(data))
         payload += data
@@ -47,6 +45,33 @@ def build(entries):
     return HEADER.pack(MAGIC, VERSION, len(entries), table_size, payload_offset) + table + (
         b"\0" * (payload_offset - HEADER.size - table_size)
     ) + payload
+
+
+def build(entries):
+    loaded = []
+    for path, source in entries:
+        with open(source, "rb") as handle:
+            loaded.append((path, handle.read()))
+    return build_data(loaded)
+
+
+def parse_image(data):
+    if len(data) < HEADER.size:
+        raise ValueError("truncated BootFS header")
+    magic, version, count, table_size, payload_offset = HEADER.unpack_from(data, 0)
+    if magic != MAGIC or version != VERSION or table_size != count * ENTRY.size:
+        raise ValueError("invalid BootFS header")
+    if payload_offset > len(data) or HEADER.size + table_size > payload_offset:
+        raise ValueError("invalid BootFS table")
+    entries = []
+    for index in range(count):
+        raw, offset, length = ENTRY.unpack_from(data, HEADER.size + index * ENTRY.size)
+        end = offset + length
+        if offset < payload_offset or end > len(data):
+            raise ValueError("invalid BootFS entry bounds")
+        path = raw.split(b"\0", 1)[0].decode("utf-8")
+        entries.append((path, data[offset:end]))
+    return entries
 
 
 def validate_elf(header, architecture):
@@ -94,11 +119,21 @@ def self_test():
         second = ENTRY.unpack_from(image, HEADER.size + ENTRY.size)
         assert image[first[1] : first[1] + first[2]] == b"one"
         assert image[second[1] : second[1] + second[2]] == b"two-two"
+        parsed = parse_image(image)
+        assert parsed == [("/boot/one", b"one"), ("/boot/two", b"two-two")]
+        try:
+            build_data(parsed + [("/boot/one", b"collision")])
+        except ValueError as error:
+            assert "duplicate" in str(error)
+        else:
+            raise AssertionError("duplicate overlay destination accepted")
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--out")
+    parser.add_argument("--base")
+    parser.add_argument("--package-tree", action="append", default=[])
     parser.add_argument("--manifest-validator")
     parser.add_argument("--architecture", choices=["aarch64", "x86_64"], default="aarch64")
     parser.add_argument("--entry", action="append", default=[])
@@ -129,8 +164,30 @@ def main():
         prefix = path.rsplit('/', 1)[0] + '/'
         payloads = [payload for name, payload in entries if name.startswith(prefix) and name != path]
         subprocess.run([args.manifest_validator, 'validate', args.architecture.upper(), source] + payloads, check=True)
-    with open(args.out, "wb") as handle:
-        handle.write(build(entries))
+    if args.base:
+        if entries:
+            parser.error("--base cannot be combined with --entry or --elf")
+        with open(args.base, "rb") as handle:
+            merged = parse_image(handle.read())
+        for spec in args.package_tree:
+            package, root = spec.split("=", 1) if "=" in spec else ("", "")
+            if not package or not root or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-:" for c in package):
+                parser.error(f"invalid --package-tree {spec!r}")
+            for directory, names, files in os.walk(root):
+                names.sort()
+                files.sort()
+                for name in files:
+                    source = os.path.join(directory, name)
+                    relative = os.path.relpath(source, root).replace(os.sep, "/")
+                    with open(source, "rb") as handle:
+                        merged.append((f"/boot/pkg/{package}/{relative}", handle.read()))
+        with open(args.out, "wb") as handle:
+            handle.write(build_data(merged))
+    else:
+        if args.package_tree:
+            parser.error("--package-tree requires --base")
+        with open(args.out, "wb") as handle:
+            handle.write(build(entries))
     return 0
 
 

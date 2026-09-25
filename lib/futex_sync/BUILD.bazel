@@ -1,4 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 package(default_visibility=["//visibility:public"])
+filegroup(name = "sdk_files", srcs = ["BUILD.bazel"] + glob(["src/**/*.rs"]))
 rust_library(name="futex_sync", srcs=glob(["src/**/*.rs"]), crate_name="bexos_futex_sync", edition="2024")
 rust_test(name="tests", srcs=["tests/contention.rs"], edition="2024", deps=[":futex_sync"])

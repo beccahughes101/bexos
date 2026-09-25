@@ -1,8 +1,10 @@
 load("//build/rules:app_archive.bzl", "app_archive")
-load("//build/rules:userspace.bzl", "app_manifest", "userspace_binary")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary", "userspace_binary")
 load("//build/rules:wasm.bzl", "wasi_component")
 
 package(default_visibility = ["//visibility:public"])
+
+cc_library(name = "c_helper", srcs = ["//testing/out_of_tree_sdk/fixture:c_helper.c"])
 
 wasi_component(
     name = "wasm",
@@ -19,6 +21,44 @@ app_archive(
     entries = {"bin/wasm_app.wasm": ":wasm"},
     compression = "zstd",
 )
+
+std_service_binary(
+    name = "service",
+    srcs = ["//testing/out_of_tree_sdk/fixture:service.rs", "//testing/out_of_tree_sdk/fixture:state.rs"],
+    crate_name = "bexos_sdk_fixture_service",
+    deps = ["//sdk/export/rust:bexos_component"],
+    link_deps = [":c_helper"],
+)
+
+std_service_binary(
+    name = "service_replacement",
+    srcs = ["//testing/out_of_tree_sdk/fixture:service_replacement.rs", "//testing/out_of_tree_sdk/fixture:state.rs"],
+    crate_name = "bexos_sdk_fixture_service_replacement",
+    deps = ["//sdk/export/rust:bexos_component"],
+)
+
+app_manifest(name = "service_manifest", src = "//testing/out_of_tree_sdk/fixture:service.prototxt")
+
+app_archive(name = "service_archive", manifest = ":service_manifest", entries = {"bin/sdk_service": ":service"}, compression = "zstd")
+app_archive(name = "service_replacement_archive", manifest = ":service_manifest", entries = {"bin/sdk_service": ":service_replacement"}, compression = "zstd")
+
+std_service_binary(
+    name = "driver",
+    srcs = ["//testing/out_of_tree_sdk/fixture:driver.rs", "//testing/out_of_tree_sdk/fixture:state.rs"],
+    crate_name = "bexos_sdk_fixture_driver",
+    deps = ["//sdk/export/rust:bexos_component"],
+)
+
+std_service_binary(
+    name = "driver_replacement",
+    srcs = ["//testing/out_of_tree_sdk/fixture:driver_replacement.rs", "//testing/out_of_tree_sdk/fixture:state.rs"],
+    crate_name = "bexos_sdk_fixture_driver_replacement",
+    deps = ["//sdk/export/rust:bexos_component"],
+)
+
+app_manifest(name = "driver_manifest", src = "//testing/out_of_tree_sdk/fixture:driver.prototxt")
+app_archive(name = "driver_archive", manifest = ":driver_manifest", entries = {"bin/sdk_driver": ":driver"}, compression = "zstd")
+app_archive(name = "driver_replacement_archive", manifest = ":driver_manifest", entries = {"bin/sdk_driver": ":driver_replacement"}, compression = "zstd")
 
 userspace_binary(
     name = "native",

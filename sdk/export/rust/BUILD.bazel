@@ -21,11 +21,20 @@ rust_library(
     deps = ["@brush_crates//:wit-bindgen"],
 )
 
+rust_library(
+    name = "bexos_component",
+    srcs = ["component.rs"],
+    crate_name = "bexos_component",
+    edition = "2024",
+    deps = ["//lib/bexos_libc", "//lib/migration", "//lib/userspace"],
+)
+
 filegroup(
     name = "files",
     srcs = glob(["src/**/*.rs"]) + [
         "wasm.wit",
         "wasm_guest.rs",
+        "component.rs",
     ],
 )
 

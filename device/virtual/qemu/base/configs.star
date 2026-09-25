@@ -6,17 +6,15 @@ def _value(name, value):
 def _component(package_id, values):
     return {"package_id": package_id, "values": values}
 
-def qemu_system(product, architecture, graphics = False, development = False):
-    return base_system(
-        product_name = product + "_" + architecture + ("_development" if development else ""),
-        board = "//device/virtual/qemu/base/" + architecture,
-        platform_config = "//device/virtual/qemu/" + product + (":platform_config_emulated_bin" if development else ":platform_config_bin"),
-        bundles = ["base", "qemu_hardware"] + (["graphics", "qemu_graphics"] if graphics else []),
-        component_config_values = [
-            _component("bexos.platform.storage_verify", [
-                _value("retry_limit", {"uint32_value": 3}),
-                _value("channel", {"string_value": "qemu"}),
-            ]),
+def qemu_system(product, architecture, graphics = False, development = False, workstation_services = True):
+    component_config_values = [
+        _component("bexos.platform.storage_verify", [
+            _value("retry_limit", {"uint32_value": 3}),
+            _value("channel", {"string_value": "qemu"}),
+        ]),
+    ]
+    if workstation_services:
+        component_config_values.extend([
             _component("bexos.service.netstackd", [
                 _value("static_ipv4", {"bytes_value": b"\x0a\x00\x02\x0f"}),
                 _value("static_prefix_len", {"uint32_value": 24}),
@@ -51,5 +49,11 @@ def qemu_system(product, architecture, graphics = False, development = False):
                 _value("slew_limit_ppm", {"uint32_value": 500}),
                 _value("slew_step_threshold_ns", {"uint64_value": 1000000000}),
             ]),
-        ],
+        ])
+    return base_system(
+        product_name = product + "_" + architecture + ("_development" if development else ""),
+        board = "//device/virtual/qemu/base/" + architecture,
+        platform_config = "//device/virtual/qemu/" + product + (":platform_config_emulated_bin" if development else ":platform_config_bin"),
+        bundles = ["base", "qemu_hardware"] + (["graphics", "qemu_graphics"] if graphics else []),
+        component_config_values = component_config_values,
     )

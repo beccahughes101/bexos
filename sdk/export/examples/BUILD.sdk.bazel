@@ -1,10 +1,13 @@
 load(
     "@bexos_sdk//rules:defs.bzl",
-    "bexos_native_app",
+    "bexos_driver",
+    "bexos_service",
     "bexos_wasm_app",
 )
 
 package(default_visibility = ["//visibility:public"])
+
+cc_library(name = "c_helper", srcs = ["c_helper.c"])
 
 # Supply signing.key locally before building these targets. Private signing
 # material is intentionally not included in the SDK archive.
@@ -16,20 +19,44 @@ bexos_wasm_app(
     signing_key = "signing.key",
 )
 
-bexos_native_app(
+bexos_service(
     name = "native_service_aarch64",
-    srcs = ["native_service.rs"],
+    srcs = ["native_service.rs", "state.rs"],
     architecture = "aarch64",
     binary_name = "native_service",
     manifest = "native_service.prototxt",
     signing_key = "signing.key",
+    link_deps = [":c_helper"],
+    std = True,
 )
 
-bexos_native_app(
+bexos_service(
     name = "native_service_x86_64",
-    srcs = ["native_service.rs"],
+    srcs = ["native_service.rs", "state.rs"],
     architecture = "x86_64",
     binary_name = "native_service",
     manifest = "native_service.prototxt",
     signing_key = "signing.key",
+    link_deps = [":c_helper"],
+    std = True,
+)
+
+bexos_driver(
+    name = "driver_aarch64",
+    srcs = ["driver.rs", "state.rs"],
+    architecture = "aarch64",
+    binary_name = "example_driver",
+    manifest = "driver.prototxt",
+    signing_key = "signing.key",
+    std = True,
+)
+
+bexos_driver(
+    name = "driver_x86_64",
+    srcs = ["driver.rs", "state.rs"],
+    architecture = "x86_64",
+    binary_name = "example_driver",
+    manifest = "driver.prototxt",
+    signing_key = "signing.key",
+    std = True,
 )

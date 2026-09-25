@@ -50,6 +50,7 @@ pub enum Object {
     ReplyToken(usize, usize, u64),
     IommuDomain(usize),
     Interrupt(usize),
+    ResourceGroup(u32),
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Capability {
@@ -401,6 +402,62 @@ impl<B: Backend> Runtime<B> {
             Object::Profile(id),
             ADMIN | TRANSFER | DUPLICATE,
         ))
+    }
+
+    /// Return an owned capability for one of the built-in resource groups.
+    pub fn open_resource_group(&mut self, id: u32) -> Result<u64> {
+        if !(1..=4).contains(&id) {
+            return Err(Status::ErrInvalidArgs);
+        }
+        self.scheduler
+            .ensure_resource_group(id)
+            .map_err(scheduler_status)?;
+        Ok(self.grant(
+            self.current,
+            Object::ResourceGroup(id),
+            ADMIN | READ | TRANSFER | DUPLICATE,
+        ))
+    }
+
+    /// Create a hierarchical resource group and return its id and capability.
+    ///
+    /// CPU scheduling limits are enforced by the production scheduler. Memory
+    /// and GPU limits remain part of the stable wire contract and are enforced
+    /// by the control-plane resource accounting used by those allocators.
+    pub fn create_resource_group_v2(
+        &mut self,
+        parent_handle: Option<u64>,
+        cpu_shares: u32,
+        max_utilization_permille: u16,
+        allow_realtime: bool,
+    ) -> Result<(u32, u64)> {
+        let parent_id = match parent_handle {
+            Some(handle) => {
+                let Object::ResourceGroup(id) = self.capability(handle, READ)?.object else {
+                    return Err(Status::ErrInvalidHandle);
+                };
+                Some(id)
+            }
+            None => None,
+        };
+        let id = (5..=u32::MAX)
+            .find(|id| self.scheduler.resource_group(*id).is_none())
+            .ok_or(Status::ErrResourceExhausted)?;
+        self.scheduler
+            .ensure_resource_group_with_limits(
+                id,
+                parent_id,
+                cpu_shares,
+                max_utilization_permille,
+                allow_realtime,
+            )
+            .map_err(scheduler_status)?;
+        let handle = self.grant(
+            self.current,
+            Object::ResourceGroup(id),
+            ADMIN | READ | TRANSFER | DUPLICATE,
+        );
+        Ok((id, handle))
     }
 
     fn validate_profile_request(&self, profile: SchedulingProfile) -> Result<SchedulingProfile> {
@@ -977,6 +1034,7 @@ impl<B: Backend> Runtime<B> {
             | Object::Space(_)
             | Object::Profile(_)
             | Object::IommuDomain(_)
+            | Object::ResourceGroup(_)
             | Object::ReplyToken(_, _, _) => crate::kernel_services::SIGNAL_WRITABLE,
             Object::Interrupt(id) => self
                 .interrupts

@@ -368,6 +368,11 @@ impl ReadinessGate for Gate {
             // this launch came through the authenticated device coordinator;
             // the generic ready handshake below is the commit point.
             _ if self.binding_node_id != 0 && p.process_ref.manifest.driver_info.is_some() => {}
+            // Signed out-of-tree services do not have platform-reserved package
+            // names. Their exact package/signer pair has already passed runner
+            // policy before launch, and the signed manifest marks the process as
+            // a service, so the ordinary ready handshake is their commit point.
+            _ if p.process_ref.process.service => {}
             _ if p.process_ref.process.runner == "wasm" => {}
             _ => return Err(ReadinessError::NotReady),
         }

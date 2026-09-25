@@ -1,15 +1,24 @@
-#![no_std]
 #![no_main]
 
+mod state;
+
+unsafe extern "C" { fn example_c_increment(value: u64) -> u64; }
+
 fn main(startup_channel: u64) -> ! {
-    if bexos_app::service_ready(startup_channel).is_err() {
-        bexos_app::log("example-native-service: readiness failed\n");
-        bexos_app::exit();
-    }
-    bexos_app::log("example-native-service: started\n");
-    loop {
-        bexos_app::yield_now();
-    }
+    use bexos_component::{Channel, Startup};
+    let control = Channel(startup_channel);
+    let startup = Startup::receive(control).unwrap_or_else(|_| bexos_component::exit());
+    let state = if startup.migration_target {
+        bexos_component::live_migration::receive::<state::ExampleState>(control, startup.migration_generation)
+            .unwrap_or_else(|_| bexos_component::exit())
+    } else {
+        let mut message = String::from("example-native-service: structured startup accepted value=");
+        message.push_str(if unsafe { example_c_increment(40) } == 42 { "42\n" } else { "error\n" });
+        bexos_component::log(&message);
+        Startup::ready(control).unwrap_or_else(|_| bexos_component::exit());
+        state::ExampleState::new(control, startup.migration, startup.resources.first().copied())
+    };
+    state::serve(state)
 }
 
-bexos_app::entry!(main);
+bexos_component::std_entry!(main);

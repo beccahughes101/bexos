@@ -1,0 +1,111 @@
+load(
+    "@bexos_sdk//rules:defs.bzl",
+    "bexos_driver",
+    "bexos_fidl_rust_library",
+    "bexos_native_app",
+    "bexos_service",
+    "bexos_wasm_app",
+)
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(name = "c_helper", srcs = ["c_helper.c"])
+
+bexos_fidl_rust_library(name = "echo_fidl", srcs = ["echo.fidl"])
+
+bexos_wasm_app(
+    name = "wasm_app",
+    srcs = ["wasm.rs"],
+    deps = ["@bexos_sdk//rust:bexos_wasm_guest"],
+    manifest = "wasm.prototxt",
+    signing_key = "fixture_signer.key",
+)
+
+bexos_native_app(
+    name = "native_aarch64_app",
+    srcs = ["native.rs"],
+    manifest = "native.prototxt",
+    signing_key = "fixture_signer.key",
+    architecture = "aarch64",
+    binary_name = "native_fixture",
+)
+
+[
+    bexos_service(
+        name = "service_" + architecture,
+        srcs = ["service.rs", "state.rs"],
+        architecture = architecture,
+        binary_name = "sdk_service",
+        link_deps = [":c_helper"],
+        manifest = "service.prototxt",
+        signing_key = "fixture_signer.key",
+        std = True,
+    )
+    for architecture in ["aarch64", "x86_64"]
+]
+
+[
+    bexos_service(
+        name = "service_replacement_" + architecture,
+        srcs = ["service_replacement.rs", "state.rs"],
+        architecture = architecture,
+        binary_name = "sdk_service",
+        manifest = "service.prototxt",
+        signing_key = "fixture_signer.key",
+        std = True,
+    )
+    for architecture in ["aarch64", "x86_64"]
+]
+
+[
+    bexos_driver(
+        name = "driver_" + architecture,
+        srcs = ["driver.rs", "state.rs"],
+        architecture = architecture,
+        binary_name = "sdk_driver",
+        manifest = "driver.prototxt",
+        signing_key = "fixture_signer.key",
+        std = True,
+    )
+    for architecture in ["aarch64", "x86_64"]
+]
+
+[
+    bexos_driver(
+        name = "driver_replacement_" + architecture,
+        srcs = ["driver_replacement.rs", "state.rs"],
+        architecture = architecture,
+        binary_name = "sdk_driver",
+        manifest = "driver.prototxt",
+        signing_key = "fixture_signer.key",
+        std = True,
+    )
+    for architecture in ["aarch64", "x86_64"]
+]
+
+bexos_native_app(
+    name = "native_x86_64_app",
+    srcs = ["native.rs"],
+    manifest = "native.prototxt",
+    signing_key = "fixture_signer.key",
+    architecture = "x86_64",
+    binary_name = "native_fixture",
+)
+
+filegroup(
+    name = "archives",
+    srcs = [
+        ":wasm_app",
+        ":native_aarch64_app",
+        ":native_x86_64_app",
+        ":echo_fidl",
+        ":service_aarch64",
+        ":service_x86_64",
+        ":service_replacement_aarch64",
+        ":service_replacement_x86_64",
+        ":driver_aarch64",
+        ":driver_x86_64",
+        ":driver_replacement_aarch64",
+        ":driver_replacement_x86_64",
+    ],
+)

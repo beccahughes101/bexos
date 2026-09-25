@@ -155,8 +155,11 @@ See [boot UI](bootui.md) for ownership, boot ordering, migration, validation
 commands, and the boundary with the full desktop design.
 ## SDK acceptance product
 
-`//device/virtual/qemu/sdk_acceptance` is the dedicated product used to prove
-out-of-tree application ingestion. The bounded E2E scenarios are
+`//device/virtual/qemu/sdk_acceptance` proves out-of-tree application, service,
+driver, sysroot/libc and early-BootFS ingestion. It adds an e1000e PCI function,
+requires the external std+C service before storage pivot, verifies driver
+resource binding, and live-replaces both components with state/handle
+continuity. The bounded E2E scenarios are
 `//testing/e2e/qemu/sdk:sdk_acceptance_aarch64` and
 `//testing/e2e/qemu/sdk:sdk_acceptance_x86_64`. The full external-workspace
 orchestrator is run with:
@@ -170,5 +173,6 @@ For x86 firmware builds on hosts with a small system volume, set
 `BEXOS_BAZEL_OUTPUT_USER_ROOT` to an absolute directory on a larger build
 volume before invoking the wrapper.
 
-Existing QEMU products receive no imported applications unless their macro is
-passed `prebuilt_apps`.
+Existing QEMU products receive no imports unless their macro is passed
+`prebuilt_apps`. External native entries also require explicit
+`native_runner_grants`, with `driver_grants` required for drivers.

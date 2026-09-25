@@ -28,6 +28,16 @@ pub struct AssembledPackage {
     pub label: String,
     pub placement: Placement,
     pub config_path: String,
+    pub signer_id: String,
+    pub component_type: String,
+}
+
+pub struct PrebuiltComponent {
+    pub label: String,
+    pub manifest: Vec<u8>,
+    pub placement: Placement,
+    pub signer_id: String,
+    pub component_type: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -207,6 +217,24 @@ pub fn validate_product_with_prebuilt_for(
     prebuilt_manifests: &[(String, Vec<u8>)],
     architecture: bexos_app_manifest::Architecture,
 ) -> Result<AssemblyOutput, String> {
+    let components = prebuilt_manifests
+        .iter()
+        .map(|(label, manifest)| PrebuiltComponent {
+            label: label.clone(),
+            manifest: manifest.clone(),
+            placement: Placement::SystemImage,
+            signer_id: String::new(),
+            component_type: "application".into(),
+        })
+        .collect::<Vec<_>>();
+    validate_product_with_components_for(input, &components, architecture)
+}
+
+pub fn validate_product_with_components_for(
+    input: ProductInput<'_>,
+    prebuilt_components: &[PrebuiltComponent],
+    architecture: bexos_app_manifest::Architecture,
+) -> Result<AssemblyOutput, String> {
     let product = decode_product(input.product)?;
     let selected = product.bundles.iter().cloned().collect::<BTreeSet<_>>();
     let mut bundle_names = BTreeSet::new();
@@ -226,21 +254,26 @@ pub fn validate_product_with_prebuilt_for(
         }
     }
 
-    packages.extend(prebuilt_manifests.iter().map(|(label, _)| Package {
-        label: label.clone(),
+    packages.extend(prebuilt_components.iter().map(|component| Package {
+        label: component.label.clone(),
         package_id: String::new(),
-        placement: Placement::SystemImage,
+        placement: component.placement,
     }));
 
     let manifests = input
         .manifests
         .iter()
-        .chain(prebuilt_manifests.iter())
+        .map(|(label, manifest)| (label.as_str(), manifest.as_slice()))
+        .chain(
+            prebuilt_components
+                .iter()
+                .map(|component| (component.label.as_str(), component.manifest.as_slice())),
+        )
         .map(|(label, bytes)| {
             bexos_app_manifest::ManifestArchitecture::decode(bytes)
                 .and_then(|manifest| manifest.validate(Some(architecture)))
                 .map_err(|error| format!("manifest {label}: {error:?}; rebuild native packages for the selected architecture"))?;
-            Ok((label.clone(), decode_manifest(bytes)?))
+            Ok((label.to_string(), decode_manifest(bytes)?))
         })
         .collect::<Result<BTreeMap<_, _>, String>>()?;
 
@@ -268,6 +301,9 @@ pub fn validate_product_with_prebuilt_for(
         if !seen_ids.insert(package_id.clone()) {
             return Err(format!("duplicate package id {package_id}"));
         }
+        let prebuilt = prebuilt_components
+            .iter()
+            .find(|component| component.label == package.label);
         assembled.push(AssembledPackage {
             package_id: package_id.clone(),
             label: package.label,
@@ -277,6 +313,9 @@ pub fn validate_product_with_prebuilt_for(
             } else {
                 format!("pkg/{package_id}/config/component.bexconfig")
             },
+            signer_id: prebuilt.map_or_else(String::new, |component| component.signer_id.clone()),
+            component_type: prebuilt
+                .map_or_else(String::new, |component| component.component_type.clone()),
         });
     }
 
@@ -650,11 +689,13 @@ impl AssemblyOutput {
         );
         for package in &self.packages {
             out.push_str(&format!(
-                "package: {} label={} placement={} config={}\n",
+                "package: {} label={} placement={} config={} signer={} type={}\n",
                 package.package_id,
                 package.label,
                 package.placement.as_str(),
-                package.config_path
+                package.config_path,
+                package.signer_id,
+                package.component_type,
             ));
         }
         out

@@ -1,5 +1,6 @@
 load("//build/platforms:architecture.bzl", "guest_select")
-load("//build/rules:prebuilt_app.bzl", "bexos_prebuilt_app")
+load("//build/rules:assembly.bzl", "assembly_input_bundle")
+load("//build/rules:prebuilt_app.bzl", "bexos_prebuilt_app", "bexos_prebuilt_component")
 load("//device/virtual/qemu/base:product.bzl", "qemu_product")
 
 package(default_visibility = ["//visibility:public"])
@@ -10,6 +11,36 @@ bexos_prebuilt_app(
     package_id = "bexos.sdk.fixture.wasm",
     public_key = "fixture_signer_public.prototxt",
     autoinstall = True,
+)
+
+bexos_prebuilt_component(
+    name = "sdk_service",
+    archive = guest_select(
+        "@bexos_sdk_fixture_prebuilt//:service_aarch64.bex",
+        "@bexos_sdk_fixture_prebuilt//:service_x86_64.bex",
+    ),
+    package_id = "bexos.sdk.fixture.service",
+    signing_root = "fixture_signer_public.prototxt",
+    signer_id = "bexos-dev-app-root",
+    component_type = "service",
+    placement = "BOOTFS",
+    boot_wave = 2,
+    autoinstall = False,
+)
+
+bexos_prebuilt_component(
+    name = "sdk_driver",
+    archive = guest_select(
+        "@bexos_sdk_fixture_prebuilt//:driver_aarch64.bex",
+        "@bexos_sdk_fixture_prebuilt//:driver_x86_64.bex",
+    ),
+    package_id = "bexos.sdk.fixture.driver.e1000e",
+    signing_root = "fixture_signer_public.prototxt",
+    signer_id = "bexos-dev-app-root",
+    component_type = "driver",
+    placement = "BOOTFS",
+    boot_wave = 4,
+    autoinstall = False,
 )
 
 bexos_prebuilt_app(
@@ -25,9 +56,32 @@ bexos_prebuilt_app(
 
 qemu_product(
     name = "sdk_acceptance",
+    aarch64_hardware_bundle = "sdk_aarch64_hardware.aib.prototxt",
+    base_bundle = ":sdk_base_aib_bin",
     graphics = False,
+    include_boot_wasm = False,
     prebuilt_apps = [
-        ":sdk_wasm_app",
-        ":sdk_native_app",
+        ":sdk_service",
+        ":sdk_driver",
     ],
+    prebuilt_updates = {
+        "@bexos_sdk_fixture_prebuilt//:service_replacement.bex": "updates/bexos.sdk.fixture.service.replacement.bex",
+        "@bexos_sdk_fixture_prebuilt//:driver_replacement.bex": "updates/bexos.sdk.fixture.driver.e1000e.replacement.bex",
+    },
+    native_runner_grants = [
+        "bexos.sdk.fixture.service@bexos-dev-app-root",
+        "bexos.sdk.fixture.driver.e1000e@bexos-dev-app-root",
+    ],
+    storage_preinstalls = [{
+        "archive": ":storage_verify_archive",
+        "path": "pkg/bexos.platform.storage_verify.bex",
+    }],
+    driver_grants = ["bexos.sdk.fixture.driver.e1000e@bexos-dev-app-root"],
+    system_image_manifest = "sdk_system_image.prototxt",
+    x86_64_hardware_bundle = "sdk_x86_64_hardware.aib.prototxt",
+)
+
+assembly_input_bundle(
+    name = "sdk_base_aib",
+    src = "sdk_base.aib.prototxt",
 )

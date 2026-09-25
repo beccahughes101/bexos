@@ -75,7 +75,10 @@ QEMU_PRODUCT_MANIFESTS = {
         "//services/vfsd:vfsd_elf": "//services/vfsd:package_manifest",
     }
 
-def qemu_assembly(product, graphics, input_fixture = False, prebuilt_apps = []):
+def qemu_assembly(product, graphics, input_fixture = False, prebuilt_apps = [], native_runner_grants = [], driver_grants = [], system_image_manifest = None, base_bundle = None, aarch64_hardware_bundle = None, x86_64_hardware_bundle = None):
+    base_bundle = base_bundle or "//device/base:base"
+    aarch64_hardware_bundle = aarch64_hardware_bundle or "//device/virtual/qemu/base/aarch64:qemu_hardware.aib.prototxt"
+    x86_64_hardware_bundle = x86_64_hardware_bundle or "//device/virtual/qemu/base/x86_64:qemu_hardware.aib.prototxt"
     native.filegroup(
         name = "config_sources",
         srcs = [
@@ -95,9 +98,9 @@ def qemu_assembly(product, graphics, input_fixture = False, prebuilt_apps = []):
         src = ":qemu_hardware_aib_prototxt_source",
     )
 
-    assembly_input_bundle(name = "aarch64_hardware_aib", src = "//device/virtual/qemu/base/aarch64:qemu_hardware.aib.prototxt")
+    assembly_input_bundle(name = "aarch64_hardware_aib", src = aarch64_hardware_bundle)
 
-    assembly_input_bundle(name = "x86_64_hardware_aib", src = "//device/virtual/qemu/base/x86_64:qemu_hardware.aib.prototxt")
+    assembly_input_bundle(name = "x86_64_hardware_aib", src = x86_64_hardware_bundle)
 
     starlark_product(
         name = "virtual_aarch64_product_assembly",
@@ -107,9 +110,11 @@ def qemu_assembly(product, graphics, input_fixture = False, prebuilt_apps = []):
             "//device/virtual/qemu/base:configs.star": "//device/virtual/qemu/base:configs.star",
         },
         entry = "virtual_aarch64",
-        bundles = ["//device/base:base", ":aarch64_hardware_aib_bin"] + (["//device/base/graphics:graphics", "//device/virtual/qemu/base/graphics:qemu_graphics"] if graphics else []) + (["//testing/e2e/qemu/graphics/input_fixture:bundle_bin"] if input_fixture else []),
+        bundles = [base_bundle, ":aarch64_hardware_aib_bin"] + (["//device/base/graphics:graphics", "//device/virtual/qemu/base/graphics:qemu_graphics"] if graphics else []) + (["//testing/e2e/qemu/graphics/input_fixture:bundle_bin"] if input_fixture else []),
         manifests = {label: manifest for label, manifest in QEMU_PRODUCT_MANIFESTS.items() if "/pc/cmos" not in label},
         prebuilt_apps = prebuilt_apps,
+        native_runner_grants = native_runner_grants,
+        driver_grants = driver_grants,
     )
 
     starlark_product(
@@ -120,9 +125,11 @@ def qemu_assembly(product, graphics, input_fixture = False, prebuilt_apps = []):
             "//device/virtual/qemu/base:configs.star": "//device/virtual/qemu/base:configs.star",
         },
         entry = "virtual_x86_64",
-        bundles = ["//device/base:base", ":x86_64_hardware_aib_bin"] + (["//device/base/graphics:graphics", "//device/virtual/qemu/base/graphics:qemu_graphics"] if graphics else []) + (["//testing/e2e/qemu/graphics/input_fixture:bundle_bin"] if input_fixture else []),
+        bundles = [base_bundle, ":x86_64_hardware_aib_bin"] + (["//device/base/graphics:graphics", "//device/virtual/qemu/base/graphics:qemu_graphics"] if graphics else []) + (["//testing/e2e/qemu/graphics/input_fixture:bundle_bin"] if input_fixture else []),
         manifests = {label: manifest for label, manifest in QEMU_PRODUCT_MANIFESTS.items() if "/arm/" not in label},
         prebuilt_apps = prebuilt_apps,
+        native_runner_grants = native_runner_grants,
+        driver_grants = driver_grants,
     )
 
     starlark_product(
@@ -133,9 +140,11 @@ def qemu_assembly(product, graphics, input_fixture = False, prebuilt_apps = []):
             "//device/virtual/qemu/base:configs.star": "//device/virtual/qemu/base:configs.star",
         },
         entry = "virtual_x86_64_development",
-        bundles = ["//device/base:base", ":x86_64_hardware_aib_bin"] + (["//device/base/graphics:graphics", "//device/virtual/qemu/base/graphics:qemu_graphics"] if graphics else []) + (["//testing/e2e/qemu/graphics/input_fixture:bundle_bin"] if input_fixture else []),
+        bundles = [base_bundle, ":x86_64_hardware_aib_bin"] + (["//device/base/graphics:graphics", "//device/virtual/qemu/base/graphics:qemu_graphics"] if graphics else []) + (["//testing/e2e/qemu/graphics/input_fixture:bundle_bin"] if input_fixture else []),
         manifests = {label: ("//services/teed:package_manifest_software" if label == "//services/teed:teed_elf" else manifest) for label, manifest in QEMU_PRODUCT_MANIFESTS.items() if "/arm/" not in label},
         prebuilt_apps = prebuilt_apps,
+        native_runner_grants = native_runner_grants,
+        driver_grants = driver_grants,
     )
 
     product_app_config(
@@ -303,9 +312,12 @@ def qemu_assembly(product, graphics, input_fixture = False, prebuilt_apps = []):
 
     native.alias(name = "bootfs_manifest_prototxt_source", actual = guest_select("//device/virtual/qemu/base/aarch64:bootfs_manifest.prototxt", "//device/virtual/qemu/base/x86_64:bootfs_manifest.prototxt"))
 
-    native.alias(name = "qemu_hardware_aib_prototxt_source", actual = guest_select("//device/virtual/qemu/base/aarch64:qemu_hardware.aib.prototxt", "//device/virtual/qemu/base/x86_64:qemu_hardware.aib.prototxt"))
+    native.alias(name = "qemu_hardware_aib_prototxt_source", actual = guest_select(aarch64_hardware_bundle, x86_64_hardware_bundle))
 
-    native.alias(name = "system_image_prototxt_source", actual = guest_select("//device/virtual/qemu/base/aarch64:system_image.prototxt", "//device/virtual/qemu/base/x86_64:system_image.prototxt"))
+    native.alias(
+        name = "system_image_prototxt_source",
+        actual = system_image_manifest or guest_select("//device/virtual/qemu/base/aarch64:system_image.prototxt", "//device/virtual/qemu/base/x86_64:system_image.prototxt"),
+    )
 
     native.alias(name = "product_definition", actual = guest_select(":virtual_aarch64_product_assembly_definition_bin", ":virtual_x86_64_product_assembly_definition_bin"))
 

@@ -1,4 +1,4 @@
-sdk_version { major: 0 minor: 1 patch: 0 }
+sdk_version { major: 0 minor: 2 patch: 0 }
 api_level: 1
 host: "macos-aarch64"
 target_architectures: "aarch64"

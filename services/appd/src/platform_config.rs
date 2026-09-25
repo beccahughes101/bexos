@@ -907,7 +907,12 @@ fn decode_network_isolation_group(bytes: &[u8]) -> Result<NetworkIsolationGroup,
             4 => value.netstackd_package = field.string()?,
             5 => value.netstackd_process = field.string()?,
             6 => value.resource_template = field.string()?,
-            7 => value.table_ids.push(field.varint()? as u32),
+            7 => value.table_ids.extend(
+                field
+                    .repeated_varints()?
+                    .into_iter()
+                    .map(|value| value as u32),
+            ),
             _ => {}
         }
     }

@@ -13,7 +13,7 @@ def userspace_binary(name, srcs, crate_name, deps, rustc_flags = ["--cfg=bexos_g
         deps = deps + ["//lib/userspace", "//idl:kernel_fidl_rust"],
     )
 
-def std_service_binary(name, srcs, crate_name, deps, rustc_flags = ["--cfg=bexos_guest",]):
+def std_service_binary(name, srcs, crate_name, deps, rustc_flags = ["--cfg=bexos_guest",], link_deps = []):
     rust_binary(
         name = name,
         srcs = srcs,
@@ -47,6 +47,7 @@ def std_service_binary(name, srcs, crate_name, deps, rustc_flags = ["--cfg=bexos
         ] + rustc_flags,
         compile_data = ["//lib/bexos_libc:empty_libs"],
         deps = deps + ["//lib/bexos_libc", "//lib/userspace", "//idl:kernel_fidl_rust"],
+        link_deps = link_deps,
     )
 
 def std_shared_library(name, srcs, crate_name, deps, crate_root = None, crate_features = [], soname = None, rustc_flags = ["--cfg=bexos_guest",]):

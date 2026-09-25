@@ -1,0 +1,11 @@
+package_name: "bexos.sdk.fixture.service"
+name: "Out-of-tree SDK early service"
+min_bexos_abi_version: 1
+processes {
+  name: "sdk_service"
+  runner: "elf"
+  service: true
+  wave: 2
+  lifecycle { update_strategy: HEART_TRANSPLANT migration_timeout_ms: 3000 preparation_timeout_ms: 3000 }
+  runner_options { [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/sdk_service" } }
+}

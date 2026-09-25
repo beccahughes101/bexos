@@ -1625,6 +1625,44 @@ impl<'a> Field<'a> {
         let bytes = self.bytes()?;
         String::from_utf8(bytes.to_vec()).map_err(|_| ManifestError::InvalidUtf8)
     }
+
+    /// Decode a repeated protobuf integer field in either unpacked or packed form.
+    ///
+    /// Proto3 encoders pack repeated scalar values by default. Hand-written test
+    /// messages often use the also-valid unpacked representation, so boot-time
+    /// decoders must accept both encodings.
+    pub(crate) fn repeated_varints(&self) -> Result<Vec<u64>, ManifestError> {
+        match self.value {
+            FieldValue::Varint(value) => {
+                let mut values = Vec::with_capacity(1);
+                values.push(value);
+                Ok(values)
+            }
+            FieldValue::Bytes(bytes) if self.wire_type == 2 => {
+                let mut values = Vec::new();
+                let mut pos = 0usize;
+                while pos < bytes.len() {
+                    let mut value = 0u64;
+                    let mut shift = 0u32;
+                    loop {
+                        let byte = *bytes.get(pos).ok_or(ManifestError::UnexpectedEof)?;
+                        pos += 1;
+                        if shift >= 64 {
+                            return Err(ManifestError::InvalidVarint);
+                        }
+                        value |= u64::from(byte & 0x7f) << shift;
+                        if byte & 0x80 == 0 {
+                            values.push(value);
+                            break;
+                        }
+                        shift += 7;
+                    }
+                }
+                Ok(values)
+            }
+            _ => Err(ManifestError::InvalidWireType(self.wire_type)),
+        }
+    }
 }
 
 enum FieldValue<'a> {

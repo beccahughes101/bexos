@@ -1,0 +1,14 @@
+# The SDK acceptance product only installs the component needed to verify the
+# encrypted STORAGE pivot. External fixtures and their replacements are added
+# independently by product assembly; unrelated workstation services would make
+# cross-architecture TCG acceptance needlessly dominate SDK validation.
+base_packages: "//services/appd:appd_elf"
+base_packages: "//services/powerd:powerd_elf"
+base_packages: "//services/storage_verify:storage_verify"
+base_packages: "//lib/crypto:crypto_archive"
+base_packages: "//lib/net:net_archive"
+base_packages: "//lib/tee_driver_trusty:tee_driver_trusty_archive"
+
+autoinstall_packages {
+  package: "//services/storage_verify:storage_verify"
+}

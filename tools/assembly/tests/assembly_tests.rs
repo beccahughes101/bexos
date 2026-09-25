@@ -1,7 +1,8 @@
 use bexos_assembly::test_proto::{bytes_field, concat, message_field, string_field, varint_field};
 use bexos_assembly::{
-    CompileConfigInput, ProductInput, append_system_image_packages, compile_config_blob,
-    compile_config_blob_from_product, validate_product, validate_product_with_prebuilt_for,
+    CompileConfigInput, PrebuiltComponent, ProductInput, append_system_image_packages,
+    compile_config_blob, compile_config_blob_from_product, validate_product,
+    validate_product_with_components_for, validate_product_with_prebuilt_for,
 };
 
 #[test]
@@ -23,6 +24,30 @@ fn system_image_appends_prebuilt_base_and_autoinstall_packages() {
             .any(|value| value == b"optional.app")
     );
     assert!(append_system_image_packages(&base, &[("base.app".into(), true)]).is_err());
+}
+
+#[test]
+fn bootfs_component_preserves_role_and_signer_provenance() {
+    let product = product("qemu_dev", "//board", ":policy", vec![], vec![]);
+    let output = validate_product_with_components_for(
+        ProductInput {
+            product: &product,
+            bundles: &[],
+            manifests: &[],
+        },
+        &[PrebuiltComponent {
+            label: "prebuilt://com.example.driver".into(),
+            manifest: manifest_with_schema("com.example.driver", vec![]),
+            placement: bexos_assembly::Placement::Bootfs,
+            signer_id: "vendor-root".into(),
+            component_type: "driver".into(),
+        }],
+        bexos_app_manifest::Architecture::Aarch64,
+    )
+    .expect("BOOTFS component should assemble");
+    let index = output.index_text();
+    assert!(index.contains("placement=BOOTFS"));
+    assert!(index.contains("signer=vendor-root type=driver"));
 }
 
 #[test]
