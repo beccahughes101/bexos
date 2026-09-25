@@ -30,6 +30,9 @@ image/autoinstall set. The storage-image packages are preinstalled on the
 
 ## Current Documentation Map
 
+- [Out-of-Tree Development](dev/README.md): SDK 0.2 setup and end-to-end
+  authoring, signing, heart-transplant, product-integration, and validation
+  guides for external applications, services, and D1 drivers.
 - [CLI Reference](cli.md): complete bexctl command syntax, output modes, login, and terminal behavior.
 
 - [Architecture](architecture.md): runtime layout, boot flow, ownership boundaries, and current gaps.

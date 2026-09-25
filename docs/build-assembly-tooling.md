@@ -80,6 +80,12 @@ Assembly rejects collisions and requires exact product runner grants for
 external native code plus exact driver grants for drivers. The assembly index
 carries verified signer-root and role provenance for appd policy evaluation.
 
+External package authors and product integrators should use the
+[out-of-tree developer guide](dev/README.md) for the SDK workspace, public rule
+surface, signed archive handoff, exact grants, placement choices, and acceptance
+workflow. This section describes the internal assembly implementation rather
+than the standalone authoring contract.
+
 `assembly_input_bundle`, `bexos_product`, and `product_app_config` in `build/rules/assembly.bzl` compile prototxt product inputs and produce:
 
 - product definition binary;

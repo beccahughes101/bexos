@@ -56,6 +56,10 @@ diagnostic, so one old package does not prevent unrelated packages from loading.
 No loader rewrites signed manifests or infers a missing label from an ELF.
 ## Verified out-of-tree applications
 
+The end-to-end package-author and product-integrator workflow is documented in
+[Out-of-Tree Product Integration](dev/product-integration.md). The details
+below summarize the storage-preinstall implementation used by current products.
+
 Products import a signed archive with `bexos_prebuilt_app`. Analysis invokes
 the BEXARCV2 verifier and accepts only the configured signer key and package
 ID, ABI level 1, compatible manifest/ELF architecture, application package

@@ -1,5 +1,10 @@
 # Heart Transplant
 
+External service and driver authors should start with the SDK-specific
+[Heart Transplant For External Components](dev/heart-transplant.md), which
+covers the exported `bexos_component` state interface and replacement archive
+workflow. This document describes the wider platform implementation.
+
 The [approved Trusty replacement design](design/trusty-live-replacement.md)
 defines the permanent ARM/x86 execution owners and secure-service continuity
 requirements. Its [current checkpoint](current/trusty-completion.md) tracks

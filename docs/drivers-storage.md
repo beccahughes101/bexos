@@ -1,5 +1,10 @@
 # Drivers And Storage
 
+For the supported standalone SDK workflow, including D1 bind manifests,
+structured resource startup, signing, product grants, and replacement testing,
+see [Out-of-Tree D1 Drivers](dev/drivers.md). This document inventories the
+drivers and storage stack implemented inside the BexOS repository.
+
 ## Driver Tiers In The Current Tree
 
 The current repository has:
