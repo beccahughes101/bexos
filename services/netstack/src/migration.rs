@@ -156,7 +156,7 @@ impl State for Runtime {
             return Err(Error::InvalidData);
         }
         let mut w = Encoder::new();
-        w.word(8);
+        w.word(9);
         w.word(if cfg!(bexos_arch_x86_64) { 2 } else { 1 });
         w.word(self.control.0);
         w.word(self.migration.map_or(0, |channel| channel.0));
@@ -272,7 +272,7 @@ impl State for Runtime {
             return Err(Error::InvalidData);
         }
         let version = r.word()?;
-        if !(3..=8).contains(&version) {
+        if !(3..=9).contains(&version) {
             return Err(Error::UnsupportedVersion);
         }
         let architecture = if version < 5 { 1 } else { r.word()? };
@@ -439,7 +439,7 @@ impl State for Runtime {
             Vec::new()
         };
         self.router = if version >= 7 {
-            decode_router(&mut r)?
+            decode_router(&mut r, version)?
         } else {
             Router::new(self.stack.config.clone())
         };
@@ -637,6 +637,18 @@ fn encode_router(w: &mut Encoder, router: &Router) -> Result<(), Error> {
             w.word(interface.id);
             w.text(&interface.name);
             w.word(interface.up as u64);
+            w.word(u64::from(interface.mtu));
+            w.word(interface.addresses.len() as u64);
+            for address in &interface.addresses {
+                encode_socket_addr(
+                    w,
+                    SocketAddress {
+                        addr: address.network,
+                        port: 0,
+                    },
+                );
+                w.word(u64::from(address.prefix_len));
+            }
             w.word(interface.neighbor_generation);
             w.word(interface.packet_generation);
             if let Some(link) = table.links.get(&interface.id) {
@@ -679,7 +691,7 @@ fn encode_router(w: &mut Encoder, router: &Router) -> Result<(), Error> {
     Ok(())
 }
 
-fn decode_router(r: &mut Decoder<'_>) -> Result<Router, Error> {
+fn decode_router(r: &mut Decoder<'_>, version: u64) -> Result<Router, Error> {
     let default_config = decode_config(r, 7)?;
     let mut router = Router::new(default_config.clone());
     for _ in 0..r.count(64)? {
@@ -697,10 +709,31 @@ fn decode_router(r: &mut Decoder<'_>) -> Result<Router, Error> {
         let mut interfaces = alloc::collections::BTreeMap::new();
         let mut links = alloc::collections::BTreeMap::new();
         for _ in 0..r.count(quota.interfaces.min(256))? {
+            let interface_id = r.word()?;
+            let name = r.text(32)?.to_string();
+            let up = r.flag()?;
+            let mtu = if version >= 9 {
+                u32::try_from(r.word()?).map_err(|_| Error::InvalidData)?
+            } else {
+                1500
+            };
+            let mut addresses = Vec::new();
+            if version >= 9 {
+                for _ in 0..r.count(16)? {
+                    let network = decode_socket_addr(r)?.addr;
+                    let prefix_len = r.count(128)? as u8;
+                    addresses.push(net_fidl::IpSubnet {
+                        network,
+                        prefix_len,
+                    });
+                }
+            }
             let interface = InterfaceState {
-                id: r.word()?,
-                name: r.text(32)?.to_string(),
-                up: r.flag()?,
+                id: interface_id,
+                name,
+                up,
+                mtu,
+                addresses,
                 neighbor_generation: r.word()?,
                 packet_generation: r.word()?,
             };
@@ -758,7 +791,7 @@ fn decode_router(r: &mut Decoder<'_>) -> Result<Router, Error> {
     Ok(router)
 }
 
-fn encode_stack_v7(w: &mut Encoder, stack: &Netstack) -> Result<(), Error> {
+pub fn encode_stack_v7(w: &mut Encoder, stack: &Netstack) -> Result<(), Error> {
     encode_config(w, stack.config.clone());
     w.word(u64::from(stack.next_ephemeral_port));
     w.word(stack.tcp.len() as u64);
@@ -786,7 +819,7 @@ fn encode_stack_v7(w: &mut Encoder, stack: &Netstack) -> Result<(), Error> {
     Ok(())
 }
 
-fn decode_stack_v7(r: &mut Decoder<'_>) -> Result<Netstack, Error> {
+pub fn decode_stack_v7(r: &mut Decoder<'_>) -> Result<Netstack, Error> {
     let mut stack = Netstack::from_active(decode_config(r, 7)?);
     stack.next_ephemeral_port = u16::try_from(r.word()?).map_err(|_| Error::InvalidData)?;
     for _ in 0..r.count(4096)? {
@@ -1315,7 +1348,7 @@ fn decode_udp_v7(r: &mut Decoder<'_>) -> Result<UdpEndpoint, Error> {
     Ok(udp)
 }
 
-fn encode_link(w: &mut Encoder, link: LinkResources) {
+pub fn encode_link(w: &mut Encoder, link: LinkResources) {
     for word in [
         link.control,
         link.fifo,
@@ -1332,7 +1365,7 @@ fn encode_link(w: &mut Encoder, link: LinkResources) {
     w.bytes(&link.mac);
 }
 
-fn decode_link(r: &mut Decoder<'_>) -> Result<LinkResources, Error> {
+pub fn decode_link(r: &mut Decoder<'_>) -> Result<LinkResources, Error> {
     let control = r.word()?;
     let fifo = r.word()?;
     let rx_vmo = r.word()?;

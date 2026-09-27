@@ -27,6 +27,56 @@ message NetworkPolicy {
   repeated NetworkSwitchRoute switch_routes = 9;
   NetworkFirewallPolicy firewall = 10;
   NetworkNatPolicy nat = 11;
+  repeated WorkloadNetworkProfile workload_profiles = 12;
+}
+
+enum WorkloadNetworkMode {
+  WORKLOAD_NETWORK_MODE_UNSPECIFIED = 0;
+  WORKLOAD_NETWORK_DIRECT_PROVIDER = 1;
+  WORKLOAD_NETWORK_VIRTUAL_L2 = 2;
+}
+
+enum WorkloadAddressingMode {
+  WORKLOAD_ADDRESSING_UNSPECIFIED = 0;
+  WORKLOAD_ADDRESSING_STATIC = 1;
+  WORKLOAD_ADDRESSING_DHCP = 2;
+  WORKLOAD_ADDRESSING_SLAAC = 3;
+  WORKLOAD_ADDRESSING_DHCP_AND_SLAAC = 4;
+}
+
+message WorkloadPackageGrant {
+  string package_id = 1;
+  string expected_signer = 2;
+}
+
+message WorkloadOciGrant {
+  string registry_host = 1;
+  string repository = 2;
+  bytes manifest_digest = 3;
+}
+
+// Named, bounded policy which appd resolves before a Starnix launch. Physical
+// topology remains platform-owned even after the attachment enters a Linux
+// network namespace.
+message WorkloadNetworkProfile {
+  string name = 1;
+  WorkloadNetworkMode mode = 2;
+  string isolation_group = 3;
+  string domain = 4;
+  string physical_selector = 5;
+  uint32 vlan_id = 6;
+  uint32 mtu = 7;
+  uint32 rx_queue_depth = 8;
+  uint32 tx_queue_depth = 9;
+  WorkloadAddressingMode addressing = 10;
+  repeated NetworkIpPrefix static_addresses = 11;
+  repeated NetworkIpPrefix gateways = 12;
+  repeated bytes dns_servers = 13;
+  uint32 max_instances = 14;
+  bool allow_raw = 15;
+  bool allow_promiscuous = 16;
+  repeated WorkloadPackageGrant package_grants = 17;
+  repeated WorkloadOciGrant oci_grants = 18;
 }
 
 message NetworkRoutedInterface {

@@ -30,7 +30,7 @@ services_exposed {
   protocol: "ContainerManager"
   lifecycle: SINGLETON
   visibility: PUBLIC
-  capabilities { capability: "Public" method_ordinals: 1 method_ordinals: 2 method_ordinals: 3 method_ordinals: 4 method_ordinals: 5 method_ordinals: 6 }
+  capabilities { capability: "Public" method_ordinals: 1 method_ordinals: 2 method_ordinals: 3 method_ordinals: 4 method_ordinals: 5 method_ordinals: 6 method_ordinals: 7 method_ordinals: 8 }
 }
 services_consumed {
   name: "bexos.pkg.PackageResolver"

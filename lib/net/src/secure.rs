@@ -391,6 +391,7 @@ fn connect_scoped_tcp(provider: Channel, host: &str, port: u16) -> Result<Socket
                     keep_alive_ms: Some(0),
                     rx_buffer_size: Some(64 * 1024),
                     tx_buffer_size: Some(64 * 1024),
+                    bound_interface_id: None,
                 },
                 socket: NetHandleRef { raw: server_end.0 },
             },
@@ -427,6 +428,7 @@ pub fn connect_tcp_addr(
             keep_alive_ms: Some(0),
             rx_buffer_size: Some(64 * 1024),
             tx_buffer_size: Some(64 * 1024),
+            bound_interface_id: None,
         },
         socket: NetHandleRef { raw: server_end.0 },
     };
@@ -468,6 +470,7 @@ pub fn connect_scoped_tcp_addr(
                     keep_alive_ms: Some(0),
                     rx_buffer_size: Some(64 * 1024),
                     tx_buffer_size: Some(64 * 1024),
+                    bound_interface_id: None,
                 },
                 socket: NetHandleRef { raw: server_end.0 },
             },

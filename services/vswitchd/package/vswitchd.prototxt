@@ -3,7 +3,12 @@ name: "Virtual Ethernet switch"
 processes {
   name: "vswitchd" runner: "elf" service: true wave: 4 resource_group: "system"
   lifecycle { update_strategy: HEART_TRANSPLANT preparation_timeout_ms: 30000 migration_timeout_ms: 5000 }
-  runner_options { [type.googleapis.com/bexos.app.ELFRunnerOptions] { path: "/pkg/bin/vswitchd" } }
+  runner_options {
+    [type.googleapis.com/bexos.app.ELFRunnerOptions] {
+      path: "/pkg/bin/vswitchd"
+      stack_size_bytes: 2097152
+    }
+  }
 }
 services_exposed {
   name: "bexos.net.VirtualSwitchController"

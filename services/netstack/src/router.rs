@@ -1,7 +1,7 @@
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
-use net_fidl::{IpAddress, SocketAddress, Status};
+use net_fidl::{IpAddress, IpSubnet, SocketAddress, Status};
 
 use crate::config::ActiveConfig;
 use crate::link::PacketLink;
@@ -18,11 +18,13 @@ pub struct FibRoute {
     pub metric: u32,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct InterfaceState {
     pub id: u64,
     pub name: alloc::string::String,
     pub up: bool,
+    pub mtu: u32,
+    pub addresses: Vec<IpSubnet>,
     pub neighbor_generation: u64,
     pub packet_generation: u64,
 }
@@ -172,6 +174,58 @@ impl Router {
         Status::Ok
     }
 
+    pub fn set_interface_addresses(
+        &mut self,
+        table_id: TableId,
+        interface_id: u64,
+        addresses: &[IpSubnet],
+    ) -> Status {
+        if addresses.len() > 16
+            || addresses
+                .iter()
+                .any(|address| !valid_prefix(address.network, address.prefix_len))
+        {
+            return Status::ErrInvalidArgs;
+        }
+        let Some(interface) = self
+            .tables
+            .get_mut(&table_id)
+            .and_then(|table| table.interfaces.get_mut(&interface_id))
+        else {
+            return Status::ErrNotFound;
+        };
+        interface.addresses = addresses
+            .iter()
+            .map(|address| IpSubnet {
+                network: mask(address.network, address.prefix_len),
+                prefix_len: address.prefix_len,
+            })
+            .collect();
+        Status::Ok
+    }
+
+    pub fn set_interface_configuration(
+        &mut self,
+        table_id: TableId,
+        interface_id: u64,
+        mtu: u32,
+        up: bool,
+    ) -> Status {
+        if !(576..=65_535).contains(&mtu) {
+            return Status::ErrInvalidArgs;
+        }
+        let Some(interface) = self
+            .tables
+            .get_mut(&table_id)
+            .and_then(|table| table.interfaces.get_mut(&interface_id))
+        else {
+            return Status::ErrNotFound;
+        };
+        interface.mtu = mtu;
+        interface.up = up;
+        Status::Ok
+    }
+
     pub fn attach_link(
         &mut self,
         table_id: TableId,
@@ -294,6 +348,48 @@ impl Router {
         };
         endpoint.stream = Some(bexos_userspace::Socket(stream));
         self.attach_tcp_to_link(table_id, connection_id, remote.addr)
+    }
+
+    pub fn connect_tcp_on_interface_with_stream(
+        &mut self,
+        table_id: TableId,
+        interface_id: u64,
+        connection_id: u64,
+        remote: SocketAddress,
+        stream: u64,
+    ) -> Status {
+        let usable = self.tables.get(&table_id).is_some_and(|table| {
+            table
+                .interfaces
+                .get(&interface_id)
+                .is_some_and(|interface| interface.up)
+                && table.links.contains_key(&interface_id)
+        });
+        if !usable {
+            let _ = bexos_userspace::Memory::close(stream);
+            return Status::ErrNetworkUnreachable;
+        }
+        if self.tables.values().any(|table| {
+            table
+                .stack
+                .tcp
+                .iter()
+                .any(|socket| socket.control == connection_id)
+        }) {
+            let _ = bexos_userspace::Memory::close(stream);
+            return Status::ErrAlreadyExists;
+        }
+        let Some(table) = self.tables.get_mut(&table_id) else {
+            let _ = bexos_userspace::Memory::close(stream);
+            return Status::ErrNotFound;
+        };
+        let status = table.stack.connect_backend_tcp(
+            connection_id,
+            remote,
+            stream,
+            table.links.get_mut(&interface_id),
+        );
+        status
     }
 
     pub fn recover_connection(
@@ -466,6 +562,39 @@ impl Router {
         status
     }
 
+    pub fn listen_tcp_on_interface(
+        &mut self,
+        table_id: TableId,
+        interface_id: u64,
+        control: u64,
+        local: SocketAddress,
+    ) -> Status {
+        let Some(table) = self.tables.get_mut(&table_id) else {
+            return Status::ErrNotFound;
+        };
+        if !table
+            .interfaces
+            .get(&interface_id)
+            .is_some_and(|interface| interface.up)
+        {
+            return Status::ErrNetworkUnreachable;
+        }
+        if table.stack.listeners.len() >= table.quota.listeners {
+            return Status::ErrResourceExhausted;
+        }
+        let status = table.stack.listen_tcp(control, local);
+        if status != Status::Ok {
+            return status;
+        }
+        let status = table
+            .stack
+            .attach_listener_to_link(control, table.links.get_mut(&interface_id));
+        if status != Status::Ok {
+            table.stack.remove_listener(control);
+        }
+        status
+    }
+
     pub fn create_udp(&mut self, table_id: TableId, control: u64) -> Status {
         if self.tables.values().any(|table| {
             table
@@ -489,6 +618,29 @@ impl Router {
         let Some(table) = self.tables.get_mut(&table_id) else {
             return Status::ErrNotFound;
         };
+        if table.stack.udp.len() >= table.quota.udp {
+            return Status::ErrResourceExhausted;
+        }
+        table.stack.create_udp(control)
+    }
+
+    pub fn create_udp_on_interface(
+        &mut self,
+        table_id: TableId,
+        interface_id: u64,
+        control: u64,
+    ) -> Status {
+        let Some(table) = self.tables.get_mut(&table_id) else {
+            return Status::ErrNotFound;
+        };
+        if !table
+            .interfaces
+            .get(&interface_id)
+            .is_some_and(|interface| interface.up)
+            || !table.links.contains_key(&interface_id)
+        {
+            return Status::ErrNetworkUnreachable;
+        }
         if table.stack.udp.len() >= table.quota.udp {
             return Status::ErrResourceExhausted;
         }
@@ -590,6 +742,8 @@ mod tests {
                         id: u64::from(table),
                         name: "eth".to_string(),
                         up: true,
+                        mtu: 1500,
+                        addresses: Vec::new(),
                         neighbor_generation: 0,
                         packet_generation: 0,
                     }
@@ -637,6 +791,8 @@ mod tests {
                     id,
                     name: "eth".to_string(),
                     up: true,
+                    mtu: 1500,
+                    addresses: Vec::new(),
                     neighbor_generation: 0,
                     packet_generation: 0,
                 },

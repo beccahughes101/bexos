@@ -29,6 +29,7 @@ pub struct NetworkPolicy {
     pub switch_routes: Vec<NetworkSwitchRoute>,
     pub firewall: NetworkFirewallPolicy,
     pub nat: NetworkNatPolicy,
+    pub workload_profiles: Vec<WorkloadNetworkProfile>,
 }
 
 impl Default for NetworkPolicy {
@@ -51,8 +52,62 @@ impl Default for NetworkPolicy {
             switch_routes: Vec::new(),
             firewall: NetworkFirewallPolicy::default(),
             nat: NetworkNatPolicy::default(),
+            workload_profiles: Vec::new(),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum WorkloadNetworkMode {
+    #[default]
+    Unspecified,
+    DirectProvider,
+    VirtualL2,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum WorkloadAddressingMode {
+    #[default]
+    Unspecified,
+    Static,
+    Dhcp,
+    Slaac,
+    DhcpAndSlaac,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct WorkloadPackageGrant {
+    pub package_id: String,
+    pub expected_signer: String,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct WorkloadOciGrant {
+    pub registry_host: String,
+    pub repository: String,
+    pub manifest_digest: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct WorkloadNetworkProfile {
+    pub name: String,
+    pub mode: WorkloadNetworkMode,
+    pub isolation_group: String,
+    pub domain: String,
+    pub physical_selector: String,
+    pub vlan_id: u16,
+    pub mtu: u32,
+    pub rx_queue_depth: u32,
+    pub tx_queue_depth: u32,
+    pub addressing: WorkloadAddressingMode,
+    pub static_addresses: Vec<NetworkIpPrefix>,
+    pub gateways: Vec<NetworkIpPrefix>,
+    pub dns_servers: Vec<Vec<u8>>,
+    pub max_instances: u32,
+    pub allow_raw: bool,
+    pub allow_promiscuous: bool,
+    pub package_grants: Vec<WorkloadPackageGrant>,
+    pub oci_grants: Vec<WorkloadOciGrant>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -215,6 +270,45 @@ pub struct NetworkDnsUpstream {
 }
 
 impl NetworkPolicy {
+    pub fn workload_profile(&self, name: &str) -> Option<&WorkloadNetworkProfile> {
+        self.workload_profiles
+            .iter()
+            .find(|profile| profile.name == name)
+    }
+
+    pub fn authorize_oci_profile(
+        &self,
+        name: &str,
+        registry_host: &str,
+        repository: &str,
+        manifest_digest: &[u8; 32],
+    ) -> Option<&WorkloadNetworkProfile> {
+        let profile = self.workload_profile(name)?;
+        profile
+            .oci_grants
+            .iter()
+            .any(|grant| {
+                grant.registry_host == registry_host
+                    && grant.repository == repository
+                    && grant.manifest_digest == manifest_digest
+            })
+            .then_some(profile)
+    }
+
+    pub fn authorize_package_profile(
+        &self,
+        name: &str,
+        package_id: &str,
+        signer: &str,
+    ) -> Option<&WorkloadNetworkProfile> {
+        let profile = self.workload_profile(name)?;
+        profile
+            .package_grants
+            .iter()
+            .any(|grant| grant.package_id == package_id && grant.expected_signer == signer)
+            .then_some(profile)
+    }
+
     pub fn domain(&self, name: &str) -> Option<&NetworkDomain> {
         self.domains.iter().find(|domain| domain.name == name)
     }
@@ -338,6 +432,64 @@ impl NetworkPolicy {
                 ) && upstream.tls_server_name.is_empty()
                 || upstream.transport == NetworkDnsTransport::Doh
                     && !upstream.doh_path.starts_with('/')
+            {
+                return Err(ManifestError::InvalidConfigValue);
+            }
+        }
+        if self.workload_profiles.len() > 64 {
+            return Err(ManifestError::InvalidConfigValue);
+        }
+        for (index, profile) in self.workload_profiles.iter().enumerate() {
+            let direct = profile.mode == WorkloadNetworkMode::DirectProvider;
+            let l2 = profile.mode == WorkloadNetworkMode::VirtualL2;
+            if !valid_identifier(&profile.name)
+                || self.workload_profiles[..index]
+                    .iter()
+                    .any(|prior| prior.name == profile.name)
+                || profile.max_instances == 0
+                || profile.max_instances > 1024
+                || profile.mtu < 576
+                || profile.mtu > 9216
+                || profile.static_addresses.len() > 16
+                || profile.gateways.len() > 8
+                || profile.dns_servers.len() > 8
+                || profile.package_grants.len() > 64
+                || profile.oci_grants.len() > 64
+                || (!direct && !l2)
+                || (direct
+                    && (self.domain(&profile.domain).is_none()
+                        || !profile.physical_selector.is_empty()
+                        || profile.allow_raw
+                        || profile.allow_promiscuous))
+                || (l2
+                    && (!self
+                        .isolation_groups
+                        .iter()
+                        .any(|group| group.name == profile.isolation_group)
+                        || !valid_selector(&profile.physical_selector)
+                        || profile.vlan_id > 4094
+                        || profile.rx_queue_depth == 0
+                        || profile.tx_queue_depth == 0
+                        || profile.rx_queue_depth > 4096
+                        || profile.tx_queue_depth > 4096))
+                || profile
+                    .static_addresses
+                    .iter()
+                    .any(|prefix| !valid_prefix(prefix))
+                || profile.gateways.iter().any(|prefix| !valid_prefix(prefix))
+                || profile
+                    .dns_servers
+                    .iter()
+                    .any(|address| !matches!(address.len(), 4 | 16))
+                || profile.oci_grants.iter().any(|grant| {
+                    grant.registry_host.is_empty()
+                        || grant.repository.is_empty()
+                        || grant.manifest_digest.len() != 32
+                })
+                || profile
+                    .package_grants
+                    .iter()
+                    .any(|grant| grant.package_id.is_empty() || grant.expected_signer.is_empty())
             {
                 return Err(ManifestError::InvalidConfigValue);
             }
@@ -751,6 +903,9 @@ fn decode_network_policy(bytes: &[u8]) -> Result<NetworkPolicy, ManifestError> {
                 .push(decode_network_switch_route(field.bytes()?)?),
             10 => policy.firewall = decode_network_firewall_policy(field.bytes()?)?,
             11 => policy.nat = decode_network_nat_policy(field.bytes()?)?,
+            12 => policy
+                .workload_profiles
+                .push(decode_workload_network_profile(field.bytes()?)?),
             _ => {}
         }
     }
@@ -758,6 +913,84 @@ fn decode_network_policy(bytes: &[u8]) -> Result<NetworkPolicy, ManifestError> {
         policy.max_dynamic_providers = 64;
     }
     Ok(policy)
+}
+
+fn decode_workload_network_profile(bytes: &[u8]) -> Result<WorkloadNetworkProfile, ManifestError> {
+    let mut value = WorkloadNetworkProfile::default();
+    let mut cursor = Cursor::new(bytes);
+    while let Some(field) = cursor.next_field()? {
+        match field.number {
+            1 => value.name = field.string()?,
+            2 => {
+                value.mode = match field.varint()? {
+                    1 => WorkloadNetworkMode::DirectProvider,
+                    2 => WorkloadNetworkMode::VirtualL2,
+                    _ => WorkloadNetworkMode::Unspecified,
+                }
+            }
+            3 => value.isolation_group = field.string()?,
+            4 => value.domain = field.string()?,
+            5 => value.physical_selector = field.string()?,
+            6 => value.vlan_id = field.varint()? as u16,
+            7 => value.mtu = field.varint()? as u32,
+            8 => value.rx_queue_depth = field.varint()? as u32,
+            9 => value.tx_queue_depth = field.varint()? as u32,
+            10 => {
+                value.addressing = match field.varint()? {
+                    1 => WorkloadAddressingMode::Static,
+                    2 => WorkloadAddressingMode::Dhcp,
+                    3 => WorkloadAddressingMode::Slaac,
+                    4 => WorkloadAddressingMode::DhcpAndSlaac,
+                    _ => WorkloadAddressingMode::Unspecified,
+                }
+            }
+            11 => value
+                .static_addresses
+                .push(decode_network_ip_prefix(field.bytes()?)?),
+            12 => value
+                .gateways
+                .push(decode_network_ip_prefix(field.bytes()?)?),
+            13 => value.dns_servers.push(field.bytes()?.to_vec()),
+            14 => value.max_instances = field.varint()? as u32,
+            15 => value.allow_raw = field.varint()? != 0,
+            16 => value.allow_promiscuous = field.varint()? != 0,
+            17 => value
+                .package_grants
+                .push(decode_workload_package_grant(field.bytes()?)?),
+            18 => value
+                .oci_grants
+                .push(decode_workload_oci_grant(field.bytes()?)?),
+            _ => {}
+        }
+    }
+    Ok(value)
+}
+
+fn decode_workload_package_grant(bytes: &[u8]) -> Result<WorkloadPackageGrant, ManifestError> {
+    let mut value = WorkloadPackageGrant::default();
+    let mut cursor = Cursor::new(bytes);
+    while let Some(field) = cursor.next_field()? {
+        match field.number {
+            1 => value.package_id = field.string()?,
+            2 => value.expected_signer = field.string()?,
+            _ => {}
+        }
+    }
+    Ok(value)
+}
+
+fn decode_workload_oci_grant(bytes: &[u8]) -> Result<WorkloadOciGrant, ManifestError> {
+    let mut value = WorkloadOciGrant::default();
+    let mut cursor = Cursor::new(bytes);
+    while let Some(field) = cursor.next_field()? {
+        match field.number {
+            1 => value.registry_host = field.string()?,
+            2 => value.repository = field.string()?,
+            3 => value.manifest_digest = field.bytes()?.to_vec(),
+            _ => {}
+        }
+    }
+    Ok(value)
 }
 
 fn decode_network_routed_interface(bytes: &[u8]) -> Result<NetworkRoutedInterface, ManifestError> {
@@ -1289,4 +1522,47 @@ fn decode_interface_default(bytes: &[u8]) -> Result<InterfaceDefault, ManifestEr
         }
     }
     Ok(value)
+}
+
+#[cfg(test)]
+mod networking_tests {
+    use super::*;
+
+    fn direct_profile() -> WorkloadNetworkProfile {
+        WorkloadNetworkProfile {
+            name: "public".into(),
+            mode: WorkloadNetworkMode::DirectProvider,
+            isolation_group: "system_default".into(),
+            domain: "system_default".into(),
+            mtu: 1500,
+            rx_queue_depth: 64,
+            tx_queue_depth: 64,
+            addressing: WorkloadAddressingMode::DhcpAndSlaac,
+            max_instances: 4,
+            package_grants: vec![WorkloadPackageGrant {
+                package_id: "app.test".into(),
+                expected_signer: "test-root".into(),
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn workload_profile_authorization_is_exact_and_direct_raw_fails_closed() {
+        let mut policy = NetworkPolicy::default();
+        policy.workload_profiles.push(direct_profile());
+        assert_eq!(policy.validate(), Ok(()));
+        assert!(
+            policy
+                .authorize_package_profile("public", "app.test", "test-root")
+                .is_some()
+        );
+        assert!(
+            policy
+                .authorize_package_profile("public", "app.test", "other-root")
+                .is_none()
+        );
+        policy.workload_profiles[0].allow_raw = true;
+        assert_eq!(policy.validate(), Err(ManifestError::InvalidConfigValue));
+    }
 }

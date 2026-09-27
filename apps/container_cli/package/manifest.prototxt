@@ -10,5 +10,5 @@ processes {
 services_consumed {
   name: "bexos.container.ContainerManager"
   link_type: REQUIRED
-  capabilities { capability: "Public" methods { ordinal: 1 link_type: REQUIRED } methods { ordinal: 2 link_type: REQUIRED } methods { ordinal: 3 link_type: REQUIRED } methods { ordinal: 4 link_type: REQUIRED } methods { ordinal: 5 link_type: REQUIRED } methods { ordinal: 6 link_type: REQUIRED } }
+  capabilities { capability: "Public" methods { ordinal: 1 link_type: REQUIRED } methods { ordinal: 2 link_type: REQUIRED } methods { ordinal: 3 link_type: REQUIRED } methods { ordinal: 4 link_type: REQUIRED } methods { ordinal: 5 link_type: REQUIRED } methods { ordinal: 6 link_type: REQUIRED } methods { ordinal: 7 link_type: REQUIRED } }
 }

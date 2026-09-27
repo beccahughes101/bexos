@@ -6,9 +6,30 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 package(default_visibility = ["//visibility:public"])
 
 rust_library(
+    name = "ethernet_ring",
+    srcs = [
+        "src/ethernet_ring_lib.rs",
+        "src/ethernet.rs",
+        "src/link.rs",
+        "src/link/snapshot.rs",
+    ],
+    crate_name = "bexos_ethernet_ring",
+    crate_root = "src/ethernet_ring_lib.rs",
+    edition = "2024",
+    deps = [
+        "//idl:ethernet_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//idl:net_fidl_rust",
+        "//lib/migration",
+        "//lib/userspace",
+        "@crates//:smoltcp",
+    ],
+)
+
+rust_library(
     name = "netstackd",
     rustc_flags = guest_select([], ["--cfg=bexos_arch_x86_64"]),
-    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs", "src/ethernet.rs", "src/link.rs", "src/link/snapshot.rs", "src/ethernet_ring_lib.rs"]),
     crate_name = "bexos_netstackd",
     edition = "2024",
     deps = [
@@ -18,6 +39,7 @@ rust_library(
         "//lib/migration",
         "//lib/trace",
         "//lib/userspace",
+        ":ethernet_ring",
         "@crates//:smoltcp",
         "@crates//:tokio",
     ],

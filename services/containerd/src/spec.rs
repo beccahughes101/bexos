@@ -16,6 +16,12 @@ pub struct Resources {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct NetworkAttachment {
+    pub profile: String,
+    pub interface_name: String,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ContainerSpec {
     pub version: u32,
     pub container_id: String,
@@ -29,11 +35,13 @@ pub struct ContainerSpec {
     pub resources: Resources,
     pub readonly_rootfs: bool,
     pub manifest_digest: [u8; 32],
+    pub network_attachments: Vec<NetworkAttachment>,
 }
 
 impl ContainerSpec {
     pub fn validate(&self) -> Result<(), ()> {
-        if self.version != 1
+        if !matches!(self.version, 1 | 2)
+            || (self.version == 1 && !self.network_attachments.is_empty())
             || !valid_id(&self.container_id)
             || self.image.registry_host.is_empty()
             || self.image.registry_host.len() > 128
@@ -45,6 +53,7 @@ impl ContainerSpec {
             || self.arguments.is_empty()
             || self.arguments.len() > 64
             || self.environment.len() > 64
+            || self.network_attachments.len() > 8
             || self.working_directory.len() > 4096
             || !self.working_directory.starts_with('/')
             || self.hostname.len() > 64
@@ -59,6 +68,16 @@ impl ContainerSpec {
             })
         {
             return Err(());
+        }
+        for (index, attachment) in self.network_attachments.iter().enumerate() {
+            if !valid_name(&attachment.profile, 64)
+                || !valid_name(&attachment.interface_name, 15)
+                || self.network_attachments[..index]
+                    .iter()
+                    .any(|prior| prior.interface_name == attachment.interface_name)
+            {
+                return Err(());
+            }
         }
         Ok(())
     }
@@ -96,6 +115,12 @@ impl ContainerSpec {
         out.push_str("}\n");
         writeln!(out, "readonly_rootfs: {}", self.readonly_rootfs).unwrap();
         bytes_field(&mut out, "manifest_digest", &self.manifest_digest);
+        for attachment in &self.network_attachments {
+            out.push_str("network_attachments {\n");
+            string_field_indented(&mut out, "profile", &attachment.profile);
+            string_field_indented(&mut out, "interface_name", &attachment.interface_name);
+            out.push_str("}\n");
+        }
         Ok(out)
     }
 
@@ -122,6 +147,18 @@ impl ContainerSpec {
                     let digest = parser.bytes()?;
                     spec.manifest_digest = digest.try_into().map_err(|_| ())?;
                 }
+                "network_attachments" => parser.message(|p| {
+                    let mut attachment = NetworkAttachment::default();
+                    while !p.at_close() {
+                        match p.ident()? {
+                            "profile" => attachment.profile = p.string()?,
+                            "interface_name" => attachment.interface_name = p.string()?,
+                            _ => return Err(()),
+                        }
+                    }
+                    spec.network_attachments.push(attachment);
+                    Ok(())
+                })?,
                 "image" => parser.message(|p| {
                     while !p.at_close() {
                         match p.ident()? {
@@ -153,6 +190,16 @@ impl ContainerSpec {
         spec.validate()?;
         Ok(spec)
     }
+}
+
+fn valid_name(value: &str, maximum: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= maximum
+        && value != "."
+        && value != ".."
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
 }
 
 pub fn valid_id(value: &str) -> bool {
@@ -344,6 +391,7 @@ mod tests {
             },
             readonly_rootfs: true,
             manifest_digest: [0xff; 32],
+            network_attachments: Vec::new(),
         };
         let encoded = spec.encode_prototxt().unwrap();
         assert_eq!(
@@ -355,6 +403,35 @@ mod tests {
     fn rejects_traversal_ids_and_unknown_fields() {
         assert!(!valid_id(".."));
         assert!(ContainerSpec::decode_prototxt(b"version: 1\nunknown: 2\n").is_err());
+    }
+
+    #[test]
+    fn version_two_round_trips_network_attachments_and_v1_stays_offline() {
+        let mut spec = ContainerSpec {
+            version: 2,
+            container_id: "networked".into(),
+            image: ImageReference {
+                registry_host: "registry.test".into(),
+                repository: "team/image".into(),
+                tag: "v1".into(),
+                expected_sha256: vec![1; 32],
+            },
+            arguments: vec!["/bin/true".into()],
+            working_directory: "/".into(),
+            manifest_digest: [2; 32],
+            network_attachments: vec![NetworkAttachment {
+                profile: "public".into(),
+                interface_name: "eth0".into(),
+            }],
+            ..Default::default()
+        };
+        let text = spec.encode_prototxt().unwrap();
+        assert_eq!(
+            ContainerSpec::decode_prototxt(text.as_bytes()),
+            Ok(spec.clone())
+        );
+        spec.version = 1;
+        assert!(spec.validate().is_err());
     }
 
     #[test]

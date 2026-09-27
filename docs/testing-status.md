@@ -34,6 +34,60 @@ Focused final-tree validation and formatting are listed in the corresponding
 live Trusty replacement, physical boards, production provisioning,
 ConfirmationUI, and the long-term 150 ms cutover target remain open.
 
+## RFC 0070 opt-in Starnix networking (2026-09-26)
+
+The tree contains named direct-provider and virtual-L2 workload profiles,
+atomic appd/networkd provisioning, multi-vNIC Starnix namespaces, the shared
+Ethernet-ring client, namespace routing and capabilities, IPv4/IPv6 transport
+and packet sockets, route/netfilter/sock-diag netlink, veth/bridge controls,
+namespace-local firewall/NAT, durable container attachments, and versioned
+network/runtime migration state. Offline remains the default.
+
+The final affected host suite passed all 12 targets:
+
+```sh
+bazel test //lib/starnix_net:tests \
+  //services/starnix_runner:tests \
+  //services/networkd:internal_tests \
+  //services/netstack:internal_tests \
+  //services/netstack:netstackd_tests \
+  //services/appd:appd_tests \
+  //services/containerd:tests \
+  //lib/starnix_abi:tests \
+  //apps/container_cli:tests \
+  //drivers/d1/storage/nvmexpress/nvme:nvme_tests \
+  //drivers/d1/storage/bexos/bexfs:bexfs_async_tests \
+  //drivers/d1/storage/bexos/bexfs:bexfs_tests
+bazel test //:heart_transplant_coverage_test \
+  //lib/starnix_net:tests //services/starnix_runner:tests
+```
+
+Normal and replacement archives for starnix_runner, containerd, networkd,
+netstackd, and vswitchd, the container CLI, and the maintained nongui product
+assembly built successfully for both AArch64 and x86_64. Target-aware Rust
+formatting also passed:
+
+```sh
+bazel build //services/starnix_runner:starnix_runner_archive \
+  //services/starnix_runner:replacement_archive \
+  //services/containerd:containerd_archive \
+  //services/containerd:replacement_archive \
+  //services/networkd:networkd_archive //services/networkd:replacement_archive \
+  //services/netstack:netstackd_archive //services/netstack:replacement_archive \
+  //services/vswitchd:vswitchd_archive //services/vswitchd:replacement_archive \
+  //apps/container_cli:container_cli \
+  //device/virtual/qemu/nongui:virtual_aarch64_product_assembly
+# The corresponding command with --config=x86_64 and
+# virtual_x86_64_product_assembly also passed.
+bazel run @rules_rust//:rustfmt
+```
+
+The AArch64 QEMU acceptance run reached generation 356 without reporting a
+guest failure before it was stopped. At the requester's direction, no further
+AArch64 or x86_64 E2E run was performed. Consequently this record does not
+claim guest acceptance, retained live flows across replacement, or a passing
+dual-architecture QEMU result.
+
 ## RFC 0036/0071 routed VPP and network extensions (2026-09-24)
 
 The tree now contains the bounded native L2/L3 graph, routed-interface and

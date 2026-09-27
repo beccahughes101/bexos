@@ -1,19 +1,20 @@
 # RFC-0070: Linux Binary Emulation Runtime (Starnix Port), Kernel Restricted Execution Mode, and OCI Container Hosting
 
 * **Author:** BexOS Systems Architecture & Compatibility Working Group
-* **Status:** Phases 1–3 and offline Phase 4 implemented with guest acceptance pending. See [current state](CURRENT.md).
+* **Status:** Phases 1–3 and opt-in RFC 68 networking for Phase 4 implemented with guest acceptance pending. See [current state](CURRENT.md).
 * **Target Subsystems:** `kernel` (D0), `sdk/fidl/bexos.kernel`, `starnix_runner`, `pkgd`, `netstack`, `bexfs`, `vswitchd`
 * **Applicability:** Unmodified Linux Binaries, Android Runtimes, OCI Containers (Docker/Podman/Kubernetes workloads)
 
-### Offline execution profile
+### Offline default and named network profiles
 
-The initial general-purpose ABI profile is intentionally offline. Linux guests
+The default general-purpose ABI profile remains intentionally offline. Linux guests
 may use pipes, `socketpair`, and `AF_UNIX` local IPC, but they receive no
 `AF_INET`, `AF_INET6`, netlink, packet, or vsock endpoint. `pkgd` remains the
 only component permitted to use its configured host networking path while it
-acquires verified container artifacts. The networking design later in this RFC
-is retained as a possible future profile; it is not part of the offline profile
-and must not be inferred from OCI support.
+acquires verified container artifacts. A workload can explicitly request one
+or more policy-authorized RFC 68 profiles. Direct profiles bridge TCP/UDP to a
+domain-scoped provider; virtual-L2 profiles lease vswitchd vNICs to a
+namespace-local packet stack. OCI support alone never implies networking.
 
 ---
 

@@ -40,3 +40,36 @@ processes {
     }
   }
 }
+processes {
+  name: "network_musl"
+  runner: "nix"
+  lifecycle { update_strategy: RESTART }
+  runner_options {
+    [type.googleapis.com/bexos.app.NixRunnerOptions] {
+      path: "/pkg/bin/network_musl"
+      arguments: "network_musl"
+      network_attachments { profile: "starnix-direct" interface_name: "direct0" }
+      network_attachments { profile: "starnix-l2-primary" interface_name: "eth0" }
+      network_attachments { profile: "starnix-l2-secondary" interface_name: "eth1" }
+    }
+  }
+}
+processes {
+  name: "network_survivor"
+  runner: "nix"
+  service: true
+  lifecycle {
+    update_strategy: HEART_TRANSPLANT
+    migration_timeout_ms: 150
+    preparation_timeout_ms: 30000
+  }
+  runner_options {
+    [type.googleapis.com/bexos.app.NixRunnerOptions] {
+      path: "/pkg/bin/network_survivor"
+      arguments: "network_survivor"
+      network_attachments { profile: "starnix-direct" interface_name: "direct0" }
+      network_attachments { profile: "starnix-l2-primary" interface_name: "eth0" }
+      network_attachments { profile: "starnix-l2-secondary" interface_name: "eth1" }
+    }
+  }
+}

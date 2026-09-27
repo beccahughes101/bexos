@@ -53,6 +53,82 @@ pub fn launch(
     let args: Vec<_> = spec.arguments.iter().map(String::as_str).collect();
     let env: Vec<_> = spec.environment.iter().map(String::as_str).collect();
     let executable = args.first().copied().ok_or(OpenerStatus::InvalidArgs)?;
+    if !spec.network_attachments.is_empty() {
+        let attachments = spec
+            .network_attachments
+            .iter()
+            .map(|attachment| ContainerNetworkAttachment {
+                profile: attachment.profile.as_str(),
+                interface_name: attachment.interface_name.as_str(),
+            })
+            .collect::<Vec<_>>();
+        let request = CommandLauncherLaunchContainerWithNetworkRequest {
+            container_id: &spec.container_id,
+            rootfs: HandleRef { raw: rootfs },
+            executable,
+            arguments: WireStringVector::from_slice(&args),
+            environment: WireStringVector::from_slice(&env),
+            working_directory: &spec.working_directory,
+            uid: spec.uid,
+            gid: spec.gid,
+            hostname: &spec.hostname,
+            readonly_rootfs: spec.readonly_rootfs,
+            resources: ContainerResourceLimits {
+                cpu_shares: spec.resources.cpu_shares,
+                memory_limit_bytes: spec.resources.memory_limit_bytes,
+                process_limit: spec.resources.process_limit,
+            },
+            network_attachments: WireVector::from_slice(&attachments),
+            registry_host: &spec.image.registry_host,
+            repository: &spec.image.repository,
+            manifest_digest: spec.manifest_digest,
+            stdin_stream: HandleRef { raw: stdio[0] },
+            stdout_stream: HandleRef { raw: stdio[1] },
+            stderr_stream: HandleRef { raw: stdio[2] },
+        };
+        let mut refs = [HandleRef { raw: 0 }; 4];
+        let bytes = match encode(6, &request, &mut refs) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                for handle in handles {
+                    let _ = Memory::close(handle);
+                }
+                return Err(error);
+            }
+        };
+        if Channel(launcher).send(&bytes, &handles).is_err() {
+            for handle in handles {
+                let _ = Memory::close(handle);
+            }
+            return Err(OpenerStatus::LaunchFailed);
+        }
+        let message = Channel(launcher)
+            .recv_blocking()
+            .map_err(|_| OpenerStatus::LaunchFailed)?;
+        let response = CommandLauncherLaunchContainerWithNetworkResponse::decode(
+            &message.bytes,
+            &message
+                .handles
+                .iter()
+                .map(|raw| HandleRef { raw: *raw })
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|_| OpenerStatus::LaunchFailed)?;
+        if response.status != OpenerStatus::Ok
+            || response.process_control.raw == 0
+            || message.handles != [response.process_control.raw]
+        {
+            for handle in message.handles {
+                let _ = Memory::close(handle);
+            }
+            return Err(if response.status == OpenerStatus::Ok {
+                OpenerStatus::LaunchFailed
+            } else {
+                response.status
+            });
+        }
+        return Ok(response.process_control.raw);
+    }
     let request = CommandLauncherLaunchContainerRequest {
         container_id: &spec.container_id,
         rootfs: HandleRef { raw: rootfs },

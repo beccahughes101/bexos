@@ -2109,7 +2109,10 @@ fn manifest_decoder_distinguishes_absent_zero_and_later_waves() {
 
 #[test]
 fn manifest_decoder_reads_elf_runner_options_any() {
-    let elf_options = message(&[string_field(1, "/pkg/bin/camera_service")]);
+    let elf_options = message(&[
+        string_field(1, "/pkg/bin/camera_service"),
+        varint_field(2, 2 * 1024 * 1024),
+    ]);
     let runner_options = message(&[
         string_field(1, "type.googleapis.com/bexos.app.ELFRunnerOptions"),
         bytes_field(2, &elf_options),
@@ -2130,7 +2133,8 @@ fn manifest_decoder_reads_elf_runner_options_any() {
     assert_eq!(
         manifest.processes[0].runner_options,
         Some(ProcessRunnerOptions::Elf(bexos_appd::ElfRunnerOptions {
-            path: "/pkg/bin/camera_service".to_string()
+            path: "/pkg/bin/camera_service".to_string(),
+            stack_size_bytes: 2 * 1024 * 1024,
         }))
     );
 }
@@ -3796,6 +3800,65 @@ fn elf_runner_maps_segments_stack_channel_and_starts_thread() {
 }
 
 #[test]
+fn elf_runner_honors_bounded_process_stack_size() {
+    let mut manifest = launch_manifest();
+    if let Some(ProcessRunnerOptions::Elf(options)) = manifest.processes[0].runner_options.as_mut()
+    {
+        options.stack_size_bytes = 2 * 1024 * 1024;
+    } else {
+        panic!("expected ELF options");
+    }
+    let resolver = StaticPackageImageResolver::new(valid_elf(), 70);
+    let mut kernel = FakeKernelOps::new();
+    RunnerRegistry::new()
+        .launch(
+            &LaunchRequest {
+                process: &manifest.processes[0],
+                manifest: &manifest,
+                trust_tier: PackageTrustTier::SystemHardware,
+                identity: package_identity(&manifest, PackageTrustTier::SystemHardware, false),
+                runner_policy: None,
+                hardware_access: HardwareAccessTier::None,
+                realtime_scheduling: false,
+                resource_group_id: 1,
+            },
+            &mut kernel,
+            &resolver,
+        )
+        .expect("custom stack launch");
+    assert!(kernel.operations.iter().any(|operation| matches!(
+        operation,
+        KernelOperation::CreateVmo {
+            size_bytes: 2_097_152,
+            ..
+        }
+    )));
+
+    if let Some(ProcessRunnerOptions::Elf(options)) = manifest.processes[0].runner_options.as_mut()
+    {
+        options.stack_size_bytes = bexos_appd::runner::PAGE_SIZE + 1;
+    }
+    let mut kernel = FakeKernelOps::new();
+    assert_eq!(
+        RunnerRegistry::new().launch(
+            &LaunchRequest {
+                process: &manifest.processes[0],
+                manifest: &manifest,
+                trust_tier: PackageTrustTier::SystemHardware,
+                identity: package_identity(&manifest, PackageTrustTier::SystemHardware, false),
+                runner_policy: None,
+                hardware_access: HardwareAccessTier::None,
+                realtime_scheduling: false,
+                resource_group_id: 1,
+            },
+            &mut kernel,
+            &resolver,
+        ),
+        Err(LaunchError::InvalidElfOptions)
+    );
+}
+
+#[test]
 fn repeated_driver_launches_borrow_code_and_keep_writable_pages_private() {
     let manifest = launch_manifest();
     let mut image = valid_elf();
@@ -4380,6 +4443,7 @@ fn launch_manifest() -> Manifest {
             link: None,
             runner_options: Some(ProcessRunnerOptions::Elf(bexos_appd::ElfRunnerOptions {
                 path: "/pkg/bin/camera_service".to_string(),
+                stack_size_bytes: 0,
             })),
             wave: Some(1),
             lifecycle: bexos_appd::ProcessLifecycle {
@@ -4516,6 +4580,7 @@ fn wave_manifest(package_name: &str, processes: &[(&str, Option<u32>)]) -> Manif
                 link: None,
                 runner_options: Some(ProcessRunnerOptions::Elf(bexos_appd::ElfRunnerOptions {
                     path: "/pkg/bin/camera_service".to_string(),
+                    stack_size_bytes: 0,
                 })),
                 wave: *wave,
                 lifecycle: Default::default(),
@@ -4584,6 +4649,7 @@ fn nvme_driver_manifest(package_name: &str, wave: u32, vendor_specific: bool) ->
             link: None,
             runner_options: Some(ProcessRunnerOptions::Elf(bexos_appd::ElfRunnerOptions {
                 path: "/pkg/bin/camera_service".to_string(),
+                stack_size_bytes: 0,
             })),
             wave: Some(wave),
             lifecycle: Default::default(),
@@ -4642,6 +4708,7 @@ fn peripheral_driver_manifest(
             link: None,
             runner_options: Some(ProcessRunnerOptions::Elf(bexos_appd::ElfRunnerOptions {
                 path: "/pkg/bin/peripheral_driver".to_string(),
+                stack_size_bytes: 0,
             })),
             wave: Some(3),
             lifecycle: bexos_appd::ProcessLifecycle {

@@ -106,11 +106,14 @@ runtime_stack:
 .global runtime_stack_end
 runtime_stack_end:
 "#,
-    // The aggregate diagnostic nests secure and four-CPU normal snapshots while
-    // retaining its comparison copy. Its measured optimized call chain exceeds
-    // the ordinary 512 KiB bootstrap stack; product boot does not take this path.
-    stack_bytes = const if cfg!(feature = "normal_checkpoint_probe") {
-        1024 * 1024
+    // The aggregate diagnostic nests secure and four-CPU normal snapshots. A
+    // resident product boot also retains the authenticated selection decision,
+    // disk state and protected transport call chain at once. Keep both bounded
+    // paths off the ordinary 512 KiB probe stack.
+    stack_bytes = const if cfg!(feature = "normal_checkpoint_probe")
+        || cfg!(all(feature = "resident_nucleus", feature = "secure_product"))
+    {
+        2 * 1024 * 1024
     } else {
         512 * 1024
     },

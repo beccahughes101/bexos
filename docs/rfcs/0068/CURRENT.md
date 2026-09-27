@@ -76,6 +76,22 @@ Runtime provider/table state and recovery journals survive service replacement
 but are intentionally not persisted across reboot. Boot prototxt remains the
 authoritative reboot topology.
 
+RFC 70 workloads can now request bounded named profiles from that topology.
+The private appd-only `WorkloadNetworkController` rechecks the authenticated
+package/signer or verified OCI registry/repository/digest grant. It either
+mints a permanently table-scoped provider or allocates a collision-free
+locally administered MAC and dynamic vswitch port, returning a lifetime lease.
+Provisioning all requested attachments is atomic; an authorization, quota,
+selector, or backend failure closes every partial lease. Lease closure removes
+the dynamic port. Dynamic workload topology participates in service transplant
+but is recreated from durable workload specs after reboot.
+
+Netstackd's additive controller/backend surface exposes bounded table
+snapshots, per-interface addresses/MTU/link state, and interface-pinned
+TCP/listener/UDP operations without changing established ordinals. Its device
+ring and migration codec are a reusable Bazel Rust library shared with the
+Starnix virtual-L2 backend.
+
 Networkd is also the sole client of the private switch routing and extension
 controllers. It restores pending package-resolution channels and deployments
 during replacement. Boot always starts with the embedded fail-closed firewall;

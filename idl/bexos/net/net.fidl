@@ -125,6 +125,59 @@ table SocketOptions {
     2: keep_alive_ms uint32;
     3: rx_buffer_size uint32;
     4: tx_buffer_size uint32;
+    5: bound_interface_id uint64;
+};
+
+type WorkloadNetworkMode = strict enum : uint8 {
+    DIRECT_PROVIDER = 1;
+    VIRTUAL_L2 = 2;
+};
+
+struct WorkloadNetworkAttachment {
+    profile string:64;
+    interface_name string:15;
+};
+
+resource struct WorkloadNetworkEndpoint {
+    mode WorkloadNetworkMode;
+    interface_id uint64;
+    mac array<uint8, 6>;
+    mtu uint32;
+    provider handle:CHANNEL;
+    device handle:CHANNEL;
+    lease handle:EVENTPAIR;
+    addresses vector<IpSubnet>:16;
+    gateways vector<IpSubnet>:8;
+    dns_servers vector<IpAddress>:8;
+    allow_raw bool;
+    allow_promiscuous bool;
+    vlan_id uint16;
+    profile string:64;
+    isolation_group string:64;
+    domain string:64;
+    physical_selector string:128;
+    table TableId;
+    addressing uint8;
+};
+
+struct InterfaceAddress {
+    interface_id uint64;
+    address IpSubnet;
+};
+
+struct InterfaceSnapshot {
+    interface_id uint64;
+    interface_name string:32;
+    table TableId;
+    mtu uint32;
+    link_up bool;
+    addresses vector<IpSubnet>:16;
+};
+
+struct TableSnapshot {
+    table TableId;
+    interfaces vector<InterfaceSnapshot>:32;
+    routes vector<FibRoute>:128;
 };
 
 protocol TcpSocket {
@@ -268,6 +321,27 @@ protocol SocketProvider {
     6: WatchLinkStatus(resource struct { watcher client_end:LinkWatcher; }) -> (struct {
         status Status;
     });
+    7: GetTableSnapshot() -> (struct {
+        status Status;
+        snapshot vector<TableSnapshot>:1;
+    });
+};
+
+/// Private appd-only provisioning boundary. Each successful request returns a
+/// lifetime lease; closing either endpoint atomically tears down the dynamic
+/// provider or virtual switch port.
+protocol WorkloadNetworkController {
+    1: Provision(resource struct {
+        package_id string:128;
+        signer string:128;
+        registry_host string:128;
+        repository string:128;
+        manifest_digest vector<uint8>:32;
+        attachment WorkloadNetworkAttachment;
+    }) -> (resource struct {
+        status Status;
+        endpoint WorkloadNetworkEndpoint;
+    });
 };
 
 /// Privileged dynamic RFC 61 provider registry hosted by networkd.
@@ -369,6 +443,26 @@ protocol StackBackend {
         kind BackendControlKind;
         control handle:CHANNEL;
     }) -> (struct { status Status; });
+    10: ConnectTcpOnInterface(resource struct {
+        connection_id uint64;
+        table TableId;
+        interface_id uint64;
+        remote_addr SocketAddress;
+        stream handle:SOCKET;
+    }) -> (struct { status Status; });
+    11: ListenTcpOnInterface(resource struct {
+        listener_id uint64;
+        table TableId;
+        interface_id uint64;
+        local_addr SocketAddress;
+        listener server_end:TcpListener;
+    }) -> (struct { status Status; });
+    12: CreateUdpSocketOnInterface(resource struct {
+        object_id uint64;
+        table TableId;
+        interface_id uint64;
+        socket server_end:UdpSocket;
+    }) -> (struct { status Status; });
 };
 
 /// Private privileged topology control boundary.
@@ -385,6 +479,21 @@ protocol StackController {
     }) -> (struct { status Status; });
     6: DetachInterface(struct { table TableId; interface_id uint64; }) -> (struct {
         status Status;
+    });
+    7: SetInterfaceAddresses(struct {
+        table TableId;
+        interface_id uint64;
+        addresses vector<IpSubnet>:16;
+    }) -> (struct { status Status; });
+    8: SetInterfaceConfiguration(struct {
+        table TableId;
+        interface_id uint64;
+        mtu uint32;
+        link_up bool;
+    }) -> (struct { status Status; });
+    9: GetTopologySnapshot() -> (struct {
+        status Status;
+        tables vector<TableSnapshot>:32;
     });
 };
 

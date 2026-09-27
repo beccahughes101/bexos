@@ -27,6 +27,11 @@ const FILESYSTEM_SYNC_TIMEOUT_SECONDS: u64 = 690;
 // deadline for a large package, while the enclosing VFS request is bounded at
 // 900 seconds. Keep this inner deadline below that outer contract.
 const ARCHIVE_MOUNT_TIMEOUT_SECONDS: u64 = 660;
+// ArchiveFS materializes and verifies a compressed executable on the first
+// backing-memory request. Large native services (notably vswitchd with the
+// Wasmtime compiler) can exceed the generic RPC deadline under AArch64 TCG.
+// Keep this below the package-directory operation's 900-second outer bound.
+const FILE_BACKING_TIMEOUT_SECONDS: u64 = 840;
 
 fn call<Q: FidlEncode>(
     channel: Channel,
@@ -339,7 +344,12 @@ pub fn seek_with_whence(file: Channel, offset: i64, whence: u8) -> Result<u64, F
 }
 pub fn backing(file: Channel) -> Result<(u64, u64), FsStatus> {
     let size = attributes(file)?.size_bytes;
-    let r = call(file, 13, &FileGetBackingMemoryRequest {}, true)?;
+    let r = call_with_timeout(
+        file,
+        13,
+        &FileGetBackingMemoryRequest {},
+        FILE_BACKING_TIMEOUT_SECONDS,
+    )?;
     let r = FileGetBackingMemoryResponse::decode(&r.bytes, &r.handles).map_err(|_| FsStatus::Io)?;
     check(r.status)?;
     Ok((r.vmo.raw, size))

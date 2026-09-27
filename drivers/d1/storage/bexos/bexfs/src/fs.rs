@@ -61,10 +61,18 @@ fn external_window<'a>(
     if loaded.as_ref().map(|(start, _)| *start) != Some(window_start) {
         let read_len = (external_read_len - window_start).min(EXTERNAL_READ_WINDOW_BYTES);
         let mut bytes = zeroed_io_buffer(read_len)?;
-        device.read_at(
+        if let Err(error) = device.read_at(
             data_lba + (window_start / BEXFS_BLOCK_SIZE as usize) as u64,
             &mut bytes,
-        )?;
+        ) {
+            #[cfg(feature = "std")]
+            bexos_userspace::log(&alloc::format!(
+                "bexfs: external namespace read failed offset={} bytes={} error={error:?}\n",
+                window_start,
+                bytes.len()
+            ));
+            return Err(error.into());
+        }
         *loaded = Some((window_start, Rc::new(bytes)));
     }
     Ok(&loaded.as_ref().unwrap().1)
@@ -1473,7 +1481,15 @@ fn read_namespace_slot_with_extents(
     ));
     let sealed_read_len = (sealed_blocks * u64::from(BEXFS_BLOCK_SIZE)) as usize;
     let mut sealed = vec![0u8; sealed_read_len];
-    device.read_at(slot.lba + 1, &mut sealed)?;
+    if let Err(error) = device.read_at(slot.lba + 1, &mut sealed) {
+        #[cfg(feature = "std")]
+        bexos_userspace::log(&alloc::format!(
+            "bexfs: sealed namespace read failed lba={} bytes={} error={error:?}\n",
+            slot.lba + 1,
+            sealed.len()
+        ));
+        return Err(error.into());
+    }
     sealed.truncate(sealed_len as usize);
     open_namespace_in_place(key, &slot.nonce, &mut sealed).map_err(|_| BexFsError::Corrupt)?;
     let dentries = header.get(..8) == Some(&NAMESPACE_DENTRIES_MAGIC);

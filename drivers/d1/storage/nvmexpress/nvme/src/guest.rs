@@ -182,17 +182,50 @@ async fn serve(mut state: migration::Runtime) -> ! {
                                 req.block_count as usize * 512,
                             )
                         };
-                        hardware
-                            .transfer(
-                                if req.opcode == BlockOpcode::Read {
-                                    2
-                                } else {
-                                    1
-                                },
-                                req.device_block_offset,
-                                bytes,
-                            )
+                        let opcode = if req.opcode == BlockOpcode::Read {
+                            2
+                        } else {
+                            1
+                        };
+                        match hardware
+                            .transfer(opcode, req.device_block_offset, bytes)
                             .await
+                        {
+                            Ok(()) => Ok(()),
+                            Err(first) => {
+                                log(&alloc::format!(
+                                    "nvme: block request={} opcode={:?} lba={} blocks={} failed {:?}; reconnecting once\n",
+                                    req.req_id,
+                                    req.opcode,
+                                    req.device_block_offset,
+                                    req.block_count,
+                                    first
+                                ));
+                                match hardware.power_up().await {
+                                    Ok(()) => {
+                                        let retry = hardware
+                                            .transfer(opcode, req.device_block_offset, bytes)
+                                            .await;
+                                        if let Err(error) = retry {
+                                            log(&alloc::format!(
+                                                "nvme: block request={} retry failed {:?}\n",
+                                                req.req_id,
+                                                error
+                                            ));
+                                        }
+                                        retry
+                                    }
+                                    Err(error) => {
+                                        log(&alloc::format!(
+                                            "nvme: block request={} reconnect failed {:?}\n",
+                                            req.req_id,
+                                            error
+                                        ));
+                                        Err(first)
+                                    }
+                                }
+                            }
+                        }
                     };
                     if let Err(e) = r {
                         response.status = if e == kernel_fidl::Status::ErrTimedOut {

@@ -35,15 +35,18 @@ use net_fidl::{
     RouteTargetKind, SocketAddress, SocketProviderConnectTcpRequest,
     SocketProviderConnectTcpResponse, SocketProviderCreateUdpSocketRequest,
     SocketProviderCreateUdpSocketResponse, SocketProviderGetLinkStatusRequest,
-    SocketProviderGetLinkStatusResponse, SocketProviderListenTcpRequest,
+    SocketProviderGetLinkStatusResponse, SocketProviderGetTableSnapshotRequest,
+    SocketProviderGetTableSnapshotResponse, SocketProviderListenTcpRequest,
     SocketProviderListenTcpResponse, SocketProviderResolveHostRequest,
     SocketProviderResolveHostResponse, SocketProviderWatchLinkStatusRequest,
     SocketProviderWatchLinkStatusResponse, StackBackendAdoptRecoveryRequest,
-    StackBackendCheckpointRecoveryRequest, StackBackendConnectTcpRequest,
-    StackBackendCreateUdpSocketRequest, StackBackendListenTcpRequest, StackBackendPublicClient,
-    StackBackendRecoverConnectionRequest, StackBackendRecoverControlRequest,
-    StackBackendResolveHostRequest, StackControllerAddRouteRequest,
-    StackControllerAttachInterfaceRequest, StackControllerCreateTableRequest,
+    StackBackendCheckpointRecoveryRequest, StackBackendConnectTcpOnInterfaceRequest,
+    StackBackendConnectTcpRequest, StackBackendCreateUdpSocketOnInterfaceRequest,
+    StackBackendCreateUdpSocketRequest, StackBackendListenTcpOnInterfaceRequest,
+    StackBackendListenTcpRequest, StackBackendPublicClient, StackBackendRecoverConnectionRequest,
+    StackBackendRecoverControlRequest, StackBackendResolveHostRequest,
+    StackControllerAddRouteRequest, StackControllerAttachInterfaceRequest,
+    StackControllerCreateTableRequest, StackControllerGetTopologySnapshotRequest,
     StackControllerPublicClient, Status, SwitchEndpoint, SwitchExtensionControllerInstallRequest,
     SwitchExtensionControllerListRequest, SwitchExtensionControllerPublicClient,
     SwitchExtensionControllerRemoveRequest, SwitchRoute, SwitchRoutedInterface,
@@ -55,10 +58,12 @@ use net_fidl::{
     UdpSocketBindRequest, UdpSocketPublicClient, UdpSocketRecvFromRequest, UdpSocketSendToRequest,
     VirtualSwitchControllerCommitGenerationRequest, VirtualSwitchControllerCreatePortRequest,
     VirtualSwitchControllerPublicClient, VirtualSwitchControllerRecoverGenerationRequest,
-    VirtualSwitchEndpoint, WireVector,
+    VirtualSwitchControllerRemovePortRequest, VirtualSwitchEndpoint, WireVector,
+    WorkloadNetworkControllerProvisionRequest, WorkloadNetworkControllerProvisionResponse,
+    WorkloadNetworkEndpoint, WorkloadNetworkMode,
 };
 
-use crate::config::BootConfig;
+use crate::config::{BootConfig, WorkloadMode, WorkloadProfileConfig};
 use crate::dns::{CacheKey, CacheValue, DnsError, RecordType, ResponseCode};
 use crate::migration::{
     ControlProxy, EscrowedBackend, ExtensionDeploymentKind, PendingExtensionDeployment,
@@ -87,6 +92,10 @@ impl Drop for BackendObjectGuard {
 pub async fn main(channel: u64) -> ! {
     let control = Channel(channel);
     let startup = Startup::receive(control).expect("networkd startup");
+    let config = BootConfig::from_startup(&startup).unwrap_or_else(|_| {
+        log("networkd: invalid or missing authoritative boot policy\n");
+        bexos_userspace::exit()
+    });
     let mut runtime = if startup.migration_target {
         match bexos_userspace::live_migration::receive::<Runtime>(
             control,
@@ -96,10 +105,6 @@ pub async fn main(channel: u64) -> ! {
             Err(_) => bexos_userspace::exit(),
         }
     } else {
-        let config = BootConfig::from_startup(&startup).unwrap_or_else(|_| {
-            log("networkd: invalid or missing authoritative boot policy\n");
-            bexos_userspace::exit()
-        });
         let mut runtime = Runtime::new(control, startup.migration);
         runtime.instance_id = config.instance_id.clone();
         runtime.routing = crate::routing::Registry::new(config.max_dynamic_providers);
@@ -144,14 +149,22 @@ pub async fn main(channel: u64) -> ! {
                 runtime.tls_trust = Some(grant.endpoint);
             }
         }
-        if apply_boot_topology(&mut runtime, &config).is_err() {
-            log("networkd: boot topology application failed\n");
+        if let Err(status) = apply_boot_topology(&mut runtime, &config) {
+            log(&alloc::format!(
+                "networkd: boot topology application failed status={status:?}\n"
+            ));
             bexos_userspace::exit();
         }
         queue_desired_extensions(&mut runtime, &config);
         Startup::ready(control).expect("networkd ready");
         runtime
     };
+    runtime.workload_profiles = config
+        .workload_profiles
+        .iter()
+        .cloned()
+        .map(|profile| (profile.name.clone(), profile))
+        .collect();
     log("networkd: ready\n");
     let mut source = Source::new(runtime.migration);
     let mut changes = RecordChanges::default();
@@ -171,6 +184,7 @@ pub async fn main(channel: u64) -> ! {
         changed |= checkpoint_backends(&mut runtime);
         changed |= start_queued_extension(&mut runtime);
         changed |= poll_extension_deployment(&mut runtime);
+        changed |= poll_workload_leases(&mut runtime);
         if changed {
             source.changed_keys([0, 1, 2, 3, 4]);
         }
@@ -184,14 +198,14 @@ fn apply_boot_topology(runtime: &mut Runtime, config: &BootConfig) -> Result<(),
         .get(&config.instance_id)
         .or_else(|| runtime.stack_controller_channels.values().next())
         .copied()
-        .ok_or(Status::ErrShouldWait)?;
+        .ok_or_else(|| boot_topology_error("resolve-stack-controller", Status::ErrShouldWait))?;
     let backend_instance = runtime
         .stack_backend_channels
         .keys()
         .find(|instance| *instance == &config.instance_id)
         .or_else(|| runtime.stack_backend_channels.keys().next())
         .cloned()
-        .ok_or(Status::ErrShouldWait)?;
+        .ok_or_else(|| boot_topology_error("resolve-stack-backend", Status::ErrShouldWait))?;
     let mut stack = StackControllerPublicClient::new(Rpc(Channel(controller)));
     for table in config.tables.iter().copied().filter(|table| *table != 0) {
         let response = stack
@@ -204,13 +218,15 @@ fn apply_boot_topology(runtime: &mut Runtime, config: &BootConfig) -> Result<(),
                 &mut [0; 128],
                 &mut [HandleRef { raw: 0 }; 1],
             )
-            .map_err(|_| Status::ErrShouldWait)?;
+            .map_err(|_| boot_topology_error("create-table-rpc", Status::ErrShouldWait))?;
         if response.status != Status::Ok && response.status != Status::ErrAlreadyExists {
-            return Err(response.status);
+            return Err(boot_topology_error("create-table", response.status));
         }
     }
     if !config.ports.is_empty() {
-        let switch = runtime.vswitch_controller.ok_or(Status::ErrShouldWait)?;
+        let switch = runtime.vswitch_controller.ok_or_else(|| {
+            boot_topology_error("resolve-vswitch-controller", Status::ErrShouldWait)
+        })?;
         let mut switch = VirtualSwitchControllerPublicClient::new(Rpc(Channel(switch)));
         for port in &config.ports {
             let response = switch
@@ -229,12 +245,12 @@ fn apply_boot_topology(runtime: &mut Runtime, config: &BootConfig) -> Result<(),
                     &mut [0; 128],
                     &mut [HandleRef { raw: 0 }; 2],
                 )
-                .map_err(|_| Status::ErrShouldWait)?;
+                .map_err(|_| boot_topology_error("create-port-rpc", Status::ErrShouldWait))?;
             if response.status != Status::Ok {
                 if response.device.raw != 0 {
                     let _ = Memory::close(response.device.raw);
                 }
-                return Err(response.status);
+                return Err(boot_topology_error("create-port", response.status));
             }
             runtime.virtual_ports.push(port.id);
             let interface_name = alloc::format!("vport{}", port.id);
@@ -251,18 +267,18 @@ fn apply_boot_topology(runtime: &mut Runtime, config: &BootConfig) -> Result<(),
                     &mut [0; 128],
                     &mut [HandleRef { raw: 0 }; 1],
                 )
-                .map_err(|_| Status::ErrShouldWait)?;
+                .map_err(|_| boot_topology_error("attach-interface-rpc", Status::ErrShouldWait))?;
             if response.status != Status::Ok {
-                return Err(response.status);
+                return Err(boot_topology_error("attach-interface", response.status));
             }
         }
     }
     runtime.virtual_ports.sort_unstable();
     runtime.virtual_ports.dedup();
     if !config.routed_interfaces.is_empty() || !config.switch_routes.is_empty() {
-        let routing = runtime
-            .switch_routing_controller
-            .ok_or(Status::ErrShouldWait)?;
+        let routing = runtime.switch_routing_controller.ok_or_else(|| {
+            boot_topology_error("resolve-switch-routing-controller", Status::ErrShouldWait)
+        })?;
         let mut routing = SwitchRoutingControllerPublicClient::new(Rpc(Channel(routing)));
         for interface in &config.routed_interfaces {
             let endpoint = if interface.virtual_port != 0 && interface.physical_interface == 0 {
@@ -306,9 +322,14 @@ fn apply_boot_topology(runtime: &mut Runtime, config: &BootConfig) -> Result<(),
                     &mut [0; 128],
                     &mut [HandleRef { raw: 0 }; 1],
                 )
-                .map_err(|_| Status::ErrShouldWait)?;
+                .map_err(|_| {
+                    boot_topology_error("configure-routed-interface-rpc", Status::ErrShouldWait)
+                })?;
             if response.status != Status::Ok {
-                return Err(response.status);
+                return Err(boot_topology_error(
+                    "configure-routed-interface",
+                    response.status,
+                ));
             }
         }
         for route in &config.switch_routes {
@@ -332,13 +353,14 @@ fn apply_boot_topology(runtime: &mut Runtime, config: &BootConfig) -> Result<(),
                     &mut [0; 128],
                     &mut [HandleRef { raw: 0 }; 1],
                 )
-                .map_err(|_| Status::ErrShouldWait)?;
+                .map_err(|_| boot_topology_error("add-switch-route-rpc", Status::ErrShouldWait))?;
             if response.status != Status::Ok {
-                return Err(response.status);
+                return Err(boot_topology_error("add-switch-route", response.status));
             }
         }
     }
-    configure_bundled_extensions(runtime, config)?;
+    configure_bundled_extensions(runtime, config)
+        .map_err(|status| boot_topology_error("configure-bundled-extensions", status))?;
     for route in &config.routes {
         let response = stack
             .add_route(
@@ -360,9 +382,9 @@ fn apply_boot_topology(runtime: &mut Runtime, config: &BootConfig) -> Result<(),
                 &mut [0; 128],
                 &mut [HandleRef { raw: 0 }; 1],
             )
-            .map_err(|_| Status::ErrShouldWait)?;
+            .map_err(|_| boot_topology_error("add-stack-route-rpc", Status::ErrShouldWait))?;
         if response.status != Status::Ok && response.status != Status::ErrAlreadyExists {
-            return Err(response.status);
+            return Err(boot_topology_error("add-stack-route", response.status));
         }
     }
     for table in &config.tables {
@@ -440,6 +462,13 @@ fn apply_boot_topology(runtime: &mut Runtime, config: &BootConfig) -> Result<(),
         }
     }
     Ok(())
+}
+
+fn boot_topology_error(stage: &str, status: Status) -> Status {
+    log(&alloc::format!(
+        "networkd: boot topology stage failed stage={stage} status={status:?}\n"
+    ));
+    status
 }
 
 fn configure_bundled_extensions(runtime: &mut Runtime, config: &BootConfig) -> Result<(), Status> {
@@ -570,8 +599,18 @@ fn accept_bindings(runtime: &mut Runtime) {
         };
         if matches!(
             binding.protocol.as_str(),
-            "Netstack" | "SocketProvider" | "NetworkRoutingManager" | "NetworkExtensionManager"
+            "Netstack"
+                | "SocketProvider"
+                | "NetworkRoutingManager"
+                | "NetworkExtensionManager"
+                | "WorkloadNetworkController"
         ) {
+            if binding.protocol == "WorkloadNetworkController"
+                && binding.caller_package.as_deref() != Some("bexos.platform.appd")
+            {
+                let _ = Memory::close(endpoint);
+                return;
+            }
             if let Some(domain) = binding
                 .permission_values
                 .iter()
@@ -615,6 +654,13 @@ fn poll_clients(runtime: &mut Runtime) -> bool {
                 "NetworkExtensionManager" => {
                     poll_extension_manager(runtime, client.channel, ordinal, request, &handles)
                 }
+                "WorkloadNetworkController" => poll_workload_network_controller(
+                    runtime,
+                    client.channel,
+                    ordinal,
+                    request,
+                    &handles,
+                ),
                 _ => close_handles(&message.handles),
             }
             true
@@ -629,6 +675,363 @@ fn poll_clients(runtime: &mut Runtime) -> bool {
     });
     clients.append(&mut runtime.clients);
     runtime.clients = clients;
+    changed
+}
+
+fn poll_workload_network_controller(
+    runtime: &mut Runtime,
+    channel: Channel,
+    ordinal: u64,
+    request: &[u8],
+    handles: &[HandleRef],
+) {
+    if ordinal != 1 {
+        close_handles_raw(handles);
+        return;
+    }
+    let response = WorkloadNetworkControllerProvisionRequest::decode(request, handles)
+        .map_err(|_| Status::ErrInvalidArgs)
+        .and_then(|request| provision_workload_network(runtime, request));
+    match response {
+        Ok(endpoint) => {
+            let wire = endpoint.as_wire();
+            if !reply(
+                channel,
+                &WorkloadNetworkControllerProvisionResponse {
+                    status: Status::Ok,
+                    endpoint: wire,
+                },
+            ) {
+                close_handles(&[endpoint.provider, endpoint.device, endpoint.lease]);
+            }
+        }
+        Err(status) => {
+            reply(
+                channel,
+                &WorkloadNetworkControllerProvisionResponse {
+                    status,
+                    endpoint: empty_workload_endpoint(),
+                },
+            );
+        }
+    }
+}
+
+struct ProvisionedWorkload {
+    mode: WorkloadNetworkMode,
+    interface_id: u64,
+    mac: [u8; 6],
+    mtu: u32,
+    provider: u64,
+    device: u64,
+    lease: u64,
+    addresses: Vec<net_fidl::IpSubnet>,
+    gateways: Vec<net_fidl::IpSubnet>,
+    dns_servers: Vec<WireIpAddress>,
+    allow_raw: bool,
+    allow_promiscuous: bool,
+    vlan_id: u16,
+    profile: String,
+    isolation_group: String,
+    domain: String,
+    physical_selector: String,
+    table: u32,
+    addressing: u8,
+}
+
+impl ProvisionedWorkload {
+    fn as_wire(&self) -> WorkloadNetworkEndpoint<'_> {
+        WorkloadNetworkEndpoint {
+            mode: self.mode,
+            interface_id: self.interface_id,
+            mac: self.mac,
+            mtu: self.mtu,
+            provider: HandleRef { raw: self.provider },
+            device: HandleRef { raw: self.device },
+            lease: HandleRef { raw: self.lease },
+            addresses: WireVector::from_slice(&self.addresses),
+            gateways: WireVector::from_slice(&self.gateways),
+            dns_servers: WireVector::from_slice(&self.dns_servers),
+            allow_raw: self.allow_raw,
+            allow_promiscuous: self.allow_promiscuous,
+            vlan_id: self.vlan_id,
+            profile: &self.profile,
+            isolation_group: &self.isolation_group,
+            domain: &self.domain,
+            physical_selector: &self.physical_selector,
+            table: net_fidl::TableId { value: self.table },
+            addressing: self.addressing,
+        }
+    }
+}
+
+fn provision_workload_network(
+    runtime: &mut Runtime,
+    request: WorkloadNetworkControllerProvisionRequest<'_>,
+) -> Result<ProvisionedWorkload, Status> {
+    let profile = runtime
+        .workload_profiles
+        .get(request.attachment.profile)
+        .cloned()
+        .ok_or(Status::ErrNotFound)?;
+    if !valid_interface_name(request.attachment.interface_name)
+        || !profile_authorizes(&profile, &request)
+    {
+        return Err(Status::ErrAccessDenied);
+    }
+    let active = runtime
+        .workload_leases
+        .iter()
+        .filter(|lease| lease.profile == profile.name)
+        .count();
+    if active >= profile.max_instances as usize {
+        return Err(Status::ErrResourceExhausted);
+    }
+    let (lease_client, lease_server) = Channel::pair().map_err(|_| Status::ErrNoMemory)?;
+    let mut provider = 0;
+    let mut direct_provider = None;
+    let mut device = 0;
+    let mut port_id = None;
+    let (mode, interface_id, mac) = match profile.mode {
+        WorkloadMode::DirectProvider => {
+            let (client, server) = Channel::pair().map_err(|_| {
+                let _ = Memory::close(lease_client.0);
+                let _ = Memory::close(lease_server.0);
+                Status::ErrNoMemory
+            })?;
+            runtime
+                .client_domains
+                .insert(server.0, profile.domain.clone());
+            runtime
+                .clients
+                .push(BoundServiceEndpoint::new_with_protocol(
+                    server,
+                    (1..=7).collect(),
+                    "SocketProvider",
+                ));
+            direct_provider = Some(server.0);
+            provider = client.0;
+            (
+                WorkloadNetworkMode::DirectProvider,
+                profile.physical_interface,
+                [0; 6],
+            )
+        }
+        WorkloadMode::VirtualL2 => {
+            let switch = runtime.vswitch_controller.ok_or_else(|| {
+                let _ = Memory::close(lease_client.0);
+                let _ = Memory::close(lease_server.0);
+                Status::ErrShouldWait
+            })?;
+            let id = allocate_workload_port(runtime).map_err(|status| {
+                let _ = Memory::close(lease_client.0);
+                let _ = Memory::close(lease_server.0);
+                status
+            })?;
+            let mac = workload_mac(id);
+            let mut client = VirtualSwitchControllerPublicClient::new(Rpc(Channel(switch)));
+            let response = client
+                .create_port(
+                    &VirtualSwitchControllerCreatePortRequest {
+                        port_id: id,
+                        physical_interface: profile.physical_interface,
+                        mac,
+                        vlan_id: profile.vlan_id,
+                        tagged: profile.vlan_id != 0,
+                        rx_queue_depth: profile.rx_queue_depth,
+                        tx_queue_depth: profile.tx_queue_depth,
+                    },
+                    &mut [0; 256],
+                    &mut [HandleRef { raw: 0 }; 2],
+                    &mut [0; 128],
+                    &mut [HandleRef { raw: 0 }; 2],
+                )
+                .map_err(|_| {
+                    let _ = Memory::close(lease_client.0);
+                    let _ = Memory::close(lease_server.0);
+                    Status::ErrShouldWait
+                })?;
+            if response.status != Status::Ok {
+                if response.device.raw != 0 {
+                    let _ = Memory::close(response.device.raw);
+                }
+                let _ = Memory::close(lease_client.0);
+                let _ = Memory::close(lease_server.0);
+                return Err(response.status);
+            }
+            device = response.device.raw;
+            port_id = Some(id);
+            runtime.virtual_ports.push(id);
+            (WorkloadNetworkMode::VirtualL2, id, mac)
+        }
+    };
+    runtime
+        .workload_leases
+        .push(crate::migration::WorkloadLease {
+            lease: lease_server.0,
+            profile: profile.name.clone(),
+            port_id,
+            direct_provider,
+        });
+    let addresses = profile
+        .static_addresses
+        .iter()
+        .map(|(address, prefix_len)| net_fidl::IpSubnet {
+            network: wire_address(*address),
+            prefix_len: *prefix_len,
+        })
+        .collect::<Vec<_>>();
+    let gateways = profile
+        .gateways
+        .iter()
+        .map(|(address, prefix_len)| net_fidl::IpSubnet {
+            network: wire_address(*address),
+            prefix_len: *prefix_len,
+        })
+        .collect::<Vec<_>>();
+    let dns_servers = profile
+        .dns_servers
+        .iter()
+        .copied()
+        .map(wire_address)
+        .collect::<Vec<_>>();
+    Ok(ProvisionedWorkload {
+        mode,
+        interface_id,
+        mac,
+        mtu: profile.mtu,
+        provider,
+        device,
+        lease: lease_client.0,
+        addresses,
+        gateways,
+        dns_servers,
+        allow_raw: profile.allow_raw,
+        allow_promiscuous: profile.allow_promiscuous,
+        vlan_id: profile.vlan_id,
+        profile: profile.name,
+        isolation_group: profile.isolation_group,
+        domain: profile.domain.clone(),
+        physical_selector: profile.physical_selector,
+        table: runtime
+            .domain_tables
+            .get(&profile.domain)
+            .copied()
+            .unwrap_or(0),
+        addressing: profile.addressing,
+    })
+}
+
+fn profile_authorizes(
+    profile: &WorkloadProfileConfig,
+    request: &WorkloadNetworkControllerProvisionRequest<'_>,
+) -> bool {
+    let package = !request.package_id.is_empty()
+        && !request.signer.is_empty()
+        && profile
+            .package_grants
+            .iter()
+            .any(|grant| grant.package_id == request.package_id && grant.signer == request.signer);
+    let oci = request.manifest_digest.len() == 32
+        && profile.oci_grants.iter().any(|grant| {
+            grant.registry_host == request.registry_host
+                && grant.repository == request.repository
+                && grant.manifest_digest.as_slice() == request.manifest_digest
+        });
+    package || oci
+}
+
+fn valid_interface_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 15
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+}
+
+fn allocate_workload_port(runtime: &mut Runtime) -> Result<u64, Status> {
+    for _ in 0..4096 {
+        let id = runtime.next_workload_port;
+        runtime.next_workload_port = runtime.next_workload_port.wrapping_add(1).max(1 << 63);
+        if !runtime.virtual_ports.contains(&id)
+            && !runtime
+                .workload_leases
+                .iter()
+                .any(|lease| lease.port_id == Some(id))
+        {
+            return Ok(id);
+        }
+    }
+    Err(Status::ErrResourceExhausted)
+}
+
+fn workload_mac(port_id: u64) -> [u8; 6] {
+    let bytes = port_id.to_be_bytes();
+    [0x02, bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]]
+}
+
+fn empty_workload_endpoint() -> WorkloadNetworkEndpoint<'static> {
+    WorkloadNetworkEndpoint {
+        mode: WorkloadNetworkMode::DirectProvider,
+        interface_id: 0,
+        mac: [0; 6],
+        mtu: 0,
+        provider: HandleRef { raw: 0 },
+        device: HandleRef { raw: 0 },
+        lease: HandleRef { raw: 0 },
+        addresses: WireVector::from_slice(&[]),
+        gateways: WireVector::from_slice(&[]),
+        dns_servers: WireVector::from_slice(&[]),
+        allow_raw: false,
+        allow_promiscuous: false,
+        vlan_id: 0,
+        profile: "",
+        isolation_group: "",
+        domain: "",
+        physical_selector: "",
+        table: net_fidl::TableId { value: 0 },
+        addressing: 0,
+    }
+}
+
+fn poll_workload_leases(runtime: &mut Runtime) -> bool {
+    let mut changed = false;
+    let mut leases = core::mem::take(&mut runtime.workload_leases);
+    leases.retain(|lease| match Channel(lease.lease).try_recv() {
+        Err(kernel_fidl::Status::ErrPeerClosed) => {
+            if let Some(provider) = lease.direct_provider {
+                runtime
+                    .clients
+                    .retain(|client| client.channel.0 != provider);
+                runtime.client_domains.remove(&provider);
+                let _ = Memory::close(provider);
+            }
+            if let Some(port_id) = lease.port_id {
+                if let Some(controller) = runtime.vswitch_controller {
+                    let mut switch =
+                        VirtualSwitchControllerPublicClient::new(Rpc(Channel(controller)));
+                    let _ = switch.remove_port(
+                        &VirtualSwitchControllerRemovePortRequest { port_id },
+                        &mut [0; 128],
+                        &mut [HandleRef { raw: 0 }; 1],
+                        &mut [0; 128],
+                        &mut [HandleRef { raw: 0 }; 1],
+                    );
+                }
+                runtime.virtual_ports.retain(|id| *id != port_id);
+            }
+            let _ = Memory::close(lease.lease);
+            changed = true;
+            false
+        }
+        Ok(message) => {
+            close_handles(&message.handles);
+            changed = true;
+            true
+        }
+        Err(_) => true,
+    });
+    runtime.workload_leases = leases;
     changed
 }
 
@@ -895,7 +1298,7 @@ fn poll_extension_manager(
                         extensions: WireVector::from_slice(&[]),
                     },
                 ),
-            }
+            };
         }
         _ => close_handles_raw(handles),
     }
@@ -1101,7 +1504,7 @@ fn complete_extension_deployment(pending: &PendingExtensionDeployment, status: S
                 generation: pending.generation,
             },
         ),
-    }
+    };
 }
 
 fn remove_extension(runtime: &mut Runtime, kind: NetworkExtensionKind) -> Result<Status, Status> {
@@ -1364,6 +1767,60 @@ fn poll_scoped(
                 },
             );
         }
+        7 => {
+            if SocketProviderGetTableSnapshotRequest::decode(request, handles).is_err() {
+                reply(
+                    channel,
+                    &SocketProviderGetTableSnapshotResponse {
+                        status: Status::ErrInvalidArgs,
+                        snapshot: WireVector::from_slice(&[]),
+                    },
+                );
+                return;
+            }
+            let Some(controller) = runtime.stack_controller_channels.values().next().copied()
+            else {
+                reply(
+                    channel,
+                    &SocketProviderGetTableSnapshotResponse {
+                        status: Status::ErrShouldWait,
+                        snapshot: WireVector::from_slice(&[]),
+                    },
+                );
+                return;
+            };
+            let mut response_bytes = vec![0; 128 * 1024];
+            let mut response_handles = [HandleRef { raw: 0 }; 1];
+            let response = StackControllerPublicClient::new(Rpc(Channel(controller)))
+                .get_topology_snapshot(
+                    &StackControllerGetTopologySnapshotRequest {},
+                    &mut [0; 64],
+                    &mut [HandleRef { raw: 0 }; 1],
+                    &mut response_bytes,
+                    &mut response_handles,
+                );
+            let snapshot = response.ok().and_then(|response| {
+                (0..response.tables.len())
+                    .filter_map(|index| response.tables.get(index).ok())
+                    .find(|snapshot| snapshot.table.value == table)
+            });
+            match snapshot {
+                Some(snapshot) => reply(
+                    channel,
+                    &SocketProviderGetTableSnapshotResponse {
+                        status: Status::Ok,
+                        snapshot: WireVector::from_slice(core::slice::from_ref(&snapshot)),
+                    },
+                ),
+                None => reply(
+                    channel,
+                    &SocketProviderGetTableSnapshotResponse {
+                        status: Status::ErrNotFound,
+                        snapshot: WireVector::from_slice(&[]),
+                    },
+                ),
+            };
+        }
         _ => close_handles_raw(handles),
     }
 }
@@ -1524,7 +1981,7 @@ fn connect_with_lease(
     runtime: &mut Runtime,
     lease: RouteLease,
     remote_addr: SocketAddress,
-    _options: net_fidl::SocketOptions,
+    options: net_fidl::SocketOptions,
     front: u64,
 ) -> NetstackConnectTcpResponse {
     let Target::Device {
@@ -1575,22 +2032,44 @@ fn connect_with_lease(
     let mut resp = [0; 128];
     let mut req_handles = [HandleRef { raw: 0 }; 2];
     let mut resp_handles = [HandleRef { raw: 0 }; 2];
-    let response = client.connect_tcp(
-        &StackBackendConnectTcpRequest {
-            connection_id: lease.flow_id,
-            table: WireTableId { value: *table },
-            remote_addr,
-            stream: HandleRef {
-                raw: backend_stream.0,
-            },
-        },
-        &mut req,
-        &mut req_handles,
-        &mut resp,
-        &mut resp_handles,
-    );
+    let response = if let Some(interface_id) = options.bound_interface_id {
+        client
+            .connect_tcp_on_interface(
+                &StackBackendConnectTcpOnInterfaceRequest {
+                    connection_id: lease.flow_id,
+                    table: WireTableId { value: *table },
+                    interface_id,
+                    remote_addr,
+                    stream: HandleRef {
+                        raw: backend_stream.0,
+                    },
+                },
+                &mut req,
+                &mut req_handles,
+                &mut resp,
+                &mut resp_handles,
+            )
+            .map(|response| response.status)
+    } else {
+        client
+            .connect_tcp(
+                &StackBackendConnectTcpRequest {
+                    connection_id: lease.flow_id,
+                    table: WireTableId { value: *table },
+                    remote_addr,
+                    stream: HandleRef {
+                        raw: backend_stream.0,
+                    },
+                },
+                &mut req,
+                &mut req_handles,
+                &mut resp,
+                &mut resp_handles,
+            )
+            .map(|response| response.status)
+    };
     match response {
-        Ok(response) if response.status == Status::Ok => {
+        Ok(Status::Ok) => {
             runtime.escrowed_backends.insert(
                 lease.flow_id,
                 EscrowedBackend {
@@ -1608,14 +2087,12 @@ fn connect_with_lease(
             });
             NetstackConnectTcpResponse { status: Status::Ok }
         }
-        Ok(response) => {
+        Ok(status) => {
             let _ = Memory::close(escrowed_stream);
             let _ = Memory::close(application_stream.0);
             let _ = runtime.routing.close_flow(lease.flow_id);
             let _ = Memory::close(front);
-            NetstackConnectTcpResponse {
-                status: response.status,
-            }
+            NetstackConnectTcpResponse { status }
         }
         Err(_) => {
             let _ = Memory::close(escrowed_stream);
@@ -1634,7 +2111,7 @@ fn listen(
     runtime: &mut Runtime,
     table: u32,
     local_addr: SocketAddress,
-    _options: net_fidl::SocketOptions,
+    options: net_fidl::SocketOptions,
     front: u64,
 ) -> NetstackListenTcpResponse {
     let Ok(lease) = runtime.routing.open_default_flow_for_table(table) else {
@@ -1686,20 +2163,42 @@ fn listen(
     let mut resp = [0; 128];
     let mut req_handles = [HandleRef { raw: 0 }; 2];
     let mut resp_handles = [HandleRef { raw: 0 }; 2];
-    let response = client.listen_tcp(
-        &StackBackendListenTcpRequest {
-            listener_id: lease.flow_id,
-            table: WireTableId {
-                value: *selected_table,
-            },
-            local_addr,
-            listener: HandleRef { raw: back_server.0 },
-        },
-        &mut req,
-        &mut req_handles,
-        &mut resp,
-        &mut resp_handles,
-    );
+    let response = if let Some(interface_id) = options.bound_interface_id {
+        client
+            .listen_tcp_on_interface(
+                &StackBackendListenTcpOnInterfaceRequest {
+                    listener_id: lease.flow_id,
+                    table: WireTableId {
+                        value: *selected_table,
+                    },
+                    interface_id,
+                    local_addr,
+                    listener: HandleRef { raw: back_server.0 },
+                },
+                &mut req,
+                &mut req_handles,
+                &mut resp,
+                &mut resp_handles,
+            )
+            .map(|response| response.status)
+    } else {
+        client
+            .listen_tcp(
+                &StackBackendListenTcpRequest {
+                    listener_id: lease.flow_id,
+                    table: WireTableId {
+                        value: *selected_table,
+                    },
+                    local_addr,
+                    listener: HandleRef { raw: back_server.0 },
+                },
+                &mut req,
+                &mut req_handles,
+                &mut resp,
+                &mut resp_handles,
+            )
+            .map(|response| response.status)
+    };
     finish_proxy(
         runtime,
         lease.flow_id,
@@ -1710,7 +2209,7 @@ fn listen(
         stack_instance,
         *selected_table,
         1,
-        response.map(|value| value.status).map_err(|_| ()),
+        response.map_err(|_| ()),
     )
     .map_or_else(
         |status| NetstackListenTcpResponse { status },
@@ -1721,7 +2220,7 @@ fn listen(
 fn udp(
     runtime: &mut Runtime,
     table: u32,
-    _options: net_fidl::SocketOptions,
+    options: net_fidl::SocketOptions,
     front: u64,
 ) -> NetstackCreateUdpSocketResponse {
     let Ok(lease) = runtime.routing.open_default_flow_for_table(table) else {
@@ -1773,19 +2272,40 @@ fn udp(
     let mut resp = [0; 128];
     let mut req_handles = [HandleRef { raw: 0 }; 2];
     let mut resp_handles = [HandleRef { raw: 0 }; 2];
-    let response = client.create_udp_socket(
-        &StackBackendCreateUdpSocketRequest {
-            object_id: lease.flow_id,
-            table: WireTableId {
-                value: *selected_table,
-            },
-            socket: HandleRef { raw: back_server.0 },
-        },
-        &mut req,
-        &mut req_handles,
-        &mut resp,
-        &mut resp_handles,
-    );
+    let response = if let Some(interface_id) = options.bound_interface_id {
+        client
+            .create_udp_socket_on_interface(
+                &StackBackendCreateUdpSocketOnInterfaceRequest {
+                    object_id: lease.flow_id,
+                    table: WireTableId {
+                        value: *selected_table,
+                    },
+                    interface_id,
+                    socket: HandleRef { raw: back_server.0 },
+                },
+                &mut req,
+                &mut req_handles,
+                &mut resp,
+                &mut resp_handles,
+            )
+            .map(|response| response.status)
+    } else {
+        client
+            .create_udp_socket(
+                &StackBackendCreateUdpSocketRequest {
+                    object_id: lease.flow_id,
+                    table: WireTableId {
+                        value: *selected_table,
+                    },
+                    socket: HandleRef { raw: back_server.0 },
+                },
+                &mut req,
+                &mut req_handles,
+                &mut resp,
+                &mut resp_handles,
+            )
+            .map(|response| response.status)
+    };
     finish_proxy(
         runtime,
         lease.flow_id,
@@ -1796,7 +2316,7 @@ fn udp(
         stack_instance,
         *selected_table,
         2,
-        response.map(|value| value.status).map_err(|_| ()),
+        response.map_err(|_| ()),
     )
     .map_or_else(
         |status| NetstackCreateUdpSocketResponse { status },
@@ -2753,24 +3273,30 @@ fn poll_proxy_controls(runtime: &mut Runtime) -> bool {
                     },
                 );
             }
-            2 if TcpSocketGetPeerAddressRequest::decode(request, &handles).is_ok() => reply(
-                control.channel,
-                &TcpSocketGetPeerAddressResponse {
-                    status: Status::ErrNotFound,
-                    addr: unspecified_address(),
-                },
-            ),
-            3 if TcpSocketGetLocalAddressRequest::decode(request, &handles).is_ok() => reply(
-                control.channel,
-                &TcpSocketGetLocalAddressResponse {
-                    status: Status::ErrNotFound,
-                    addr: unspecified_address(),
-                },
-            ),
-            4 if TcpSocketShutdownRequest::decode(request, &handles).is_ok() => reply(
-                control.channel,
-                &TcpSocketShutdownResponse { status: Status::Ok },
-            ),
+            2 if TcpSocketGetPeerAddressRequest::decode(request, &handles).is_ok() => {
+                reply(
+                    control.channel,
+                    &TcpSocketGetPeerAddressResponse {
+                        status: Status::ErrNotFound,
+                        addr: unspecified_address(),
+                    },
+                );
+            }
+            3 if TcpSocketGetLocalAddressRequest::decode(request, &handles).is_ok() => {
+                reply(
+                    control.channel,
+                    &TcpSocketGetLocalAddressResponse {
+                        status: Status::ErrNotFound,
+                        addr: unspecified_address(),
+                    },
+                );
+            }
+            4 if TcpSocketShutdownRequest::decode(request, &handles).is_ok() => {
+                reply(
+                    control.channel,
+                    &TcpSocketShutdownResponse { status: Status::Ok },
+                );
+            }
             5 if TcpSocketCloseRequest::decode(request, &handles).is_ok() => {
                 reply(control.channel, &TcpSocketCloseResponse {});
                 finish_proxy_control(runtime, control);
@@ -2919,7 +3445,7 @@ fn routing_status(error: RoutingError) -> Status {
     }
 }
 
-fn reply<T: FidlEncode>(channel: Channel, response: &T) {
+fn reply<T: FidlEncode>(channel: Channel, response: &T) -> bool {
     let mut bytes = vec![0; 8192];
     let mut handles = [HandleRef { raw: 0 }; 8];
     if let Ok(encoded) = response.encode(&mut bytes, &mut handles) {
@@ -2927,8 +3453,9 @@ fn reply<T: FidlEncode>(channel: Channel, response: &T) {
             .iter()
             .map(|handle| handle.raw)
             .collect::<Vec<_>>();
-        let _ = channel.send(&bytes[..encoded.bytes], &handles);
+        return channel.send(&bytes[..encoded.bytes], &handles).is_ok();
     }
+    false
 }
 
 fn envelope(bytes: &[u8]) -> (u64, &[u8]) {

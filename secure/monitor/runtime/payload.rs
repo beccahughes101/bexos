@@ -3,7 +3,7 @@
 //! bytes. Domain execution cannot overlap loading or mutate these snapshots.
 use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
-const KERNEL_BYTES: usize = 64 * 1024 * 1024;
+const KERNEL_BYTES: usize = bexos_secure_monitor::boot_verify::KERNEL_MAX_BYTES;
 const BOOTFS_BYTES: usize = bexos_secure_monitor::boot_verify::BOOTFS_MAX_BYTES;
 const METADATA_BYTES: usize = 64 * 1024;
 static STATE: AtomicU8 = AtomicU8::new(0);

@@ -16,6 +16,22 @@ pub(super) struct ContainerLaunch {
     pub rootfs: u64,
     pub options: bexos_starnix_abi::NixRunnerOptions,
     pub resource_group_id: u32,
+    pub network_grants: NetworkGrants,
+}
+
+pub(super) struct NetworkGrants(pub Vec<ServiceGrant>);
+
+impl Drop for NetworkGrants {
+    fn drop(&mut self) {
+        close_network_grants(&self.0);
+    }
+}
+
+#[derive(Clone)]
+struct OciNetworkIdentity {
+    registry_host: String,
+    repository: String,
+    manifest_digest: [u8; 32],
 }
 fn control_status(
     process: u64,
@@ -350,7 +366,9 @@ fn dispatch(
         5 => {
             let result = CommandLauncherLaunchContainerRequest::decode(body, &refs)
                 .map_err(|_| OpenerStatus::InvalidArgs)
-                .and_then(|q| launch_container(state, kernel, binding, q, handles));
+                .and_then(|q| {
+                    launch_container(state, kernel, binding, q, Vec::new(), None, handles)
+                });
             match result {
                 Ok(channel) => {
                     let sent = reply(
@@ -367,6 +385,91 @@ fn dispatch(
                 Err(status) => opener_reply(
                     binding.channel,
                     &CommandLauncherLaunchContainerResponse {
+                        status,
+                        process_control: opener_fidl::HandleRef { raw: 0 },
+                    },
+                ),
+            }
+        }
+        6 => {
+            let result = CommandLauncherLaunchContainerWithNetworkRequest::decode(body, &refs)
+                .map_err(|_| OpenerStatus::InvalidArgs)
+                .and_then(|q| {
+                    let mut attachments = Vec::new();
+                    for index in 0..q.network_attachments.len() {
+                        let attachment = q
+                            .network_attachments
+                            .get(index)
+                            .map_err(|_| OpenerStatus::InvalidArgs)?;
+                        attachments.push(bexos_starnix_abi::NetworkAttachment {
+                            profile: attachment.profile.into(),
+                            interface_name: attachment.interface_name.into(),
+                        });
+                    }
+                    if attachments.is_empty() {
+                        return Err(OpenerStatus::InvalidArgs);
+                    }
+                    for attachment in &attachments {
+                        if state
+                            .config
+                            .network_policy
+                            .authorize_oci_profile(
+                                &attachment.profile,
+                                q.registry_host,
+                                q.repository,
+                                &q.manifest_digest,
+                            )
+                            .is_none()
+                        {
+                            return Err(OpenerStatus::AccessDenied);
+                        }
+                    }
+                    let legacy = CommandLauncherLaunchContainerRequest {
+                        container_id: q.container_id,
+                        rootfs: q.rootfs,
+                        executable: q.executable,
+                        arguments: q.arguments,
+                        environment: q.environment,
+                        working_directory: q.working_directory,
+                        uid: q.uid,
+                        gid: q.gid,
+                        hostname: q.hostname,
+                        readonly_rootfs: q.readonly_rootfs,
+                        resources: q.resources,
+                        stdin_stream: q.stdin_stream,
+                        stdout_stream: q.stdout_stream,
+                        stderr_stream: q.stderr_stream,
+                    };
+                    launch_container(
+                        state,
+                        kernel,
+                        binding,
+                        legacy,
+                        attachments,
+                        Some(OciNetworkIdentity {
+                            registry_host: q.registry_host.into(),
+                            repository: q.repository.into(),
+                            manifest_digest: q.manifest_digest,
+                        }),
+                        handles,
+                    )
+                });
+            match result {
+                Ok(channel) => {
+                    let sent = reply(
+                        binding.channel,
+                        &CommandLauncherLaunchContainerWithNetworkResponse {
+                            status: OpenerStatus::Ok,
+                            process_control: opener_fidl::HandleRef { raw: channel },
+                        },
+                    );
+                    if sent.is_err() {
+                        let _ = Memory::close(channel);
+                    }
+                }
+                Err(status) => opener_reply(
+                    binding.channel,
+                    &CommandLauncherLaunchContainerWithNetworkResponse {
                         status,
                         process_control: opener_fidl::HandleRef { raw: 0 },
                     },
@@ -580,6 +683,8 @@ fn launch_container(
     kernel: &mut KernelFidlOps<KernelTransport, KernelTransport, KernelTransport>,
     binding: &OpenerBinding,
     q: CommandLauncherLaunchContainerRequest<'_>,
+    network_attachments: Vec<bexos_starnix_abi::NetworkAttachment>,
+    network_identity: Option<OciNetworkIdentity>,
     handles: &[u64],
 ) -> Result<u64, OpenerStatus> {
     const PACKAGE: &str = "bexos.service.containerd";
@@ -660,6 +765,18 @@ fn launch_container(
             hard: q.resources.memory_limit_bytes,
         });
     }
+    let network_grants = if network_attachments.is_empty() {
+        Vec::new()
+    } else {
+        provision_container_networks(
+            state,
+            kernel,
+            &network_attachments,
+            network_identity
+                .as_ref()
+                .ok_or(OpenerStatus::AccessDenied)?,
+        )?
+    };
     let options = bexos_starnix_abi::NixRunnerOptions {
         path: q.executable.into(),
         arguments: arguments.clone(),
@@ -675,6 +792,7 @@ fn launch_container(
         umask: 0o022,
         resource_limits,
         hostname: q.hostname.into(),
+        network_attachments,
     };
     options.validate().map_err(|_| OpenerStatus::InvalidArgs)?;
     let command_options = CommandOptions {
@@ -731,6 +849,7 @@ fn launch_container(
         rootfs: q.rootfs.raw,
         options,
         resource_group_id: group.id,
+        network_grants: NetworkGrants(network_grants),
     };
     let status = launch_application(
         &mut state.registry,
@@ -784,6 +903,358 @@ fn launch_container(
         resource_group: group.handle.raw,
     });
     Ok(client.0)
+}
+
+fn provision_container_networks(
+    state: &mut state::AppdState,
+    kernel: &mut KernelFidlOps<KernelTransport, KernelTransport, KernelTransport>,
+    attachments: &[bexos_starnix_abi::NetworkAttachment],
+    identity: &OciNetworkIdentity,
+) -> Result<Vec<ServiceGrant>, OpenerStatus> {
+    provision_networks(
+        &state.config,
+        &mut state.broker,
+        kernel,
+        attachments,
+        WorkloadIdentity::Oci(identity),
+        "bexos.service.containerd",
+        0,
+    )
+}
+
+enum WorkloadIdentity<'a> {
+    Oci(&'a OciNetworkIdentity),
+    Package {
+        package_id: &'a str,
+        signer: &'a str,
+    },
+}
+
+pub(super) fn provision_package_networks(
+    config: &crate::platform_config::PlatformConfig,
+    broker: &mut crate::broker::AppdBroker,
+    kernel: &mut KernelFidlOps<KernelTransport, KernelTransport, KernelTransport>,
+    attachments: &[bexos_starnix_abi::NetworkAttachment],
+    package_id: &str,
+    signer: &str,
+    caller_uid: u64,
+) -> Result<Vec<ServiceGrant>, OpenerStatus> {
+    provision_networks(
+        config,
+        broker,
+        kernel,
+        attachments,
+        WorkloadIdentity::Package { package_id, signer },
+        package_id,
+        caller_uid,
+    )
+}
+
+fn provision_networks(
+    config: &crate::platform_config::PlatformConfig,
+    broker: &mut crate::broker::AppdBroker,
+    kernel: &mut KernelFidlOps<KernelTransport, KernelTransport, KernelTransport>,
+    attachments: &[bexos_starnix_abi::NetworkAttachment],
+    identity: WorkloadIdentity<'_>,
+    caller_package: &str,
+    caller_uid: u64,
+) -> Result<Vec<ServiceGrant>, OpenerStatus> {
+    // Own every provisioned endpoint until the complete attachment set has
+    // succeeded. Any early return (authorization, bind, RPC, or metadata)
+    // drops the guard and closes both the data endpoint and lifetime lease.
+    let mut grants = NetworkGrants(Vec::new());
+    for attachment in attachments {
+        let profile = match identity {
+            WorkloadIdentity::Oci(identity) => config.network_policy.authorize_oci_profile(
+                &attachment.profile,
+                &identity.registry_host,
+                &identity.repository,
+                &identity.manifest_digest,
+            ),
+            WorkloadIdentity::Package { package_id, signer } => config
+                .network_policy
+                .authorize_package_profile(&attachment.profile, package_id, signer),
+        }
+        .cloned()
+        .ok_or(OpenerStatus::AccessDenied)?;
+        let instance_id = match profile.mode {
+            crate::platform_config::WorkloadNetworkMode::DirectProvider => config
+                .network_policy
+                .domain(&profile.domain)
+                .map(|domain| domain.isolation_group.as_str()),
+            crate::platform_config::WorkloadNetworkMode::VirtualL2 => {
+                Some(profile.isolation_group.as_str())
+            }
+            crate::platform_config::WorkloadNetworkMode::Unspecified => None,
+        }
+        .ok_or(OpenerStatus::AccessDenied)?;
+        let networkd_package = config
+            .network_policy
+            .isolation_groups
+            .iter()
+            .find(|group| group.name == instance_id)
+            .map(|group| group.networkd_package.clone())
+            .ok_or(OpenerStatus::AccessDenied)?;
+        let instance_id = instance_id.to_string();
+        let binding = bind_network_controller(broker, kernel, &networkd_package, &instance_id)?;
+        let mut client = net_fidl::WorkloadNetworkControllerPublicClient::new(
+            bexos_userspace::Rpc(Channel(binding.client_endpoint.object_id)),
+        );
+        let (package_id, signer, registry_host, repository, digest): (
+            &str,
+            &str,
+            &str,
+            &str,
+            &[u8],
+        ) = match identity {
+            WorkloadIdentity::Oci(identity) => (
+                "",
+                "",
+                &identity.registry_host,
+                &identity.repository,
+                &identity.manifest_digest,
+            ),
+            WorkloadIdentity::Package { package_id, signer } => (package_id, signer, "", "", &[]),
+        };
+        let request = net_fidl::WorkloadNetworkControllerProvisionRequest {
+            package_id,
+            signer,
+            registry_host,
+            repository,
+            manifest_digest: digest,
+            attachment: net_fidl::WorkloadNetworkAttachment {
+                profile: &attachment.profile,
+                interface_name: &attachment.interface_name,
+            },
+        };
+        let mut request_bytes = alloc::vec![0; 4096];
+        let mut request_handles = [net_fidl::HandleRef { raw: 0 }; 1];
+        let mut response_bytes = alloc::vec![0; 4096];
+        let mut response_handles = [net_fidl::HandleRef { raw: 0 }; 4];
+        let response = client.provision(
+            &request,
+            &mut request_bytes,
+            &mut request_handles,
+            &mut response_bytes,
+            &mut response_handles,
+        );
+        super::close_bound_capabilities(core::slice::from_ref(&binding));
+        let response = match response {
+            Ok(response) if response.status == net_fidl::Status::Ok => response,
+            Ok(response) => {
+                close_workload_endpoint(&response.endpoint);
+                return Err(network_status(response.status));
+            }
+            Err(_) => return Err(OpenerStatus::LaunchFailed),
+        };
+        let endpoint = response.endpoint;
+        let (service, protocol, endpoint_handle) = match endpoint.mode {
+            net_fidl::WorkloadNetworkMode::DirectProvider => (
+                "bexos.net.WorkloadNetworkProvider",
+                "SocketProvider",
+                endpoint.provider.raw,
+            ),
+            net_fidl::WorkloadNetworkMode::VirtualL2 => (
+                "bexos.net.WorkloadNetworkDevice",
+                "EthernetDevice",
+                endpoint.device.raw,
+            ),
+        };
+        if endpoint_handle == 0 || endpoint.lease.raw == 0 {
+            close_workload_endpoint(&endpoint);
+            return Err(OpenerStatus::LaunchFailed);
+        }
+        let metadata = match endpoint_metadata(&attachment.interface_name, &endpoint) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                close_workload_endpoint(&endpoint);
+                return Err(error);
+            }
+        };
+        grants.0.push(ServiceGrant {
+            service: service.into(),
+            protocol: protocol.into(),
+            capability: "WorkloadNetwork".into(),
+            method_ordinals: if endpoint.mode == net_fidl::WorkloadNetworkMode::DirectProvider {
+                (1..=7).collect()
+            } else {
+                (1..=6).collect()
+            },
+            permission_values: vec![metadata],
+            caller_package: Some(caller_package.into()),
+            caller_uid: Some(caller_uid),
+            caller_foreground: true,
+            provider_instance_id: Some(attachment.interface_name.clone()),
+            endpoint: endpoint_handle,
+        });
+        grants.0.push(ServiceGrant {
+            service: "bexos.net.WorkloadNetworkLease".into(),
+            protocol: "WorkloadNetworkLease".into(),
+            capability: "Lease".into(),
+            method_ordinals: Vec::new(),
+            permission_values: Vec::new(),
+            caller_package: Some(caller_package.into()),
+            caller_uid: Some(caller_uid),
+            caller_foreground: true,
+            provider_instance_id: Some(attachment.interface_name.clone()),
+            endpoint: endpoint.lease.raw,
+        });
+    }
+    Ok(core::mem::take(&mut grants.0))
+}
+
+fn bind_network_controller(
+    broker: &mut crate::broker::AppdBroker,
+    kernel: &mut KernelFidlOps<KernelTransport, KernelTransport, KernelTransport>,
+    provider_package: &str,
+    instance_id: &str,
+) -> Result<BoundCapability, OpenerStatus> {
+    let consumed = crate::manifest::ConsumedService {
+        name: "bexos.net.WorkloadNetworkController".into(),
+        link_type: crate::manifest::LinkType::Optional,
+        filter: None,
+        capabilities: vec![crate::manifest::ConsumedCapability {
+            capability: "Provision".into(),
+            methods: vec![crate::manifest::MethodDependency {
+                ordinal: 1,
+                link_type: crate::manifest::LinkType::Required,
+            }],
+        }],
+    };
+    let client = crate::policy::ClientContext {
+        package_name: state::APPD_PACKAGE.into(),
+        permissions: vec!["BEXOS_SYSTEM_PRIVILEGED".into()],
+        permission_values: Vec::new(),
+        is_foreground: true,
+        user_id: Some(0),
+    };
+    let mut bindings = broker
+        .bind_consumed_service(&client, &consumed, kernel)
+        .map_err(|_| OpenerStatus::LaunchFailed)?;
+    let Some(index) = bindings.iter().position(|binding| {
+        binding.provider_package == provider_package
+            && binding.provider_instance_id.as_deref() == Some(instance_id)
+    }) else {
+        super::close_bound_capabilities(&bindings);
+        return Err(OpenerStatus::LaunchFailed);
+    };
+    let binding = bindings.remove(index);
+    super::close_bound_capabilities(&bindings);
+    let metadata = super::provider_binding_metadata(&binding);
+    if super::deliver_provider_endpoint(&binding, &metadata).is_err() {
+        super::close_bound_capabilities(core::slice::from_ref(&binding));
+        return Err(OpenerStatus::LaunchFailed);
+    }
+    Ok(binding)
+}
+
+fn close_workload_endpoint(endpoint: &net_fidl::WorkloadNetworkEndpoint<'_>) {
+    close_handles(&[
+        endpoint.provider.raw,
+        endpoint.device.raw,
+        endpoint.lease.raw,
+    ]);
+}
+
+fn endpoint_metadata(
+    interface_name: &str,
+    endpoint: &net_fidl::WorkloadNetworkEndpoint<'_>,
+) -> Result<String, OpenerStatus> {
+    use core::fmt::Write;
+    let mut value = alloc::format!(
+        "v1;name={interface_name};profile={};mode={};id={};mtu={};mac={:02x}{:02x}{:02x}{:02x}{:02x}{:02x};vlan={};raw={};promisc={};group={};domain={};physical={};table={};addressing={}",
+        endpoint.profile,
+        if endpoint.mode == net_fidl::WorkloadNetworkMode::DirectProvider {
+            "direct"
+        } else {
+            "l2"
+        },
+        endpoint.interface_id,
+        endpoint.mtu,
+        endpoint.mac[0],
+        endpoint.mac[1],
+        endpoint.mac[2],
+        endpoint.mac[3],
+        endpoint.mac[4],
+        endpoint.mac[5],
+        endpoint.vlan_id,
+        u8::from(endpoint.allow_raw),
+        u8::from(endpoint.allow_promiscuous),
+        endpoint.isolation_group,
+        endpoint.domain,
+        endpoint.physical_selector,
+        endpoint.table.value,
+        endpoint.addressing,
+    );
+    for index in 0..endpoint.addresses.len() {
+        let subnet = endpoint
+            .addresses
+            .get(index)
+            .map_err(|_| OpenerStatus::LaunchFailed)?;
+        write!(
+            &mut value,
+            ";addr={}/{}",
+            format_ip(subnet.network),
+            subnet.prefix_len
+        )
+        .map_err(|_| OpenerStatus::LaunchFailed)?;
+    }
+    for index in 0..endpoint.gateways.len() {
+        let subnet = endpoint
+            .gateways
+            .get(index)
+            .map_err(|_| OpenerStatus::LaunchFailed)?;
+        write!(
+            &mut value,
+            ";gateway={}/{}",
+            format_ip(subnet.network),
+            subnet.prefix_len
+        )
+        .map_err(|_| OpenerStatus::LaunchFailed)?;
+    }
+    for index in 0..endpoint.dns_servers.len() {
+        let address = endpoint
+            .dns_servers
+            .get(index)
+            .map_err(|_| OpenerStatus::LaunchFailed)?;
+        write!(&mut value, ";dns={}", format_ip(address))
+            .map_err(|_| OpenerStatus::LaunchFailed)?;
+    }
+    Ok(value)
+}
+
+fn format_ip(address: net_fidl::IpAddress) -> String {
+    match address {
+        net_fidl::IpAddress::Ipv4(value) => alloc::format!(
+            "{}.{}.{}.{}",
+            value.octets[0],
+            value.octets[1],
+            value.octets[2],
+            value.octets[3]
+        ),
+        net_fidl::IpAddress::Ipv6(value) => value
+            .octets
+            .chunks_exact(2)
+            .map(|word| alloc::format!("{:x}", u16::from_be_bytes([word[0], word[1]])))
+            .collect::<Vec<_>>()
+            .join(":"),
+    }
+}
+
+fn close_network_grants(grants: &[ServiceGrant]) {
+    for grant in grants {
+        let _ = Memory::close(grant.endpoint);
+    }
+}
+
+fn network_status(status: net_fidl::Status) -> OpenerStatus {
+    match status {
+        net_fidl::Status::ErrAccessDenied => OpenerStatus::AccessDenied,
+        net_fidl::Status::ErrInvalidArgs | net_fidl::Status::ErrNotFound => {
+            OpenerStatus::InvalidArgs
+        }
+        _ => OpenerStatus::LaunchFailed,
+    }
 }
 
 // Keep an exit notification pending until the channel accepts it. A full receive

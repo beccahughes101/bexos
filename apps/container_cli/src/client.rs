@@ -45,6 +45,47 @@ impl Client {
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>();
+        if !options.networks.is_empty() {
+            let networks = options
+                .networks
+                .iter()
+                .map(|network| NetworkAttachment {
+                    profile: network.profile.as_str(),
+                    interface_name: network.interface_name.as_str(),
+                })
+                .collect::<Vec<_>>();
+            let message = self.call(
+                7,
+                &ContainerManagerCreateWithNetworkRequest {
+                    container_id: &options.id,
+                    image: ImageReference {
+                        registry_host: &options.host,
+                        repository: &options.repository,
+                        tag: &options.tag,
+                        expected_sha256: &options.digest,
+                    },
+                    arguments: WireStringVector::from_slice(&args),
+                    environment: WireStringVector::from_slice(&env),
+                    working_directory: &options.cwd,
+                    uid: options.uid,
+                    gid: options.gid,
+                    hostname: &options.hostname,
+                    resources: ResourceLimits {
+                        cpu_shares: options.cpu_shares,
+                        memory_limit_bytes: options.memory,
+                        process_limit: options.pids,
+                    },
+                    readonly_rootfs: options.readonly,
+                    network_attachments: WireVector::from_slice(&networks),
+                },
+                &[],
+            )?;
+            return check(
+                ContainerManagerCreateWithNetworkResponse::decode(&message.bytes, &[])
+                    .map_err(|_| ContainerStatus::Unavailable)?
+                    .status,
+            );
+        }
         let message = self.call(
             1,
             &ContainerManagerCreateRequest {

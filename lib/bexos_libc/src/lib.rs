@@ -1143,6 +1143,7 @@ fn default_options() -> net_fidl::SocketOptions {
         keep_alive_ms: None,
         rx_buffer_size: None,
         tx_buffer_size: None,
+        bound_interface_id: None,
     }
 }
 

@@ -4,17 +4,20 @@ use bexos_userspace::live_migration::Source;
 use bexos_userspace::service_binding::{BoundServiceEndpoint, ServiceBinding};
 use bexos_userspace::{Channel, Memory, Startup, log};
 use net_fidl::{
-    BackendControlKind, FidlDecode, FidlEncode, HandleRef, IpAddress, Ipv4Address, Ipv6Address,
-    LinkStatus, LinkWatcherOnLinkStatusRequest, LinkWatcherPublicClient, NetstackConnectTcpRequest,
-    NetstackConnectTcpResponse, NetstackCreateUdpSocketRequest, NetstackCreateUdpSocketResponse,
-    NetstackGetLinkStatusRequest, NetstackGetLinkStatusResponse, NetstackListenTcpRequest,
-    NetstackListenTcpResponse, NetstackResolveHostRequest, NetstackResolveHostResponse,
-    NetstackWatchLinkStatusRequest, NetstackWatchLinkStatusResponse,
+    BackendControlKind, FibRoute, FidlDecode, FidlEncode, HandleRef, InterfaceSnapshot, IpAddress,
+    Ipv4Address, Ipv6Address, LinkStatus, LinkWatcherOnLinkStatusRequest, LinkWatcherPublicClient,
+    NetstackConnectTcpRequest, NetstackConnectTcpResponse, NetstackCreateUdpSocketRequest,
+    NetstackCreateUdpSocketResponse, NetstackGetLinkStatusRequest, NetstackGetLinkStatusResponse,
+    NetstackListenTcpRequest, NetstackListenTcpResponse, NetstackResolveHostRequest,
+    NetstackResolveHostResponse, NetstackWatchLinkStatusRequest, NetstackWatchLinkStatusResponse,
     StackBackendAdoptRecoveryRequest, StackBackendAdoptRecoveryResponse,
     StackBackendCheckpointRecoveryRequest, StackBackendCheckpointRecoveryResponse,
-    StackBackendCloseRequest, StackBackendCloseResponse, StackBackendConnectTcpRequest,
-    StackBackendConnectTcpResponse, StackBackendCreateUdpSocketRequest,
-    StackBackendCreateUdpSocketResponse, StackBackendListenTcpRequest,
+    StackBackendCloseRequest, StackBackendCloseResponse, StackBackendConnectTcpOnInterfaceRequest,
+    StackBackendConnectTcpOnInterfaceResponse, StackBackendConnectTcpRequest,
+    StackBackendConnectTcpResponse, StackBackendCreateUdpSocketOnInterfaceRequest,
+    StackBackendCreateUdpSocketOnInterfaceResponse, StackBackendCreateUdpSocketRequest,
+    StackBackendCreateUdpSocketResponse, StackBackendListenTcpOnInterfaceRequest,
+    StackBackendListenTcpOnInterfaceResponse, StackBackendListenTcpRequest,
     StackBackendListenTcpResponse, StackBackendRecoverConnectionRequest,
     StackBackendRecoverConnectionResponse, StackBackendRecoverControlRequest,
     StackBackendRecoverControlResponse, StackBackendResolveHostRequest,
@@ -22,15 +25,18 @@ use net_fidl::{
     StackControllerAddRouteResponse, StackControllerAttachInterfaceRequest,
     StackControllerAttachInterfaceResponse, StackControllerCreateTableRequest,
     StackControllerCreateTableResponse, StackControllerDetachInterfaceRequest,
-    StackControllerDetachInterfaceResponse, StackControllerRemoveRouteRequest,
+    StackControllerDetachInterfaceResponse, StackControllerGetTopologySnapshotRequest,
+    StackControllerGetTopologySnapshotResponse, StackControllerRemoveRouteRequest,
     StackControllerRemoveRouteResponse, StackControllerRemoveTableRequest,
-    StackControllerRemoveTableResponse, Status, TcpListenerAcceptRequest,
-    TcpListenerAcceptResponse, TcpListenerCloseRequest, TcpListenerGetInfoRequest,
-    TcpListenerGetInfoResponse, TcpSocketCloseRequest, TcpSocketGetLocalAddressRequest,
-    TcpSocketGetLocalAddressResponse, TcpSocketGetPeerAddressRequest,
-    TcpSocketGetPeerAddressResponse, TcpSocketGetStreamRequest, TcpSocketGetStreamResponse,
-    TcpSocketShutdownRequest, TcpSocketShutdownResponse, UdpSocketBindRequest,
-    UdpSocketBindResponse, UdpSocketCloseRequest, UdpSocketGetInfoRequest,
+    StackControllerRemoveTableResponse, StackControllerSetInterfaceAddressesRequest,
+    StackControllerSetInterfaceAddressesResponse, StackControllerSetInterfaceConfigurationRequest,
+    StackControllerSetInterfaceConfigurationResponse, Status, TableSnapshot,
+    TcpListenerAcceptRequest, TcpListenerAcceptResponse, TcpListenerCloseRequest,
+    TcpListenerGetInfoRequest, TcpListenerGetInfoResponse, TcpSocketCloseRequest,
+    TcpSocketGetLocalAddressRequest, TcpSocketGetLocalAddressResponse,
+    TcpSocketGetPeerAddressRequest, TcpSocketGetPeerAddressResponse, TcpSocketGetStreamRequest,
+    TcpSocketGetStreamResponse, TcpSocketShutdownRequest, TcpSocketShutdownResponse,
+    UdpSocketBindRequest, UdpSocketBindResponse, UdpSocketCloseRequest, UdpSocketGetInfoRequest,
     UdpSocketGetInfoResponse, UdpSocketRecvFromRequest, UdpSocketRecvFromResponse,
     UdpSocketSendToRequest, UdpSocketSendToResponse,
 };
@@ -623,6 +629,80 @@ fn poll_backend_clients(runtime: &mut Runtime) -> bool {
                         });
                     reply(client.channel, &response);
                 }
+                10 => {
+                    let response = StackBackendConnectTcpOnInterfaceRequest::decode(req, &handles)
+                        .map(|request| {
+                            let status = runtime.router.connect_tcp_on_interface_with_stream(
+                                request.table.value,
+                                request.interface_id,
+                                request.connection_id,
+                                request.remote_addr,
+                                request.stream.raw,
+                            );
+                            if status == Status::Ok {
+                                runtime
+                                    .backend_connections
+                                    .insert(request.connection_id, request.table.value);
+                            }
+                            StackBackendConnectTcpOnInterfaceResponse { status }
+                        })
+                        .unwrap_or(StackBackendConnectTcpOnInterfaceResponse {
+                            status: Status::ErrInvalidArgs,
+                        });
+                    reply(client.channel, &response);
+                }
+                11 => {
+                    let response = StackBackendListenTcpOnInterfaceRequest::decode(req, &handles)
+                        .map(|request| {
+                            let status = runtime.router.listen_tcp_on_interface(
+                                request.table.value,
+                                request.interface_id,
+                                request.listener.raw,
+                                request.local_addr,
+                            );
+                            if status == Status::Ok {
+                                runtime
+                                    .backend_connections
+                                    .insert(request.listener_id, request.table.value);
+                                runtime
+                                    .backend_controls
+                                    .insert(request.listener_id, (1, request.listener.raw));
+                            } else {
+                                let _ = Memory::close(request.listener.raw);
+                            }
+                            StackBackendListenTcpOnInterfaceResponse { status }
+                        })
+                        .unwrap_or(StackBackendListenTcpOnInterfaceResponse {
+                            status: Status::ErrInvalidArgs,
+                        });
+                    reply(client.channel, &response);
+                }
+                12 => {
+                    let response =
+                        StackBackendCreateUdpSocketOnInterfaceRequest::decode(req, &handles)
+                            .map(|request| {
+                                let status = runtime.router.create_udp_on_interface(
+                                    request.table.value,
+                                    request.interface_id,
+                                    request.socket.raw,
+                                );
+                                if status == Status::Ok {
+                                    runtime
+                                        .backend_connections
+                                        .insert(request.object_id, request.table.value);
+                                    runtime
+                                        .backend_controls
+                                        .insert(request.object_id, (2, request.socket.raw));
+                                } else {
+                                    let _ = Memory::close(request.socket.raw);
+                                }
+                                StackBackendCreateUdpSocketOnInterfaceResponse { status }
+                            })
+                            .unwrap_or(StackBackendCreateUdpSocketOnInterfaceResponse {
+                                status: Status::ErrInvalidArgs,
+                            });
+                    reply(client.channel, &response);
+                }
                 _ => close_handles(&message.handles),
             }
             true
@@ -713,6 +793,8 @@ fn poll_controller_clients(runtime: &mut Runtime) -> bool {
                                                 id: request.interface_id,
                                                 name: request.interface_name.into(),
                                                 up: true,
+                                                mtu: link.resources.mtu,
+                                                addresses: Vec::new(),
                                                 neighbor_generation: 0,
                                                 packet_generation: runtime.generation,
                                             },
@@ -740,6 +822,57 @@ fn poll_controller_clients(runtime: &mut Runtime) -> bool {
                         });
                     reply(client.channel, &response);
                 }
+                7 => {
+                    let response =
+                        StackControllerSetInterfaceAddressesRequest::decode(req, &handles)
+                            .map(|request| {
+                                let addresses = (0..request.addresses.len())
+                                    .map(|index| request.addresses.get(index))
+                                    .collect::<Result<Vec<_>, _>>();
+                                StackControllerSetInterfaceAddressesResponse {
+                                    status: addresses.map_or(Status::ErrInvalidArgs, |addresses| {
+                                        runtime.router.set_interface_addresses(
+                                            request.table.value,
+                                            request.interface_id,
+                                            &addresses,
+                                        )
+                                    }),
+                                }
+                            })
+                            .unwrap_or(StackControllerSetInterfaceAddressesResponse {
+                                status: Status::ErrInvalidArgs,
+                            });
+                    reply(client.channel, &response);
+                }
+                8 => {
+                    let response =
+                        StackControllerSetInterfaceConfigurationRequest::decode(req, &handles)
+                            .map(|request| StackControllerSetInterfaceConfigurationResponse {
+                                status: runtime.router.set_interface_configuration(
+                                    request.table.value,
+                                    request.interface_id,
+                                    request.mtu,
+                                    request.link_up,
+                                ),
+                            })
+                            .unwrap_or(StackControllerSetInterfaceConfigurationResponse {
+                                status: Status::ErrInvalidArgs,
+                            });
+                    reply(client.channel, &response);
+                }
+                9 => {
+                    if StackControllerGetTopologySnapshotRequest::decode(req, &handles).is_err() {
+                        reply(
+                            client.channel,
+                            &StackControllerGetTopologySnapshotResponse {
+                                status: Status::ErrInvalidArgs,
+                                tables: net_fidl::WireVector::from_slice(&[]),
+                            },
+                        );
+                    } else {
+                        reply_topology_snapshot(client.channel, &runtime.router);
+                    }
+                }
                 _ => close_handles(&message.handles),
             }
             true
@@ -763,6 +896,72 @@ fn router_route(route: net_fidl::FibRoute) -> RouterFibRoute {
         interface_id: route.interface_id,
         metric: route.metric,
     }
+}
+
+fn reply_topology_snapshot(channel: Channel, router: &Router) {
+    let interface_count = router
+        .tables()
+        .map(|table| table.interfaces.len())
+        .sum::<usize>();
+    let mut address_storage = Vec::with_capacity(interface_count);
+    for table in router.tables() {
+        for interface in table.interfaces.values() {
+            address_storage.push(interface.addresses.clone());
+        }
+    }
+
+    let mut address_index = 0usize;
+    let mut interface_storage = Vec::with_capacity(router.tables().count());
+    let mut route_storage = Vec::with_capacity(router.tables().count());
+    for table in router.tables() {
+        let mut interfaces = Vec::with_capacity(table.interfaces.len());
+        for interface in table.interfaces.values() {
+            interfaces.push(InterfaceSnapshot {
+                interface_id: interface.id,
+                interface_name: interface.name.as_str().into(),
+                table: net_fidl::TableId { value: table.id },
+                mtu: interface.mtu,
+                link_up: interface.up,
+                addresses: net_fidl::WireVector::from_slice(&address_storage[address_index]),
+            });
+            address_index += 1;
+        }
+        interface_storage.push(interfaces);
+        route_storage.push(
+            table
+                .fib
+                .iter()
+                .map(|route| FibRoute {
+                    table: net_fidl::TableId { value: table.id },
+                    destination: net_fidl::IpSubnet {
+                        network: route.destination,
+                        prefix_len: route.prefix_len,
+                    },
+                    gateway: route.gateway.unwrap_or(route.destination),
+                    has_gateway: route.gateway.is_some(),
+                    interface_id: route.interface_id,
+                    metric: route.metric,
+                })
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    let tables = router
+        .tables()
+        .enumerate()
+        .map(|(index, table)| TableSnapshot {
+            table: net_fidl::TableId { value: table.id },
+            interfaces: net_fidl::WireVector::from_slice(&interface_storage[index]),
+            routes: net_fidl::WireVector::from_slice(&route_storage[index]),
+        })
+        .collect::<Vec<_>>();
+    reply(
+        channel,
+        &StackControllerGetTopologySnapshotResponse {
+            status: Status::Ok,
+            tables: net_fidl::WireVector::from_slice(&tables),
+        },
+    );
 }
 
 fn close_handles(handles: &[u64]) {

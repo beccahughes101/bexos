@@ -122,4 +122,50 @@ network_policy {
     transport: NETWORK_DNS_UDP53
     priority: 100
   }
+  workload_profiles {
+    name: "starnix-direct"
+    mode: WORKLOAD_NETWORK_DIRECT_PROVIDER
+    isolation_group: "system_default"
+    domain: "system_default"
+    mtu: 1500
+    rx_queue_depth: 128
+    tx_queue_depth: 128
+    addressing: WORKLOAD_ADDRESSING_DHCP_AND_SLAAC
+    dns_servers: "\x0a\x00\x02\x03"
+    max_instances: 16
+    package_grants { package_id: "bexos.platform.starnix_fixture" expected_signer: "bexos-dev-app-root" }
+  }
+  workload_profiles {
+    name: "starnix-l2-primary"
+    mode: WORKLOAD_NETWORK_VIRTUAL_L2
+    isolation_group: "system_default"
+    domain: "system_default"
+    physical_selector: "qemu-default"
+    mtu: 1500
+    rx_queue_depth: 128
+    tx_queue_depth: 128
+    addressing: WORKLOAD_ADDRESSING_STATIC
+    static_addresses { address: "\x0a\x00\x02\x20" prefix_len: 24 }
+    gateways { address: "\x0a\x00\x02\x02" prefix_len: 32 }
+    dns_servers: "\x0a\x00\x02\x03"
+    max_instances: 8
+    allow_raw: true
+    package_grants { package_id: "bexos.platform.starnix_fixture" expected_signer: "bexos-dev-app-root" }
+  }
+  workload_profiles {
+    name: "starnix-l2-secondary"
+    mode: WORKLOAD_NETWORK_VIRTUAL_L2
+    isolation_group: "system_default"
+    domain: "system_default"
+    physical_selector: "qemu-default"
+    vlan_id: 2
+    mtu: 1500
+    rx_queue_depth: 128
+    tx_queue_depth: 128
+    addressing: WORKLOAD_ADDRESSING_STATIC
+    static_addresses { address: "\x0a\x01\x00\x20" prefix_len: 24 }
+    max_instances: 8
+    allow_raw: true
+    package_grants { package_id: "bexos.platform.starnix_fixture" expected_signer: "bexos-dev-app-root" }
+  }
 }

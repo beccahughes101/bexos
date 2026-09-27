@@ -2,17 +2,18 @@
 
 ## Status
 
-Phases 1–3 and the offline Phase 4 implementation are present in the tree. The
+Phases 1–3 and the opt-in networking portion of Phase 4 are present in the tree. The
 runner supports bounded cooperative Linux process and thread groups with
-separate copy-on-write address spaces. Phases 2–4 are not marked
+separate copy-on-write address spaces. Offline remains the default, while named
+RFC 68 profiles enable direct TCP/UDP or virtual-L2 networking. Phases 2–4 are not marked
 guest-accepted: the required AArch64 and x86_64 QEMU scenarios have not both
 completed successfully. The AArch64 source-firmware path now boots through
 normal-world startup and debugd readiness after correcting overlap between the
-secure owner image and its reserved page-table arena. The subsequent Linux
-fixture installation reached appd's durable package transaction, but the final
-run with corrected aggregate install deadlines was stopped at the user's
-request; x86_64 was not rerun. The complete future design, including features
-outside the current offline boundary, is retained in [README.md](README.md).
+secure owner image and its reserved page-table arena. The latest acceptance
+run continued through generation 356 without a reported guest failure before
+it was stopped at the user's request; x86_64 was not rerun after the final
+recovery changes. The complete future design is retained in
+[README.md](README.md).
 
 ## Upstream import and Bazel targets
 
@@ -58,7 +59,9 @@ W^X validation in the kernel memory service.
 `bexos.app.NixRunnerOptions` has stable fields `path = 1`, repeated
 `arguments = 2`, repeated `{ name, value } environment = 3`, `rootfs = 4`,
 `working_directory = 5`, `uid = 6`, `gid = 7`, `umask = 8`, repeated resource
-limits at `9`, and `hostname = 10`. The rootfs selects either the package or
+limits at `9`, `hostname = 10`, and repeated `{ profile, interface_name }`
+network attachments at field 11. The launch record is version 3 and still
+decodes the version-2 offline record. The rootfs selects either the package or
 data startup directory and an optional root-bounded subpath; omission remains
 backward-compatible and selects the package root. A manifest selects it with
 `runner: "nix"`. Options, appd-to-runner launch records, and signal-control
@@ -137,9 +140,34 @@ The Phase 3 syscall slice includes:
   serialized over the runner's restricted thread rather than represented as
   separate BexOS processes.
 
-The offline policy is enforced in the syscall table: non-local socket families
-return `EAFNOSUPPORT`. No netstack or raw network capability is supplied to the
-Linux task. Local pipe/socket handles are explicit migration resources.
+An attachment-less workload remains offline: non-local socket families return
+`EAFNOSUPPORT`. Named attachments build one Linux network namespace with
+loopback and ordered interfaces. Direct interfaces use permanently
+domain/table-scoped RFC 68 providers for IPv4/IPv6 TCP and UDP. Virtual-L2
+interfaces use leased vswitchd rings and a runner-local packet plane for TCP,
+UDP, ICMP, and authorized `AF_PACKET` traffic. Longest-prefix and metric route
+selection, `SO_BINDTODEVICE`, DNS, common socket options, nonblocking
+connect/accept, polling, packet info, multicast membership, and Linux error
+translation are namespace aware. Packet-info enablement and joined multicast
+groups are socket state and survive runner transplant.
+
+`clone`/`unshare`/`setns` implement `CLONE_NEWNET`; `/proc/<pid>/ns/net` file
+descriptors retain namespace ownership. A new namespace contains loopback
+only. Route netlink exposes links, addresses, routes, veth pairs, software
+bridges, interface moves, MTU, and link state. `/proc/net`, `/sys/class/net`,
+route/netfilter/sock-diag netlink, common network ioctls, namespace-local
+firewall/NAT state, and the bounded networking capability set are carried in
+the runner snapshot. Netfilter batches are atomic. The supported nftables and
+legacy IPv4 iptables subset covers interface/address/protocol/port/state
+matches, counters, accept/drop/reject, and bounded SNAT/DNAT/masquerade;
+unsupported extensions fail the complete update with `EOPNOTSUPP`. Host
+profile policy remains immutable from Linux.
+
+TCP/UDP controls, raw queues, vNIC ring mappings/backlogs, provider/lease
+handles, namespace descriptors, routes, neighbors, bridges/veth, firewall, and
+conntrack state participate in heart transplant. Existing offline snapshots
+remain accepted. The reusable Ethernet ring client lives outside netstackd so
+both netstackd and the Starnix L2 backend use the same checked ring codec.
 
 Unknown syscall numbers return `ENOSYS`. Recognized operations outside the
 current boundary return deterministic Linux errors, normally `ENOTSUP`.
@@ -175,7 +203,7 @@ for stdin/stdout/stderr, allowing the
 shell/terminal frontend (and its scened presentation) to own interactive I/O;
 service launches use the native console log path.
 
-## Offline OCI runtime
+## OCI runtime and opt-in networking
 
 `//lib/oci` strictly validates an OCI image-layout archive without performing
 network I/O. It selects a matching Linux architecture, verifies descriptor
@@ -190,8 +218,11 @@ base64 `LIBARCHIVE.xattr.*` PAX records, including binary
 BexFS sinks without following the final symlink. Unsafe absolute or
 parent-traversing archive paths are rejected. The new
 `bexos.container.ContainerManager` FIDL and
-`ContainerSpec` protobuf define an explicitly offline lifecycle and durable
-prototxt configuration; they contain no guest-network field.
+`ContainerSpec` protobuf define a durable lifecycle. Version-2 records add
+ordered network attachments at field 13; version-1 offline records remain
+readable. `CreateWithNetwork`, `LaunchContainerWithNetwork`, and versioned
+inspection are additive FIDL methods, and the CLI accepts repeatable
+`--network PROFILE[:IFNAME]`. Omitting every flag remains offline.
 
 `//services/containerd` is the authenticated, transplantable lifecycle owner.
 It resolves only `ArtifactKind::Container` through pkgd, verifies the OCI
@@ -205,8 +236,10 @@ Process-control clients use containerd proxies so daemon monitoring and CLI
 waits cannot race on one channel receive queue.
 
 `//apps/container_cli` packages create, start, run, inspect, list, signal, and
-delete. The runtime supplies no network capability or network namespace field.
-Daemon, CLI, pkgd, and the runner archive are included in both product graphs.
+delete. Network access is supplied only by the ordered, policy-authorized
+attachments in the durable container record; there is no ambient network
+capability. Daemon, CLI, pkgd, and the runner archive are included in both
+product graphs.
 
 The normal and replacement runner ELFs, signed archives, runtime digest, and
 AArch64/x86_64 Linux fixtures are all Bazel-built. In addition to the static
@@ -295,6 +328,7 @@ assemblies passed during implementation. The validation record includes:
 
 ```sh
 bazel test //lib/starnix_abi:tests \
+  //lib/starnix_net:tests \
   //third_party/starnix:starnix_core_tests \
   //third_party/starnix:starnix_kernel_tests \
   //services/starnix_runner:tests \
@@ -302,6 +336,8 @@ bazel test //lib/starnix_abi:tests \
   //services/pkgd:tests //lib/pkg_config:pkg_config_tests \
   //lib/oci:tests //lib/oci_bexfs:tests \
   //services/containerd:tests //apps/container_cli:tests \
+  //services/networkd:internal_tests \
+  //services/netstack:internal_tests //services/netstack:netstackd_tests \
   //drivers/d1/storage/bexos/memfs:memfs_tests \
   //drivers/d1/storage/bexos/memfs:memfs_async_tests \
   //drivers/d1/storage/bexos/bexfs:bexfs_tests \
@@ -310,12 +346,15 @@ bazel test //lib/starnix_abi:tests \
   //drivers/d1/storage/bexos/archivefs:archivefs_async_tests \
   //lib/bexos_libc:internal_tests //lib/bexos_libc:bexos_libc_tests \
   //:heart_transplant_coverage_test
-# The same 21-target suite also passes with --config=x86_64.
+# Architecture-sensitive runner and ABI targets also pass with --config=x86_64.
 bazel build //services/appd:appd \
   //services/starnix_runner:starnix_runner_archive \
   //services/starnix_runner:replacement_archive \
   //services/containerd:containerd_archive \
   //services/containerd:replacement_archive \
+  //services/networkd:networkd_archive //services/networkd:replacement_archive \
+  //services/netstack:netstackd_archive //services/netstack:replacement_archive \
+  //services/vswitchd:vswitchd_archive //services/vswitchd:replacement_archive \
   //apps/container_cli:container_cli \
   //device/virtual/qemu/nongui:virtual_aarch64_product_assembly
 bazel build --config=x86_64 //services/appd:appd \
@@ -323,6 +362,9 @@ bazel build --config=x86_64 //services/appd:appd \
   //services/starnix_runner:replacement_archive \
   //services/containerd:containerd_archive \
   //services/containerd:replacement_archive \
+  //services/networkd:networkd_archive //services/networkd:replacement_archive \
+  //services/netstack:netstackd_archive //services/netstack:replacement_archive \
+  //services/vswitchd:vswitchd_archive //services/vswitchd:replacement_archive \
   //apps/container_cli:container_cli \
   //device/virtual/qemu/nongui:virtual_x86_64_product_assembly
 bazel build //testing/e2e/qemu/starnix:archive
@@ -353,7 +395,7 @@ The current implementation has bounded cooperative process/thread groups, but
 does not yet have a passing guest acceptance run for those semantics. The full
 LTP corpus, Android, broader namespaces, Alpine/Python/Redis guest acceptance,
 and Docker/Podman/Kubernetes compatibility are not accepted. Direct hardware
-access and guest networking are deliberately excluded. The product has no
+access and ambient, attachment-free guest networking remain excluded. The product has no
 default remote registry trust root, so deployments must explicitly provision
 pkgd repository/trust policy. All broader future design remains in the RFC
 rather than being deleted.

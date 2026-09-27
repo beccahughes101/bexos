@@ -1,8 +1,10 @@
 mod abi;
 mod dispatch;
 mod events;
+mod l2_backend;
 mod memory;
 mod migration;
+mod net_backend;
 mod polling;
 mod signals;
 mod vfs;
@@ -16,7 +18,13 @@ use memory::{AddressSpace, Mapping, MappingKind, new_futex_id};
 use signals::SA_ONSTACK;
 use signals::SignalState;
 use starnix_kernel::{Architecture, Syscall};
-use std::{boxed::Box, sync::Arc, vec::Vec};
+use std::{
+    boxed::Box,
+    collections::BTreeMap,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    sync::Arc,
+    vec::Vec,
+};
 use vfs::{StdioKind, Vfs};
 
 const SIGNAL_TRAMPOLINE: u64 =
@@ -216,6 +224,8 @@ struct Runtime {
     processes: Vec<ProcessContext>,
     zombies: Vec<ZombieProcess>,
     next_pid: u32,
+    network: bexos_starnix_net::NetworkState,
+    l2: l2_backend::L2Runtime,
     migration: migration::Snapshot,
     source: Option<Source>,
     control: Channel,
@@ -223,6 +233,293 @@ struct Runtime {
 
 fn architecture() -> Architecture {
     Architecture::current()
+}
+
+fn network_errno(error: bexos_starnix_net::NetError) -> i64 {
+    match error {
+        bexos_starnix_net::NetError::InvalidArgument
+        | bexos_starnix_net::NetError::CorruptSnapshot => starnix_kernel::EINVAL,
+        bexos_starnix_net::NetError::NotFound => starnix_kernel::ENOENT,
+        bexos_starnix_net::NetError::AlreadyExists => starnix_kernel::EEXIST,
+        bexos_starnix_net::NetError::PermissionDenied => starnix_kernel::EPERM,
+        bexos_starnix_net::NetError::Unsupported
+        | bexos_starnix_net::NetError::UnsupportedSnapshot => starnix_kernel::ENOTSUP,
+        bexos_starnix_net::NetError::ResourceExhausted => starnix_kernel::ENOMEM,
+        bexos_starnix_net::NetError::WouldBlock => starnix_kernel::EAGAIN,
+        bexos_starnix_net::NetError::NetworkUnreachable => starnix_kernel::ENETUNREACH,
+    }
+}
+
+fn process_fd(pid: u32, fd: i32) -> u64 {
+    (u64::from(pid) << 32) | u64::from(fd as u32)
+}
+
+fn release_network_control(l2: &mut l2_backend::L2Runtime, control: u64) {
+    if l2_backend::L2Runtime::is_object(control) {
+        l2.close(control);
+    } else if control != 0 {
+        let _ = Memory::close(control);
+    }
+}
+
+fn close_network_descriptor(runtime: &mut Runtime, descriptor: u64) {
+    let control = runtime
+        .network
+        .socket_by_fd(descriptor)
+        .and_then(|socket| runtime.network.sockets.get(&socket))
+        .filter(|socket| socket.linux_fds.len() == 1)
+        .map(|socket| socket.backend_control)
+        .unwrap_or(0);
+    runtime.network.close_fd(descriptor);
+    if runtime.network.namespace_fds.contains_key(&descriptor) {
+        let _ = runtime.network.close_namespace_fd(descriptor);
+    }
+    release_network_control(&mut runtime.l2, control);
+}
+
+fn close_process_network_descriptors(runtime: &mut Runtime, pid: u32) {
+    for control in runtime.network.close_process_fds(pid) {
+        release_network_control(&mut runtime.l2, control);
+    }
+}
+
+fn initial_network(
+    startup: &Startup,
+    options: &bexos_starnix_abi::NixRunnerOptions,
+) -> Result<bexos_starnix_net::NetworkState, Error> {
+    use bexos_starnix_net::{HostPolicy, Interface, InterfaceBackend, IpPrefix, Route};
+    if options.network_attachments.is_empty() {
+        return Ok(bexos_starnix_net::NetworkState::offline(options.uid));
+    }
+    let mut endpoints = BTreeMap::new();
+    let mut leases = BTreeMap::new();
+    for grant in &startup.service_grants {
+        let Some(name) = grant.provider_instance_id.as_deref() else {
+            continue;
+        };
+        match grant.service.as_str() {
+            "bexos.net.WorkloadNetworkProvider" | "bexos.net.WorkloadNetworkDevice" => {
+                if endpoints
+                    .insert(
+                        name.to_string(),
+                        (grant.endpoint, grant.permission_values.first()),
+                    )
+                    .is_some()
+                {
+                    return Err(Error::Startup);
+                }
+            }
+            "bexos.net.WorkloadNetworkLease" => {
+                if leases.insert(name.to_string(), grant.endpoint).is_some() {
+                    return Err(Error::Startup);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut interfaces = Vec::new();
+    let mut dns_servers = Vec::new();
+    for requested in &options.network_attachments {
+        let (endpoint, metadata) = endpoints
+            .remove(&requested.interface_name)
+            .ok_or(Error::Startup)?;
+        let lease = leases
+            .remove(&requested.interface_name)
+            .ok_or(Error::Startup)?;
+        let metadata = parse_endpoint_metadata(metadata.ok_or(Error::Startup)?)?;
+        if metadata.name != requested.interface_name || metadata.profile != requested.profile {
+            return Err(Error::Startup);
+        }
+        for server in &metadata.dns_servers {
+            if !dns_servers.contains(server) {
+                dns_servers.push(*server);
+            }
+        }
+        let policy = HostPolicy {
+            profile: metadata.profile,
+            isolation_group: metadata.group,
+            domain: metadata.domain,
+            physical_selector: metadata.physical,
+            vlan_id: metadata.vlan,
+            allow_raw: metadata.allow_raw,
+            allow_promiscuous: metadata.allow_promiscuous,
+        };
+        let direct = metadata.mode == "direct";
+        let backend = match metadata.mode.as_str() {
+            "direct" => InterfaceBackend::Direct {
+                provider: endpoint,
+                lease,
+                table_id: metadata.table,
+                host_interface_id: metadata.interface_id,
+                policy,
+            },
+            "l2" => InterfaceBackend::L2 {
+                device: endpoint,
+                lease,
+                mac: metadata.mac,
+                policy,
+            },
+            _ => return Err(Error::Startup),
+        };
+        let mut routes = metadata
+            .addresses
+            .iter()
+            .cloned()
+            .map(|destination| Route {
+                destination,
+                gateway: None,
+                interface_id: 0,
+                metric: 0,
+            })
+            .collect::<Vec<_>>();
+        routes.extend(metadata.gateways.iter().map(|gateway| {
+            Route {
+                destination: IpPrefix::new(
+                    if gateway.address.is_ipv4() {
+                        IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+                    } else {
+                        IpAddr::V6(Ipv6Addr::UNSPECIFIED)
+                    },
+                    0,
+                )
+                .unwrap(),
+                gateway: Some(gateway.address),
+                interface_id: 0,
+                metric: 100,
+            }
+        }));
+        if direct && metadata.gateways.is_empty() {
+            routes.extend([
+                Route {
+                    destination: IpPrefix::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0).unwrap(),
+                    gateway: None,
+                    interface_id: 0,
+                    metric: 100,
+                },
+                Route {
+                    destination: IpPrefix::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0).unwrap(),
+                    gateway: None,
+                    interface_id: 0,
+                    metric: 100,
+                },
+            ]);
+        }
+        interfaces.push((
+            Interface {
+                id: 1,
+                name: requested.interface_name.clone(),
+                mtu: metadata.mtu,
+                up: true,
+                promiscuous: false,
+                addresses: metadata.addresses,
+                bridge: None,
+                backend,
+            },
+            routes,
+        ));
+    }
+    if !endpoints.is_empty() || !leases.is_empty() {
+        return Err(Error::Startup);
+    }
+    if dns_servers.len() > 8 {
+        return Err(Error::Startup);
+    }
+    let mut state =
+        bexos_starnix_net::NetworkState::with_initial_interfaces(options.uid, interfaces)
+            .map_err(|_| Error::Startup)?;
+    state
+        .namespaces
+        .get_mut(&1)
+        .ok_or(Error::Startup)?
+        .dns_servers = dns_servers;
+    Ok(state)
+}
+
+struct EndpointMetadata {
+    name: String,
+    profile: String,
+    mode: String,
+    group: String,
+    domain: String,
+    physical: String,
+    mtu: u32,
+    vlan: u16,
+    table: u32,
+    interface_id: u64,
+    mac: [u8; 6],
+    allow_raw: bool,
+    allow_promiscuous: bool,
+    addresses: Vec<bexos_starnix_net::IpPrefix>,
+    gateways: Vec<bexos_starnix_net::IpPrefix>,
+    dns_servers: Vec<IpAddr>,
+}
+
+fn parse_endpoint_metadata(value: &str) -> Result<EndpointMetadata, Error> {
+    let mut fields: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let mut parts = value.split(';');
+    if parts.next() != Some("v1") {
+        return Err(Error::Startup);
+    }
+    for part in parts {
+        let (name, value) = part.split_once('=').ok_or(Error::Startup)?;
+        fields.entry(name).or_default().push(value);
+    }
+    let one = |name: &str| -> Result<&str, Error> {
+        let values = fields.get(name).ok_or(Error::Startup)?;
+        (values.len() == 1)
+            .then_some(values[0])
+            .ok_or(Error::Startup)
+    };
+    let prefix = |value: &str| -> Result<bexos_starnix_net::IpPrefix, Error> {
+        let (address, prefix) = value.rsplit_once('/').ok_or(Error::Startup)?;
+        bexos_starnix_net::IpPrefix::new(
+            address.parse().map_err(|_| Error::Startup)?,
+            prefix.parse().map_err(|_| Error::Startup)?,
+        )
+        .map_err(|_| Error::Startup)
+    };
+    let mac_text = one("mac")?;
+    if mac_text.len() != 12 {
+        return Err(Error::Startup);
+    }
+    let mut mac = [0; 6];
+    for (index, octet) in mac.iter_mut().enumerate() {
+        *octet = u8::from_str_radix(&mac_text[index * 2..index * 2 + 2], 16)
+            .map_err(|_| Error::Startup)?;
+    }
+    Ok(EndpointMetadata {
+        name: one("name")?.into(),
+        profile: one("profile")?.into(),
+        mode: one("mode")?.into(),
+        group: one("group")?.into(),
+        domain: one("domain")?.into(),
+        physical: one("physical")?.into(),
+        mtu: one("mtu")?.parse().map_err(|_| Error::Startup)?,
+        vlan: one("vlan")?.parse().map_err(|_| Error::Startup)?,
+        table: one("table")?.parse().map_err(|_| Error::Startup)?,
+        interface_id: one("id")?.parse().map_err(|_| Error::Startup)?,
+        mac,
+        allow_raw: one("raw")? == "1",
+        allow_promiscuous: one("promisc")? == "1",
+        addresses: fields
+            .get("addr")
+            .into_iter()
+            .flatten()
+            .map(|value| prefix(value))
+            .collect::<Result<Vec<_>, _>>()?,
+        gateways: fields
+            .get("gateway")
+            .into_iter()
+            .flatten()
+            .map(|value| prefix(value))
+            .collect::<Result<Vec<_>, _>>()?,
+        dns_servers: fields
+            .get("dns")
+            .into_iter()
+            .flatten()
+            .map(|value| value.parse().map_err(|_| Error::Startup))
+            .collect::<Result<Vec<_>, _>>()?,
+    })
 }
 
 fn flags(rights: u32) -> VmarFlags {
@@ -572,6 +869,8 @@ fn process_snapshot(
     let runtime = migration::RuntimeState {
         signals: process.signals.checkpoint(),
         dispatcher: process.dispatcher.checkpoint(),
+        network: Vec::new(),
+        l2: Vec::new(),
         vfs: process.vfs.snapshot().map_err(|_| Error::Mapping)?,
         signal_frames: process
             .signal_frames
@@ -727,6 +1026,8 @@ fn poll_migration(runtime: &mut Runtime) {
             migration::RuntimeState {
                 signals: runtime.current.signals.checkpoint(),
                 dispatcher: runtime.current.dispatcher.checkpoint(),
+                network: runtime.network.snapshot().map_err(|_| ())?,
+                l2: runtime.l2.snapshot().map_err(|_| ())?,
                 vfs,
                 signal_frames: runtime
                     .current
@@ -2025,6 +2326,14 @@ fn clone_thread(
         state: TaskState::Runnable,
         signal_frames: Vec::new(),
     });
+    runtime
+        .network
+        .clone_task(
+            runtime.current.tasks[runtime.current.current_task].tid,
+            tid,
+            false,
+        )
+        .map_err(network_errno)?;
     Ok(tid)
 }
 
@@ -2045,6 +2354,7 @@ fn clone_process(
     const CLONE_CHILD_CLEARTID: u64 = 0x0020_0000;
     const CLONE_CHILD_SETTID: u64 = 0x0100_0000;
     const CLONE_CLEAR_SIGHAND: u64 = 0x1_0000_0000;
+    const CLONE_NEWNET: u64 = 0x4000_0000;
     const SUPPORTED: u64 = CLONE_VM
         | CLONE_SIGHAND
         | CLONE_VFORK
@@ -2053,6 +2363,7 @@ fn clone_process(
         | CLONE_CHILD_CLEARTID
         | CLONE_CHILD_SETTID
         | CLONE_CLEAR_SIGHAND
+        | CLONE_NEWNET
         | 0xff;
     let exit_signal = flags as u32 & 0xff;
     if flags & CLONE_THREAD != 0
@@ -2096,6 +2407,18 @@ fn clone_process(
     } else {
         None
     };
+    runtime
+        .network
+        .clone_task(
+            runtime.current.tasks[runtime.current.current_task].tid,
+            pid,
+            flags & CLONE_NEWNET != 0,
+        )
+        .map_err(network_errno)?;
+    runtime
+        .network
+        .clone_process_fds(runtime.current.pid, pid)
+        .map_err(network_errno)?;
     runtime.processes.push(ProcessContext {
         pid,
         ppid: runtime.current.pid,
@@ -2166,6 +2489,12 @@ fn wake_vfork_parent(process: &mut ProcessContext, child: u32) {
 }
 
 fn finish_child_process(runtime: &mut Runtime, status: i32) -> Result<(), ()> {
+    let exiting_tids = runtime
+        .current
+        .tasks
+        .iter()
+        .map(|task| task.tid)
+        .collect::<Vec<_>>();
     for address in notify_all_robust_lists(&mut runtime.current) {
         recover_robust_futex(runtime, address);
     }
@@ -2199,6 +2528,7 @@ fn finish_child_process(runtime: &mut Runtime, status: i32) -> Result<(), ()> {
         }
     }
     runtime.current.memory.deactivate().map_err(|_| ())?;
+    close_process_network_descriptors(runtime, pid);
     let (next_index, next_task) = runtime
         .processes
         .iter()
@@ -2216,6 +2546,9 @@ fn finish_child_process(runtime: &mut Runtime, status: i32) -> Result<(), ()> {
     next.memory.activate().map_err(|_| ())?;
     let exiting = core::mem::replace(&mut runtime.current, next);
     drop(exiting);
+    for tid in exiting_tids {
+        runtime.network.exit_task(tid);
+    }
     if !reaped {
         runtime.zombies.push(ZombieProcess { pid, ppid, status });
     }
@@ -2367,6 +2700,7 @@ fn queue_process_signal(process: &mut ProcessContext, signal: u32) -> Result<(),
 
 fn exit_current_task(runtime: &mut Runtime) {
     let task = runtime.current.tasks.remove(runtime.current.current_task);
+    runtime.network.exit_task(task.tid);
     for address in notify_robust_list(&mut runtime.current, task.tid, task.robust_list) {
         recover_robust_futex(runtime, address);
     }
@@ -2452,12 +2786,14 @@ unsafe extern "C" fn vector(context: u64, reason: bexos_userspace::restricted::R
     );
     let outcome = {
         let process = &mut runtime.current;
-        process.dispatcher.call(
+        process.dispatcher.call_with_backends(
             Syscall::decode(architecture(), number),
             args,
             &mut process.memory,
             &mut process.vfs,
             &mut process.signals,
+            &mut runtime.network,
+            &mut runtime.l2,
         )
     };
     match outcome {
@@ -2721,7 +3057,10 @@ unsafe extern "C" fn vector(context: u64, reason: bexos_userspace::restricted::R
             for mapping in mappings {
                 runtime.current.memory.add_mapping(mapping);
             }
-            runtime.current.vfs.finish_exec(&path);
+            let closed = runtime.current.vfs.finish_exec(&path);
+            for fd in closed {
+                close_network_descriptor(runtime, process_fd(tid, fd));
+            }
             runtime.current.signals.finish_exec();
             runtime.current.dispatcher.finish_exec(&path);
             runtime.current.signal_frames.clear();
@@ -2954,6 +3293,7 @@ pub fn run(channel: Channel) -> Result<u8, Error> {
     }
     let image_bytes = copy_payload(prelude.handles[0], launch.image_len)?;
     let startup = Startup::receive(channel).map_err(|_| Error::Startup)?;
+    let initial_network = initial_network(&startup, &launch.options)?;
     let command = bexos_userspace::command::from_startup(&startup).map_err(|_| Error::Startup)?;
     if launch.service != launch.migratable
         || (launch.migratable && startup.migration.is_none() && !startup.migration_target)
@@ -3042,6 +3382,8 @@ pub fn run(channel: Channel) -> Result<u8, Error> {
     let initial_runtime = migration::RuntimeState {
         signals: SignalState::default().checkpoint(),
         dispatcher: Dispatcher::new(architecture(), &launch.options).checkpoint(),
+        network: initial_network.snapshot().map_err(|_| Error::Startup)?,
+        l2: Vec::new(),
         vfs: vfs.snapshot().map_err(|_| Error::Startup)?,
         signal_frames: Vec::new(),
         tasks: vec![migration::TaskSnapshot {
@@ -3142,6 +3484,17 @@ pub fn run(channel: Channel) -> Result<u8, Error> {
     }
     let runtime_state =
         migration::RuntimeState::decode(migration.runtime()).map_err(|_| Error::Startup)?;
+    let network = if runtime_state.network.is_empty() {
+        bexos_starnix_net::NetworkState::offline(u32::MAX)
+    } else {
+        bexos_starnix_net::NetworkState::restore(&runtime_state.network)
+            .map_err(|_| Error::Startup)?
+    };
+    let l2 = if candidate && !runtime_state.l2.is_empty() {
+        l2_backend::L2Runtime::restore(&runtime_state.l2).map_err(|_| Error::Startup)?
+    } else {
+        l2_backend::L2Runtime::connect(&network).map_err(|_| Error::Startup)?
+    };
     let current_pid = runtime_state.pid;
     let current_ppid = runtime_state.ppid;
     let current_exit_signal = runtime_state.exit_signal;
@@ -3222,6 +3575,8 @@ pub fn run(channel: Channel) -> Result<u8, Error> {
         processes: restored_processes,
         zombies: restored_zombies,
         next_pid: restored_next_pid.max(next_tid).max(2),
+        network,
+        l2,
         migration,
         source,
         control: channel,

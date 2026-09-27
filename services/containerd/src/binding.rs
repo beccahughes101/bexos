@@ -8,7 +8,7 @@ impl Client {
             && binding.capability == "Public"
             && binding.caller_package.is_some()
             && binding.caller_uid.is_some()
-            && binding.method_ordinals.iter().all(|m| matches!(m, 1..=6)))
+            && binding.method_ordinals.iter().all(|m| matches!(m, 1..=8)))
         .then(|| Self {
             channel,
             methods: binding.method_ordinals.clone(),

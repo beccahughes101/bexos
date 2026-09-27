@@ -20,6 +20,7 @@ use arch::{ELF_MACHINE, LIBRARY_LOAD_BASE, LIBRARY_LOAD_LIMIT, TLS_LOAD_BASE};
 
 pub const DEFAULT_STACK_SIZE: u64 = bexos_boot::USER_STACK_SIZE;
 pub const DEFAULT_STACK_TOP: u64 = bexos_boot::USER_STACK_TOP;
+pub const MAX_STACK_SIZE: u64 = 8 * 1024 * 1024;
 pub const PAGE_SIZE: u64 = bexos_kernel_core::loader::PAGE_SIZE;
 const VMO_FLAGS_NONE: u32 = 0;
 const MAX_LIBRARY_COUNT: usize = 64;
@@ -102,6 +103,16 @@ impl ElfRunner {
         let options = elf_options(request)?;
         if options.path.is_empty() {
             return Err(LaunchError::MissingRunnerOptions);
+        }
+        let stack_size = if options.stack_size_bytes == 0 {
+            DEFAULT_STACK_SIZE
+        } else {
+            options.stack_size_bytes
+        };
+        if !(DEFAULT_STACK_SIZE..=MAX_STACK_SIZE).contains(&stack_size)
+            || stack_size % PAGE_SIZE != 0
+        {
+            return Err(LaunchError::InvalidElfOptions);
         }
 
         let image = resolver
@@ -615,10 +626,10 @@ impl ElfRunner {
             };
 
             let stack_vmo = kernel
-                .create_vmo(DEFAULT_STACK_SIZE, VMO_FLAGS_NONE)
+                .create_vmo(stack_size, VMO_FLAGS_NONE)
                 .map_err(|source| kernel_error("create_stack_vmo", source))?;
             owned_vmos.push(stack_vmo);
-            let stack_base = DEFAULT_STACK_TOP - DEFAULT_STACK_SIZE;
+            let stack_base = DEFAULT_STACK_TOP - stack_size;
             let _stack_guard = create_arena_for_span(
                 kernel,
                 created.root_vmar,
@@ -632,7 +643,7 @@ impl ElfRunner {
                 kernel,
                 created.root_vmar,
                 bexos_boot::USER_START,
-                (stack_base, DEFAULT_STACK_SIZE),
+                (stack_base, stack_size),
                 VMAR_CAN_MAP_READ | VMAR_CAN_MAP_WRITE,
                 "create_stack_vmar",
                 &mut constructed_vmars,
@@ -643,7 +654,7 @@ impl ElfRunner {
                     stack_vmo,
                     0,
                     0,
-                    DEFAULT_STACK_SIZE,
+                    stack_size,
                     VMAR_CAN_MAP_READ | VMAR_CAN_MAP_WRITE,
                 )
                 .map_err(|source| kernel_error("map_stack", source))?;

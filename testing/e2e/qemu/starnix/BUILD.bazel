@@ -2,7 +2,7 @@ load("//build/rules:app_archive.bzl", "app_archive")
 load("//build/rules:userspace.bzl", "app_manifest")
 load("//build/platforms:architecture.bzl", "guest_platform", "guest_select")
 load("//testing/e2e/qemu:architecture_test.bzl", "qemu_suites")
-load("//testing/e2e/qemu:qemu_e2e.bzl", "qemu_e2e_test")
+load("//testing/e2e/qemu:qemu_e2e.bzl", "QEMU_BOOT_DATA", "qemu_e2e_test")
 load("@rules_rust//rust:defs.bzl", "rust_binary")
 
 package(default_visibility = ["//visibility:public"])
@@ -90,6 +90,54 @@ genrule(
     tools = ["@llvm//tools:clang"],
 )
 
+genrule(
+    name = "network_musl",
+    srcs = ["network_musl.c", "@trusty_src//:BUILD.bazel"] + guest_select(
+        ["@trusty_src//:" + MUSL_AARCH64 + "/" + path for path in MUSL_LINK_INPUTS],
+        ["@trusty_src//:" + MUSL_X86_64 + "/" + path for path in MUSL_LINK_INPUTS],
+    ),
+    outs = ["network_musl.elf"],
+    cmd = guest_select(
+        "ROOT=$$(dirname $(location @trusty_src//:BUILD.bazel)); SYSROOT=$$ROOT/" + MUSL_AARCH64 + "; " +
+        "$(location @llvm//tools:clang) --target=aarch64-unknown-linux-musl -fPIE -c $(location network_musl.c) -o $(@D)/network_musl.o; " +
+        "$(location @llvm//tools:clang) --target=aarch64-unknown-linux-musl -fuse-ld=lld -nostdlib -pie " +
+        "-Wl,-L,$$ROOT/" + MUSL_AARCH64 + "/lib -Wl,--dynamic-linker,/lib/ld-musl.so.1 " +
+        "$$SYSROOT/lib/crt1.o $$SYSROOT/lib/crti.o $$SYSROOT/lib/crtbeginS.o $(@D)/network_musl.o " +
+        "$$SYSROOT/lib/libc_musl.so $$SYSROOT/lib/crtendS.o $$SYSROOT/lib/crtn.o -o $@",
+        "ROOT=$$(dirname $(location @trusty_src//:BUILD.bazel)); SYSROOT=$$ROOT/" + MUSL_X86_64 + "; " +
+        "$(location @llvm//tools:clang) --target=x86_64-unknown-linux-musl -fPIE -c $(location network_musl.c) -o $(@D)/network_musl.o; " +
+        "$(location @llvm//tools:clang) --target=x86_64-unknown-linux-musl -fuse-ld=lld -nostdlib -pie " +
+        "-Wl,-L,$$ROOT/" + MUSL_X86_64 + "/lib -Wl,--dynamic-linker,/lib/ld-musl.so.1 " +
+        "$$SYSROOT/lib/crt1.o $$SYSROOT/lib/crti.o $$SYSROOT/lib/crtbeginS.o $(@D)/network_musl.o " +
+        "$$SYSROOT/lib/libc_musl.so $$SYSROOT/lib/crtendS.o $$SYSROOT/lib/crtn.o -o $@",
+    ),
+    tools = ["@llvm//tools:clang"],
+)
+
+genrule(
+    name = "network_survivor",
+    srcs = ["network_survivor.c", "@trusty_src//:BUILD.bazel"] + guest_select(
+        ["@trusty_src//:" + MUSL_AARCH64 + "/" + path for path in MUSL_LINK_INPUTS],
+        ["@trusty_src//:" + MUSL_X86_64 + "/" + path for path in MUSL_LINK_INPUTS],
+    ),
+    outs = ["network_survivor.elf"],
+    cmd = guest_select(
+        "ROOT=$$(dirname $(location @trusty_src//:BUILD.bazel)); SYSROOT=$$ROOT/" + MUSL_AARCH64 + "; " +
+        "$(location @llvm//tools:clang) --target=aarch64-unknown-linux-musl -fPIE -c $(location network_survivor.c) -o $(@D)/network_survivor.o; " +
+        "$(location @llvm//tools:clang) --target=aarch64-unknown-linux-musl -fuse-ld=lld -nostdlib -pie " +
+        "-Wl,-L,$$ROOT/" + MUSL_AARCH64 + "/lib -Wl,--dynamic-linker,/lib/ld-musl.so.1 " +
+        "$$SYSROOT/lib/crt1.o $$SYSROOT/lib/crti.o $$SYSROOT/lib/crtbeginS.o $(@D)/network_survivor.o " +
+        "$$SYSROOT/lib/libc_musl.so $$SYSROOT/lib/crtendS.o $$SYSROOT/lib/crtn.o -o $@",
+        "ROOT=$$(dirname $(location @trusty_src//:BUILD.bazel)); SYSROOT=$$ROOT/" + MUSL_X86_64 + "; " +
+        "$(location @llvm//tools:clang) --target=x86_64-unknown-linux-musl -fPIE -c $(location network_survivor.c) -o $(@D)/network_survivor.o; " +
+        "$(location @llvm//tools:clang) --target=x86_64-unknown-linux-musl -fuse-ld=lld -nostdlib -pie " +
+        "-Wl,-L,$$ROOT/" + MUSL_X86_64 + "/lib -Wl,--dynamic-linker,/lib/ld-musl.so.1 " +
+        "$$SYSROOT/lib/crt1.o $$SYSROOT/lib/crti.o $$SYSROOT/lib/crtbeginS.o $(@D)/network_survivor.o " +
+        "$$SYSROOT/lib/libc_musl.so $$SYSROOT/lib/crtendS.o $$SYSROOT/lib/crtn.o -o $@",
+    ),
+    tools = ["@llvm//tools:clang"],
+)
+
 filegroup(
     name = "musl_loader",
     srcs = guest_select(
@@ -125,17 +173,28 @@ app_archive(
         "bin/dynamic_musl": ":dynamic_musl",
         "bin/hello": ":hello_linux",
         "bin/looping": ":looping_linux",
+        "bin/network_musl": ":network_musl",
+        "bin/network_survivor": ":network_survivor",
         "lib/ld-musl.so.1": ":musl_loader",
         "lib/libc_musl.so": ":musl_libc",
     },
     compression = "zstd",
 )
 
+NETWORK_REPLACEMENTS = [
+    "//drivers/d1/nic/virtio/net:replacement_archive",
+    "//services/vswitchd:replacement_archive",
+    "//services/netstack:replacement_archive",
+    "//services/networkd:replacement_archive",
+]
+
 qemu_e2e_test(
     tier = "extended",
     name = "starnix_test",
     src = "starnix_e2e_test.rs",
     crate_name = "starnix_e2e_test",
+    boot_data = QEMU_BOOT_DATA,
+    extra_srcs = ["network_echo.rs"],
     deps = [
         "//host/debug_client",
         "//lib/update:update_host",
@@ -143,12 +202,19 @@ qemu_e2e_test(
         "//tools/qemu:qemu_test",
     ],
     # Integrated AArch64 boots source-built secure firmware under TCG before
-    # launching the complete service graph. Keep the 120-second no-progress
-    # watchdog, but allow active boots enough wall time to reach debugd.
-    env = {"BEXOS_QEMU_DEBUG_BOOT_TIMEOUT_SECONDS": "6000"},
-    extra_data = [":archive"],
-    extra_args = ["$(rootpath :archive)"],
-    x86_env_overrides = {"BEXOS_QEMU_DEBUG_BOOT_TIMEOUT_SECONDS": "600"},
+    # launching the complete service graph. Importing the largest compressed
+    # package can legitimately produce no named progress marker for several
+    # minutes, so bound both the overall boot and individual quiet interval.
+    env = {
+        "BEXOS_QEMU_DEBUG_BOOT_TIMEOUT_SECONDS": "6000",
+        "BEXOS_QEMU_STALL_TIMEOUT_SECONDS": "900",
+    },
+    extra_data = [":archive"] + NETWORK_REPLACEMENTS,
+    extra_args = ["$(rootpath :archive)"] + ["$(rootpath %s)" % archive for archive in NETWORK_REPLACEMENTS],
+    x86_env_overrides = {
+        "BEXOS_QEMU_DEBUG_BOOT_TIMEOUT_SECONDS": "6000",
+        "BEXOS_QEMU_STALL_TIMEOUT_SECONDS": "1800",
+    },
 )
 
 qemu_suites()

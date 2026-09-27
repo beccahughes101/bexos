@@ -38,6 +38,17 @@ struct ContainerInfo {
     exit_code int32;
 };
 
+struct NetworkAttachment {
+    profile string:64;
+    interface_name string:15;
+};
+
+struct ContainerInspection {
+    version uint32;
+    info ContainerInfo;
+    network_attachments vector<NetworkAttachment>:8;
+};
+
 @discoverable
 protocol ContainerManager {
     1: Create(struct {
@@ -72,5 +83,22 @@ protocol ContainerManager {
     6: List() -> (struct {
         status ContainerStatus;
         containers vector<ContainerInfo>:256;
+    });
+    7: CreateWithNetwork(struct {
+        container_id string:64;
+        image ImageReference;
+        arguments vector<string:4096>:256;
+        environment vector<string:4096>:256;
+        working_directory string:4096;
+        uid uint32;
+        gid uint32;
+        hostname string:64;
+        resources ResourceLimits;
+        readonly_rootfs bool;
+        network_attachments vector<NetworkAttachment>:8;
+    }) -> (struct { status ContainerStatus; });
+    8: InspectVersioned(struct { container_id string:64; }) -> (struct {
+        status ContainerStatus;
+        inspection vector<ContainerInspection>:1;
     });
 };

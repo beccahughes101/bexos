@@ -1,4 +1,4 @@
-use crate::spec::{ContainerSpec, ImageReference, Resources};
+use crate::spec::{ContainerSpec, ImageReference, NetworkAttachment, Resources};
 use bexos_pkg_client::{ArtifactKind, ArtifactQuery, BlobDigest, HashType, PendingResolution};
 use bexos_userspace::{Channel, Memory, Socket};
 use container_fidl::{ContainerState, ContainerStatus};
@@ -25,6 +25,7 @@ pub struct DesiredSpec {
     pub hostname: String,
     pub resources: Resources,
     pub readonly_rootfs: bool,
+    pub network_attachments: Vec<NetworkAttachment>,
 }
 
 impl DesiredSpec {
@@ -51,6 +52,7 @@ impl DesiredSpec {
             || !matches!(self.image.expected_sha256.len(), 0 | 32)
             || self.arguments.len() > 64
             || self.environment.len() > 64
+            || self.network_attachments.len() > 8
             || self
                 .arguments
                 .iter()
@@ -68,12 +70,39 @@ impl DesiredSpec {
         {
             return Err(ContainerStatus::InvalidArgs);
         }
+        let validation = ContainerSpec {
+            version: 2,
+            container_id: self.container_id.clone(),
+            image: self.image.clone(),
+            arguments: if self.arguments.is_empty() {
+                vec!["/bin/true".into()]
+            } else {
+                self.arguments.clone()
+            },
+            environment: self.environment.clone(),
+            working_directory: if self.working_directory.is_empty() {
+                "/".into()
+            } else {
+                self.working_directory.clone()
+            },
+            uid: self.uid,
+            gid: self.gid,
+            hostname: self.hostname.clone(),
+            resources: self.resources,
+            readonly_rootfs: self.readonly_rootfs,
+            manifest_digest: [0; 32],
+            network_attachments: self.network_attachments.clone(),
+        };
+        validation
+            .validate()
+            .map_err(|_| ContainerStatus::InvalidArgs)?;
         Ok(())
     }
 }
 
 pub struct PendingCreate {
     pub client: u64,
+    pub response_ordinal: u64,
     pub desired: DesiredSpec,
     pub resolution: PendingResolution,
 }
@@ -199,7 +228,7 @@ pub fn effective_spec(
         gid = g.parse().map_err(|_| ContainerStatus::VerifyFailed)?;
     }
     let spec = ContainerSpec {
-        version: 1,
+        version: 2,
         container_id: desired.container_id.clone(),
         image: desired.image,
         arguments,
@@ -215,6 +244,7 @@ pub fn effective_spec(
         resources: desired.resources,
         readonly_rootfs: desired.readonly_rootfs,
         manifest_digest,
+        network_attachments: desired.network_attachments,
     };
     spec.validate().map_err(|_| ContainerStatus::InvalidArgs)?;
     Ok(spec)
@@ -252,6 +282,7 @@ mod tests {
             hostname: String::new(),
             resources: Resources::default(),
             readonly_rootfs: true,
+            network_attachments: Vec::new(),
         };
         let process = bexos_oci::ProcessConfig {
             arguments: vec!["/bin/x".into()],

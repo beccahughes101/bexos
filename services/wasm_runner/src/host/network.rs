@@ -130,6 +130,7 @@ fn options() -> n::SocketOptions {
         keep_alive_ms: None,
         rx_buffer_size: Some(65536),
         tx_buffer_size: Some(65536),
+        bound_interface_id: None,
     }
 }
 fn scoped(g: &dyn Handle) -> bool {

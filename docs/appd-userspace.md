@@ -480,6 +480,17 @@ discovery resolves signed manifest package keys.
 See [preference validation](services.md#preference-validation) for the host and
 QEMU coverage of configuration resolution and retained clients across cutover.
 
+## Starnix network attachment handoff
+
+`NixRunnerOptions.network_attachments` is an ordered, opt-in request. Appd
+resolves every profile and asks the private networkd workload controller to
+provision it only after checking the installed package/signer identity. OCI
+container launches instead use the verified registry, repository, and manifest
+digest. The networkd check is independent, quotas are enforced there, and any
+partial lease is closed before a failed launch returns. The runner receives
+only scoped provider/vNIC handles and immutable attachment metadata; it never
+receives the privileged host topology controller.
+
 ## Debug terminal identity
 
 Debugd can bind a scoped opener through its privileged lifecycle channel. System

@@ -520,6 +520,11 @@ Targets:
 networkd is its only private stack/controller client. The default networkd
 instance translates the compatible `Netstack` API into table zero.
 
+Its additive RFC 70 backend operations expose bounded topology snapshots,
+per-interface address/MTU/link state, and interface-pinned TCP, listener, and
+UDP operations. The descriptor-ring client and migration codec are a shared
+Rust library used by both netstackd and the Starnix virtual-L2 backend.
+
 The deployed ELF is a std-linked Tokio daemon. Its entrypoint creates a
 two-worker runtime with I/O and time enabled, then drives the service loop as an
 async task while preserving the existing polling-oriented FIDL and packet-plane

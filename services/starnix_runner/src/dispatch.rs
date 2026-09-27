@@ -10,13 +10,17 @@ use bexos_migration::{
     codec::{Decoder, Encoder},
 };
 use bexos_starnix_abi::NixRunnerOptions;
+use bexos_starnix_net::{InterfaceBackend, NetError, NetworkState, SocketDomain, SocketKind};
 use bexos_userspace::Memory;
 use bexos_zircon::{Clock, ClockId};
 use starnix_kernel::{
     Architecture, EACCES, EAFNOSUPPORT, EBADF, EEXIST, EINVAL, ELOOP, ENOENT, ENOMEM, ENOSYS,
     ENOTSUP, EPERM, Syscall, error,
 };
-use std::sync::Arc;
+use std::{
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    sync::Arc,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FutexAtomicOperation {
@@ -430,15 +434,18 @@ impl Dispatcher {
         .into_bytes()
     }
 
-    pub fn call(
+    pub fn call_with_backends(
         &mut self,
         syscall: Syscall,
         args: [u64; 6],
         memory: &mut AddressSpace,
         vfs: &mut Vfs,
         signals: &mut SignalState,
+        network: &mut NetworkState,
+        l2: &mut crate::l2_backend::L2Runtime,
     ) -> Outcome {
-        match self.call_inner(syscall, args, memory, vfs, signals) {
+        l2.poll(network);
+        match self.call_inner(syscall, args, memory, vfs, signals, network, l2) {
             Ok(outcome) => outcome,
             Err(errno) => Outcome::Return(error(errno)),
         }
@@ -451,6 +458,8 @@ impl Dispatcher {
         memory: &mut AddressSpace,
         vfs: &mut Vfs,
         signals: &mut SignalState,
+        network: &mut NetworkState,
+        l2: &mut crate::l2_backend::L2Runtime,
     ) -> Result<Outcome, i64> {
         use Syscall::*;
         let maps = memory.proc_maps().into_bytes();
@@ -496,6 +505,7 @@ impl Dispatcher {
         ] {
             vfs.set_synthetic_directory(&path, task_entries.clone());
         }
+        refresh_network_files(vfs, network, self.current_tid, self.pid);
         let value = match syscall {
             Read => {
                 let bytes = vfs.read(a[0] as i32, bounded(a[2])?)?;
@@ -574,8 +584,18 @@ impl Dispatcher {
                 }
                 written as u64
             }
-            Open => self.open(AT_FDCWD, a[0], a[1], a[2], memory, vfs)? as u64,
-            OpenAt => self.open(a[0] as i32, a[1], a[2], a[3], memory, vfs)? as u64,
+            Open => {
+                let namespace_path = memory.cstring(a[0], 4096)?;
+                let fd = self.open(AT_FDCWD, a[0], a[1], a[2], memory, vfs)?;
+                bind_netns_path(network, self.current_tid, self.pid, fd, &namespace_path)?;
+                fd as u64
+            }
+            OpenAt => {
+                let namespace_path = memory.cstring(a[1], 4096)?;
+                let fd = self.open(a[0] as i32, a[1], a[2], a[3], memory, vfs)?;
+                bind_netns_path(network, self.current_tid, self.pid, fd, &namespace_path)?;
+                fd as u64
+            }
             OpenAt2 => {
                 if a[3] < 24 {
                     return Err(EINVAL);
@@ -590,26 +610,99 @@ impl Dispatcher {
                 if resolve != 0 {
                     return Err(ENOTSUP);
                 }
-                self.open(a[0] as i32, a[1], flags, mode, memory, vfs)? as u64
+                let namespace_path = memory.cstring(a[1], 4096)?;
+                let fd = self.open(a[0] as i32, a[1], flags, mode, memory, vfs)?;
+                bind_netns_path(network, self.current_tid, self.pid, fd, &namespace_path)?;
+                fd as u64
             }
             Close => {
+                let descriptor = owned_fd(self.pid, a[0] as i32);
+                let backend = closing_backend(network, descriptor);
                 vfs.close(a[0] as i32)?;
+                network.close_fd(descriptor);
+                if network.namespace_fds.contains_key(&descriptor) {
+                    network.close_namespace_fd(descriptor).map_err(net_errno)?;
+                }
+                close_backend(l2, backend);
                 0
             }
             CloseRange => {
                 vfs.close_range(a[0] as u32, a[1] as u32, a[2] as u32)?;
+                if a[2] & 4 == 0 {
+                    let end = a[1].min(255);
+                    for fd in a[0]..=end {
+                        let descriptor = owned_fd(self.pid, fd as i32);
+                        let backend = closing_backend(network, descriptor);
+                        network.close_fd(descriptor);
+                        if network.namespace_fds.contains_key(&descriptor) {
+                            network.close_namespace_fd(descriptor).map_err(net_errno)?;
+                        }
+                        close_backend(l2, backend);
+                    }
+                }
                 0
             }
-            Dup => vfs.duplicate(a[0] as i32, 0, None, false)? as u64,
-            Dup2 => vfs.duplicate(a[0] as i32, 0, Some(a[1] as usize), false)? as u64,
+            Dup => {
+                let fd = vfs.duplicate(a[0] as i32, 0, None, false)?;
+                let source = owned_fd(self.pid, a[0] as i32);
+                let target = owned_fd(self.pid, fd);
+                if network.socket_by_fd(source).is_some() {
+                    network.clone_fd(source, target).map_err(net_errno)?;
+                }
+                if network.namespace_fds.contains_key(&source) {
+                    network
+                        .clone_namespace_fd(source, target)
+                        .map_err(net_errno)?;
+                }
+                fd as u64
+            }
+            Dup2 => {
+                if a[0] == a[1] {
+                    vfs.duplicate(a[0] as i32, 0, Some(a[1] as usize), false)? as u64
+                } else {
+                    let target = owned_fd(self.pid, a[1] as i32);
+                    let replaced_backend = closing_backend(network, target);
+                    let fd = vfs.duplicate(a[0] as i32, 0, Some(a[1] as usize), false)?;
+                    let source = owned_fd(self.pid, a[0] as i32);
+                    if network.socket_by_fd(source).is_some() {
+                        network.clone_fd(source, target).map_err(net_errno)?;
+                    } else {
+                        network.close_fd(target);
+                    }
+                    clone_or_close_netns_fd(network, source, target)?;
+                    close_backend(l2, replaced_backend);
+                    fd as u64
+                }
+            }
             Dup3 => {
                 if a[0] == a[1] || a[2] & !0x8_0000 != 0 {
                     return Err(EINVAL);
                 }
-                vfs.duplicate(a[0] as i32, 0, Some(a[1] as usize), a[2] & 0x8_0000 != 0)? as u64
+                let target = owned_fd(self.pid, a[1] as i32);
+                let replaced_backend = closing_backend(network, target);
+                let fd =
+                    vfs.duplicate(a[0] as i32, 0, Some(a[1] as usize), a[2] & 0x8_0000 != 0)?;
+                let source = owned_fd(self.pid, a[0] as i32);
+                if network.socket_by_fd(source).is_some() {
+                    network.clone_fd(source, target).map_err(net_errno)?;
+                } else {
+                    network.close_fd(target);
+                }
+                clone_or_close_netns_fd(network, source, target)?;
+                close_backend(l2, replaced_backend);
+                fd as u64
             }
             Fcntl => match a[1] {
-                0 => vfs.duplicate(a[0] as i32, a[2] as usize, None, false)? as u64,
+                0 | 1030 => {
+                    let fd = vfs.duplicate(a[0] as i32, a[2] as usize, None, a[1] == 1030)?;
+                    let source = owned_fd(self.pid, a[0] as i32);
+                    let target = owned_fd(self.pid, fd);
+                    if network.socket_by_fd(source).is_some() {
+                        network.clone_fd(source, target).map_err(net_errno)?;
+                    }
+                    clone_or_close_netns_fd(network, source, target)?;
+                    fd as u64
+                }
                 1 => u64::from(vfs.fd_flags(a[0] as i32)?),
                 2 => {
                     vfs.set_fd_flags(a[0] as i32, a[2] as u32)?;
@@ -620,7 +713,6 @@ impl Dispatcher {
                     vfs.set_flags(a[0] as i32, a[2] as u32)?;
                     0
                 }
-                1030 => vfs.duplicate(a[0] as i32, a[2] as usize, None, true)? as u64,
                 _ => return Err(ENOTSUP),
             },
             Fstat => {
@@ -902,6 +994,9 @@ impl Dispatcher {
                     return Err(EINVAL);
                 }
                 let name = memory.cstring(name_pointer, 255)?;
+                if name == "security.capability" && self.euid != 0 {
+                    return Err(EPERM);
+                }
                 if size > 65_536 {
                     return Err(starnix_kernel::ERANGE);
                 }
@@ -1780,7 +1875,7 @@ impl Dispatcher {
                     _ => return Err(EINVAL),
                 }
             }
-            Ioctl => self.ioctl(a, memory)?,
+            Ioctl => self.ioctl(a, memory, network)?,
             Pipe | Pipe2 => {
                 let flags = if matches!(syscall, Pipe2) {
                     if a[1] & !(0x800 | 0x8_0000) != 0 {
@@ -1891,30 +1986,217 @@ impl Dispatcher {
                 0
             }
             Shutdown => {
-                vfs.shutdown(a[0] as i32, a[1])?;
+                if let Some(socket) = network.socket_by_fd(owned_fd(self.pid, a[0] as i32)) {
+                    if a[1] > 2 {
+                        return Err(EINVAL);
+                    }
+                    let state = network.sockets.get_mut(&socket).ok_or(EBADF)?;
+                    state.shutdown_read |= a[1] != 1;
+                    state.shutdown_write |= a[1] != 0;
+                    if state.backend_control != 0 && matches!(state.kind, SocketKind::Stream) {
+                        vfs.shutdown(a[0] as i32, a[1])?;
+                    }
+                } else {
+                    vfs.shutdown(a[0] as i32, a[1])?;
+                }
                 0
             }
             Socket => {
-                if a[0] != 1 {
-                    return Err(EAFNOSUPPORT);
+                if a[0] == 1 {
+                    if a[1] & 0xf != 1 || a[1] & !(0xf | 0x800 | 0x8_0000) != 0 || a[2] != 0 {
+                        return Err(ENOTSUP);
+                    }
+                    vfs.unix_socket(a[1] as u32 & !0xf)? as u64
+                } else {
+                    let domain = match (a[0], a[2]) {
+                        (2, _) => SocketDomain::Inet4,
+                        (10, _) => SocketDomain::Inet6,
+                        (17, _) => SocketDomain::Packet,
+                        (16, 0) => SocketDomain::RouteNetlink,
+                        (16, 4) => SocketDomain::SockDiagNetlink,
+                        (16, 12) => SocketDomain::NetfilterNetlink,
+                        _ => return Err(EAFNOSUPPORT),
+                    };
+                    let kind = match a[1] & 0xf {
+                        1 => SocketKind::Stream,
+                        2 => SocketKind::Datagram,
+                        3 => SocketKind::Raw,
+                        _ => return Err(ENOTSUP),
+                    };
+                    if a[1] & !(0xf | 0x800 | 0x8_0000) != 0 {
+                        return Err(EINVAL);
+                    }
+                    if !network.namespaces.values().any(|namespace| {
+                        namespace.interfaces.values().any(|interface| {
+                            !matches!(interface.backend, InterfaceBackend::Loopback)
+                        })
+                    }) {
+                        return Err(EAFNOSUPPORT);
+                    }
+                    let socket = network
+                        .socket(
+                            self.current_tid,
+                            domain,
+                            kind,
+                            a[2] as u16,
+                            a[1] & 0x800 != 0,
+                        )
+                        .map_err(net_errno)?;
+                    let fd = match vfs.unix_socket(a[1] as u32 & !0xf) {
+                        Ok(fd) => fd,
+                        Err(error) => {
+                            network.sockets.remove(&socket);
+                            return Err(error);
+                        }
+                    };
+                    network
+                        .bind_fd(socket, owned_fd(self.pid, fd))
+                        .map_err(net_errno)?;
+                    fd as u64
                 }
-                if a[1] & 0xf != 1 || a[1] & !(0xf | 0x800 | 0x8_0000) != 0 || a[2] != 0 {
-                    return Err(ENOTSUP);
-                }
-                vfs.unix_socket(a[1] as u32 & !0xf)? as u64
             }
             Bind => {
-                let path = decode_unix_address(memory, a[1], a[2])?;
-                vfs.bind_unix(a[0] as i32, &path)?;
+                let fd = a[0] as i32;
+                if let Some(socket) = network.socket_by_fd(owned_fd(self.pid, fd)) {
+                    let domain = network.sockets.get(&socket).ok_or(EBADF)?.domain;
+                    if matches!(
+                        domain,
+                        SocketDomain::RouteNetlink
+                            | SocketDomain::NetfilterNetlink
+                            | SocketDomain::SockDiagNetlink
+                    ) {
+                        let bytes =
+                            memory.read(a[1], usize::try_from(a[2]).map_err(|_| EINVAL)?)?;
+                        if bytes.len() < 12
+                            || u16::from_ne_bytes(bytes[..2].try_into().unwrap()) != 16
+                        {
+                            return Err(EINVAL);
+                        }
+                        return Ok(Outcome::Return(0));
+                    }
+                    let local = decode_ip_address(memory, a[1], a[2], domain)?;
+                    let state = network.sockets.get_mut(&socket).ok_or(EBADF)?;
+                    if state.local.is_some() {
+                        return Err(EINVAL);
+                    }
+                    state.local = Some(local);
+                    if matches!(state.kind, SocketKind::Datagram) && state.protocol != 1 {
+                        ensure_udp(network, l2, socket, Some(local.0))?;
+                    }
+                } else {
+                    let path = decode_unix_address(memory, a[1], a[2])?;
+                    vfs.bind_unix(fd, &path)?;
+                }
                 0
             }
             Listen => {
-                vfs.listen_unix(a[0] as i32, a[1])?;
+                let fd = a[0] as i32;
+                if let Some(socket) = network.socket_by_fd(owned_fd(self.pid, fd)) {
+                    let snapshot = network.sockets.get(&socket).cloned().ok_or(EBADF)?;
+                    if !matches!(snapshot.kind, SocketKind::Stream) || snapshot.peer.is_some() {
+                        return Err(EINVAL);
+                    }
+                    let local = snapshot.local.ok_or(EINVAL)?;
+                    let listener = match backend_for_socket(network, socket, Some(local.0))? {
+                        SocketBackend::Direct {
+                            provider,
+                            host_interface,
+                        } => crate::net_backend::listen_tcp(
+                            provider,
+                            local,
+                            snapshot.nonblocking,
+                            host_interface,
+                        )?,
+                        SocketBackend::L2 { interface } => l2.listen_tcp(interface, local)?,
+                        SocketBackend::Loopback { namespace } => {
+                            l2.listen_loopback(namespace, local)?
+                        }
+                    };
+                    let state = network.sockets.get_mut(&socket).ok_or(EBADF)?;
+                    state.listening = true;
+                    state.backend_control = listener;
+                } else {
+                    vfs.listen_unix(fd, a[1])?;
+                }
                 0
             }
             Connect => {
-                let path = decode_unix_address(memory, a[1], a[2])?;
-                vfs.connect_unix(a[0] as i32, &path)?;
+                let fd = a[0] as i32;
+                if let Some(socket) = network.socket_by_fd(owned_fd(self.pid, fd)) {
+                    let snapshot = network.sockets.get(&socket).cloned().ok_or(EBADF)?;
+                    let mut peer = decode_ip_address(memory, a[1], a[2], snapshot.domain)?;
+                    if snapshot.peer.is_some() {
+                        return Err(starnix_kernel::EISCONN);
+                    }
+                    if matches!(snapshot.domain, SocketDomain::Inet4 | SocketDomain::Inet6) {
+                        let (translated, verdict) = network
+                            .filter_egress(
+                                socket,
+                                peer,
+                                if matches!(snapshot.kind, SocketKind::Stream) {
+                                    6
+                                } else if snapshot.protocol == 1 {
+                                    1
+                                } else {
+                                    17
+                                },
+                                snapshot.local.map_or(0, |local| local.1),
+                            )
+                            .map_err(net_errno)?;
+                        if verdict != bexos_starnix_net::Verdict::Accept {
+                            return Err(EACCES);
+                        }
+                        peer = translated;
+                    }
+                    if matches!(snapshot.kind, SocketKind::Datagram) {
+                        network.sockets.get_mut(&socket).unwrap().peer = Some(peer);
+                        if snapshot.protocol != 1 {
+                            ensure_udp(network, l2, socket, None)?;
+                        }
+                    } else if matches!(snapshot.kind, SocketKind::Stream) {
+                        let connection = match backend_for_socket(network, socket, Some(peer.0))? {
+                            SocketBackend::Direct {
+                                provider,
+                                host_interface,
+                            } => {
+                                let connection = crate::net_backend::connect_tcp(
+                                    provider,
+                                    peer,
+                                    snapshot.nonblocking,
+                                    host_interface,
+                                )?;
+                                crate::l2_backend::TcpConnection {
+                                    stream: connection.stream,
+                                    control: connection.control,
+                                    local: connection.local,
+                                }
+                            }
+                            SocketBackend::L2 { interface } => l2.connect_tcp(interface, peer)?,
+                            SocketBackend::Loopback { namespace } => l2.connect_loopback(
+                                namespace,
+                                snapshot
+                                    .local
+                                    .unwrap_or_else(|| unspecified(snapshot.domain)),
+                                peer,
+                            )?,
+                        };
+                        vfs.install_native_socket(
+                            fd,
+                            connection.stream,
+                            format_socket_address(connection.local),
+                            format_socket_address(peer),
+                        )?;
+                        let state = network.sockets.get_mut(&socket).ok_or(EBADF)?;
+                        state.local = Some(connection.local);
+                        state.peer = Some(peer);
+                        state.backend_control = connection.control;
+                    } else {
+                        return Err(ENOTSUP);
+                    }
+                } else {
+                    let path = decode_unix_address(memory, a[1], a[2])?;
+                    vfs.connect_unix(fd, &path)?;
+                }
                 0
             }
             Accept | Accept4 => {
@@ -1926,84 +2208,655 @@ impl Dispatcher {
                 } else {
                     0
                 };
-                let (fd, peer) = vfs.accept_unix(a[0] as i32, flags)?;
-                if a[1] != 0 {
-                    if let Err(error) = write_unix_address(memory, a[1], a[2], &peer) {
+                let source_fd = a[0] as i32;
+                if let Some(listener_socket) = network.socket_by_fd(owned_fd(self.pid, source_fd)) {
+                    let listener = network
+                        .sockets
+                        .get(&listener_socket)
+                        .cloned()
+                        .ok_or(EBADF)?;
+                    if !listener.listening || listener.backend_control == 0 {
+                        return Err(EINVAL);
+                    }
+                    let mut accepted =
+                        if crate::l2_backend::L2Runtime::is_object(listener.backend_control) {
+                            l2.accept_tcp(listener.backend_control)?
+                        } else {
+                            let accepted =
+                                crate::net_backend::accept_tcp(listener.backend_control)?;
+                            crate::l2_backend::AcceptedConnection {
+                                stream: accepted.stream,
+                                control: accepted.control,
+                                peer: accepted.peer,
+                            }
+                        };
+                    let ingress = network.filter_ingress(
+                        listener_socket,
+                        accepted.peer,
+                        6,
+                        listener.local.map_or(0, |local| local.1),
+                        0,
+                    );
+                    match ingress {
+                        Ok((source, bexos_starnix_net::Verdict::Accept)) => accepted.peer = source,
+                        Ok(_) => {
+                            let _ = bexos_userspace::Memory::close(accepted.stream);
+                            close_backend(l2, Some(accepted.control));
+                            return Err(EACCES);
+                        }
+                        Err(error) => {
+                            let _ = bexos_userspace::Memory::close(accepted.stream);
+                            close_backend(l2, Some(accepted.control));
+                            return Err(net_errno(error));
+                        }
+                    }
+                    let fd = vfs.allocate_native_socket(
+                        accepted.stream,
+                        flags,
+                        listener
+                            .local
+                            .map(format_socket_address)
+                            .unwrap_or_default(),
+                        format_socket_address(accepted.peer),
+                    )?;
+                    let socket = network
+                        .socket(
+                            self.current_tid,
+                            listener.domain,
+                            SocketKind::Stream,
+                            listener.protocol,
+                            flags & 0x800 != 0 || listener.nonblocking,
+                        )
+                        .map_err(net_errno)?;
+                    {
+                        let state = network.sockets.get_mut(&socket).unwrap();
+                        state.local = listener.local;
+                        state.peer = Some(accepted.peer);
+                        state.bound_interface = listener.bound_interface;
+                        state.backend_control = accepted.control;
+                    }
+                    if let Err(error) = network
+                        .bind_fd(socket, owned_fd(self.pid, fd))
+                        .map_err(net_errno)
+                    {
                         let _ = vfs.close(fd);
+                        network.sockets.remove(&socket);
                         return Err(error);
                     }
+                    if a[1] != 0 {
+                        write_ip_address(memory, a[1], a[2], accepted.peer)?;
+                    }
+                    fd as u64
+                } else {
+                    let (fd, peer) = vfs.accept_unix(source_fd, flags)?;
+                    if a[1] != 0 {
+                        if let Err(error) = write_unix_address(memory, a[1], a[2], &peer) {
+                            let _ = vfs.close(fd);
+                            return Err(error);
+                        }
+                    }
+                    fd as u64
                 }
-                fd as u64
             }
             Getsockname | Getpeername => {
-                let name = vfs.unix_name(a[0] as i32, matches!(syscall, Getpeername))?;
-                write_unix_address(memory, a[1], a[2], &name)?;
+                if let Some(socket) = network.socket_by_fd(owned_fd(self.pid, a[0] as i32)) {
+                    let socket = network.sockets.get(&socket).ok_or(EBADF)?;
+                    let address = if matches!(syscall, Getpeername) {
+                        socket.peer.ok_or(starnix_kernel::ENOTCONN)?
+                    } else {
+                        socket.local.unwrap_or_else(|| unspecified(socket.domain))
+                    };
+                    write_ip_address(memory, a[1], a[2], address)?;
+                } else {
+                    let name = vfs.unix_name(a[0] as i32, matches!(syscall, Getpeername))?;
+                    write_unix_address(memory, a[1], a[2], &name)?;
+                }
                 0
             }
             Sendto => {
-                if a[4] != 0 {
-                    return Err(ENOTSUP);
-                }
                 let bytes = memory.read(a[1], bounded(a[2])?)?;
-                vfs.write(a[0] as i32, bytes)? as u64
+                if let Some(socket) = network.socket_by_fd(owned_fd(self.pid, a[0] as i32)) {
+                    let snapshot = network.sockets.get(&socket).cloned().ok_or(EBADF)?;
+                    if matches!(
+                        snapshot.domain,
+                        SocketDomain::RouteNetlink
+                            | SocketDomain::NetfilterNetlink
+                            | SocketDomain::SockDiagNetlink
+                    ) {
+                        return Ok(Outcome::Return(
+                            network.netlink_send(socket, bytes).map_err(net_errno)? as u64,
+                        ));
+                    }
+                    if matches!(snapshot.domain, SocketDomain::Packet) {
+                        let interface = match backend_for_socket(network, socket, None)? {
+                            SocketBackend::L2 { interface } => interface,
+                            SocketBackend::Direct { .. } | SocketBackend::Loopback { .. } => {
+                                return Err(EPERM);
+                            }
+                        };
+                        return Ok(Outcome::Return(l2.transmit_raw(interface, bytes)? as u64));
+                    }
+                    if !matches!(snapshot.kind, SocketKind::Datagram) && !is_icmp_socket(&snapshot)
+                    {
+                        return Err(ENOTSUP);
+                    }
+                    let mut destination = if a[4] == 0 {
+                        snapshot.peer.ok_or(starnix_kernel::EDESTADDRREQ)?
+                    } else {
+                        decode_ip_address(memory, a[4], a[5], snapshot.domain)?
+                    };
+                    let (translated, verdict) = network
+                        .filter_egress(
+                            socket,
+                            destination,
+                            if is_icmp_socket(&snapshot) {
+                                snapshot.protocol as u8
+                            } else {
+                                17
+                            },
+                            snapshot.local.map_or(0, |local| local.1),
+                        )
+                        .map_err(net_errno)?;
+                    if verdict != bexos_starnix_net::Verdict::Accept {
+                        return Err(EACCES);
+                    }
+                    destination = translated;
+                    if is_icmp_socket(&snapshot) {
+                        let interface =
+                            match backend_for_socket(network, socket, Some(destination.0))? {
+                                SocketBackend::L2 { interface } => interface,
+                                SocketBackend::Direct { .. } => return Err(ENOTSUP),
+                                SocketBackend::Loopback { .. } => {
+                                    return Ok(Outcome::Return(l2.send_loopback_icmp(
+                                        network,
+                                        socket,
+                                        destination.0,
+                                        bytes,
+                                    )?
+                                        as u64));
+                                }
+                            };
+                        return Ok(Outcome::Return(
+                            l2.send_icmp(interface, destination.0, bytes)? as u64,
+                        ));
+                    }
+                    ensure_udp(network, l2, socket, Some(destination.0))?;
+                    let control = network.sockets.get(&socket).unwrap().backend_control;
+                    if crate::l2_backend::L2Runtime::is_object(control) {
+                        l2.send_udp(control, bytes, destination)? as u64
+                    } else {
+                        crate::net_backend::send_udp(control, bytes, destination)? as u64
+                    }
+                } else {
+                    if a[4] != 0 {
+                        return Err(ENOTSUP);
+                    }
+                    vfs.write(a[0] as i32, bytes)? as u64
+                }
             }
             Recvfrom => {
-                let bytes = vfs.read(a[0] as i32, bounded(a[2])?)?;
-                memory.write(a[1], &bytes)?;
-                if a[4] != 0 {
-                    let peer = vfs.unix_name(a[0] as i32, true)?;
-                    write_unix_address(memory, a[4], a[5], &peer)?;
+                if let Some(socket) = network.socket_by_fd(owned_fd(self.pid, a[0] as i32)) {
+                    let domain = network.sockets.get(&socket).ok_or(EBADF)?.domain;
+                    if matches!(
+                        domain,
+                        SocketDomain::RouteNetlink
+                            | SocketDomain::NetfilterNetlink
+                            | SocketDomain::SockDiagNetlink
+                    ) {
+                        let mut bytes = network.netlink_recv(socket).map_err(net_errno)?;
+                        bytes.truncate(bounded(a[2])?);
+                        memory.write(a[1], &bytes)?;
+                        return Ok(Outcome::Return(bytes.len() as u64));
+                    }
+                    if matches!(domain, SocketDomain::Packet) {
+                        let state = network.sockets.get_mut(&socket).ok_or(EBADF)?;
+                        if state.queued_packets.is_empty() {
+                            return Err(starnix_kernel::EAGAIN);
+                        }
+                        let mut bytes = state.queued_packets.remove(0);
+                        bytes.truncate(bounded(a[2])?);
+                        memory.write(a[1], &bytes)?;
+                        return Ok(Outcome::Return(bytes.len() as u64));
+                    }
+                    if network.sockets.get(&socket).is_some_and(is_icmp_socket) {
+                        let state = network.sockets.get_mut(&socket).ok_or(EBADF)?;
+                        if state.queued_packets.is_empty() {
+                            return Err(starnix_kernel::EAGAIN);
+                        }
+                        let frame = state.queued_packets.remove(0);
+                        let (mut bytes, mut source) = decode_icmp_frame(&frame)?;
+                        let protocol = if matches!(domain, SocketDomain::Inet6) {
+                            58
+                        } else {
+                            1
+                        };
+                        let (translated, verdict) = network
+                            .filter_ingress(socket, (source, 0), protocol, 0, bytes.len())
+                            .map_err(net_errno)?;
+                        if verdict != bexos_starnix_net::Verdict::Accept {
+                            return Err(EACCES);
+                        }
+                        source = translated.0;
+                        bytes.truncate(bounded(a[2])?);
+                        memory.write(a[1], &bytes)?;
+                        if a[4] != 0 {
+                            write_ip_address(memory, a[4], a[5], (source, 0))?;
+                        }
+                        return Ok(Outcome::Return(bytes.len() as u64));
+                    }
+                    ensure_udp(network, l2, socket, None)?;
+                    let control = network.sockets.get(&socket).ok_or(EBADF)?.backend_control;
+                    let (mut bytes, mut source) =
+                        if crate::l2_backend::L2Runtime::is_object(control) {
+                            l2.recv_udp(control)?
+                        } else {
+                            crate::net_backend::recv_udp(control)?
+                        };
+                    let destination_port = network
+                        .sockets
+                        .get(&socket)
+                        .and_then(|socket| socket.local)
+                        .map_or(0, |local| local.1);
+                    let (translated, verdict) = network
+                        .filter_ingress(socket, source, 17, destination_port, bytes.len())
+                        .map_err(net_errno)?;
+                    if verdict != bexos_starnix_net::Verdict::Accept {
+                        return Err(EACCES);
+                    }
+                    source = translated;
+                    bytes.truncate(bounded(a[2])?);
+                    memory.write(a[1], &bytes)?;
+                    if a[4] != 0 {
+                        write_ip_address(memory, a[4], a[5], source)?;
+                    }
+                    bytes.len() as u64
+                } else {
+                    let bytes = vfs.read(a[0] as i32, bounded(a[2])?)?;
+                    memory.write(a[1], &bytes)?;
+                    if a[4] != 0 {
+                        let peer = vfs.unix_name(a[0] as i32, true)?;
+                        write_unix_address(memory, a[4], a[5], &peer)?;
+                    }
+                    bytes.len() as u64
                 }
-                bytes.len() as u64
             }
             Sendmsg | Recvmsg => {
                 let header = memory.read(a[1], 56)?.to_vec();
-                if abi::read_u64(&header, 32)? != 0 || abi::read_u64(&header, 40)? != 0 {
-                    return Err(ENOTSUP);
-                }
-                if matches!(syscall, Sendmsg) && abi::read_u64(&header, 0)? != 0 {
-                    return Err(ENOTSUP);
-                }
-                let result = self.vectored(
-                    matches!(syscall, Recvmsg),
-                    a[0] as i32,
-                    abi::read_u64(&header, 16)?,
-                    abi::read_u64(&header, 24)?,
-                    memory,
-                    vfs,
-                )?;
-                if matches!(syscall, Recvmsg) {
-                    if abi::read_u64(&header, 0)? != 0 {
-                        let peer = vfs.unix_name(a[0] as i32, true)?;
-                        write_unix_address(memory, abi::read_u64(&header, 0)?, a[1] + 8, &peer)?;
+                let fd = a[0] as i32;
+                if let Some(socket) = network.socket_by_fd(owned_fd(self.pid, fd)) {
+                    let snapshot = network.sockets.get(&socket).cloned().ok_or(EBADF)?;
+                    if matches!(
+                        snapshot.domain,
+                        SocketDomain::RouteNetlink
+                            | SocketDomain::NetfilterNetlink
+                            | SocketDomain::SockDiagNetlink
+                    ) {
+                        if matches!(syscall, Sendmsg) {
+                            let bytes = read_iovecs(
+                                memory,
+                                abi::read_u64(&header, 16)?,
+                                abi::read_u64(&header, 24)?,
+                            )?;
+                            network.netlink_send(socket, &bytes).map_err(net_errno)? as u64
+                        } else {
+                            let bytes = network.netlink_recv(socket).map_err(net_errno)?;
+                            let written = write_iovecs(
+                                memory,
+                                abi::read_u64(&header, 16)?,
+                                abi::read_u64(&header, 24)?,
+                                &bytes,
+                            )?;
+                            memory.write(a[1] + 40, &0u64.to_ne_bytes())?;
+                            memory.write(a[1] + 48, &0u32.to_ne_bytes())?;
+                            written as u64
+                        }
+                    } else if matches!(snapshot.kind, SocketKind::Datagram)
+                        || is_icmp_socket(&snapshot)
+                    {
+                        if is_icmp_socket(&snapshot) {
+                            if matches!(syscall, Sendmsg) {
+                                let mut destination = if abi::read_u64(&header, 0)? != 0 {
+                                    decode_ip_address(
+                                        memory,
+                                        abi::read_u64(&header, 0)?,
+                                        u64::from(abi::read_u32(&header, 8)?),
+                                        snapshot.domain,
+                                    )?
+                                } else {
+                                    snapshot.peer.ok_or(starnix_kernel::EDESTADDRREQ)?
+                                };
+                                let (translated, verdict) = network
+                                    .filter_egress(socket, destination, snapshot.protocol as u8, 0)
+                                    .map_err(net_errno)?;
+                                if verdict != bexos_starnix_net::Verdict::Accept {
+                                    return Err(EACCES);
+                                }
+                                destination = translated;
+                                let bytes = read_iovecs(
+                                    memory,
+                                    abi::read_u64(&header, 16)?,
+                                    abi::read_u64(&header, 24)?,
+                                )?;
+                                let interface =
+                                    match backend_for_socket(network, socket, Some(destination.0))?
+                                    {
+                                        SocketBackend::L2 { interface } => interface,
+                                        SocketBackend::Direct { .. } => return Err(ENOTSUP),
+                                        SocketBackend::Loopback { .. } => {
+                                            return Ok(Outcome::Return(l2.send_loopback_icmp(
+                                                network,
+                                                socket,
+                                                destination.0,
+                                                &bytes,
+                                            )?
+                                                as u64));
+                                        }
+                                    };
+                                return Ok(Outcome::Return(l2.send_icmp(
+                                    interface,
+                                    destination.0,
+                                    &bytes,
+                                )?
+                                    as u64));
+                            }
+                            let state = network.sockets.get_mut(&socket).ok_or(EBADF)?;
+                            if state.queued_packets.is_empty() {
+                                return Err(starnix_kernel::EAGAIN);
+                            }
+                            let (bytes, mut source) =
+                                decode_icmp_frame(&state.queued_packets.remove(0))?;
+                            let protocol = if matches!(snapshot.domain, SocketDomain::Inet6) {
+                                58
+                            } else {
+                                1
+                            };
+                            let (translated, verdict) = network
+                                .filter_ingress(socket, (source, 0), protocol, 0, bytes.len())
+                                .map_err(net_errno)?;
+                            if verdict != bexos_starnix_net::Verdict::Accept {
+                                return Err(EACCES);
+                            }
+                            source = translated.0;
+                            let written = write_iovecs(
+                                memory,
+                                abi::read_u64(&header, 16)?,
+                                abi::read_u64(&header, 24)?,
+                                &bytes,
+                            )?;
+                            if abi::read_u64(&header, 0)? != 0 {
+                                write_ip_address(
+                                    memory,
+                                    abi::read_u64(&header, 0)?,
+                                    a[1] + 8,
+                                    (source, 0),
+                                )?;
+                            }
+                            write_packet_info_control(
+                                memory,
+                                a[1],
+                                network,
+                                socket,
+                                snapshot.receive_packet_info,
+                            )?;
+                            memory.write(a[1] + 48, &0u32.to_ne_bytes())?;
+                            return Ok(Outcome::Return(written as u64));
+                        }
+                        let route_hint = if matches!(syscall, Sendmsg) {
+                            if abi::read_u64(&header, 0)? != 0 {
+                                Some(
+                                    decode_ip_address(
+                                        memory,
+                                        abi::read_u64(&header, 0)?,
+                                        u64::from(abi::read_u32(&header, 8)?),
+                                        snapshot.domain,
+                                    )?
+                                    .0,
+                                )
+                            } else {
+                                snapshot.peer.map(|peer| peer.0)
+                            }
+                        } else {
+                            None
+                        };
+                        ensure_udp(network, l2, socket, route_hint)?;
+                        let control = network.sockets.get(&socket).unwrap().backend_control;
+                        if matches!(syscall, Sendmsg) {
+                            let mut destination = if abi::read_u64(&header, 0)? != 0 {
+                                decode_ip_address(
+                                    memory,
+                                    abi::read_u64(&header, 0)?,
+                                    u64::from(abi::read_u32(&header, 8)?),
+                                    snapshot.domain,
+                                )?
+                            } else {
+                                snapshot.peer.ok_or(starnix_kernel::EDESTADDRREQ)?
+                            };
+                            let (translated, verdict) = network
+                                .filter_egress(
+                                    socket,
+                                    destination,
+                                    17,
+                                    snapshot.local.map_or(0, |local| local.1),
+                                )
+                                .map_err(net_errno)?;
+                            if verdict != bexos_starnix_net::Verdict::Accept {
+                                return Err(EACCES);
+                            }
+                            destination = translated;
+                            let bytes = read_iovecs(
+                                memory,
+                                abi::read_u64(&header, 16)?,
+                                abi::read_u64(&header, 24)?,
+                            )?;
+                            if crate::l2_backend::L2Runtime::is_object(control) {
+                                l2.send_udp(control, &bytes, destination)? as u64
+                            } else {
+                                crate::net_backend::send_udp(control, &bytes, destination)? as u64
+                            }
+                        } else {
+                            let (bytes, mut source) =
+                                if crate::l2_backend::L2Runtime::is_object(control) {
+                                    l2.recv_udp(control)?
+                                } else {
+                                    crate::net_backend::recv_udp(control)?
+                                };
+                            let (translated, verdict) = network
+                                .filter_ingress(
+                                    socket,
+                                    source,
+                                    17,
+                                    snapshot.local.map_or(0, |local| local.1),
+                                    bytes.len(),
+                                )
+                                .map_err(net_errno)?;
+                            if verdict != bexos_starnix_net::Verdict::Accept {
+                                return Err(EACCES);
+                            }
+                            source = translated;
+                            let written = write_iovecs(
+                                memory,
+                                abi::read_u64(&header, 16)?,
+                                abi::read_u64(&header, 24)?,
+                                &bytes,
+                            )?;
+                            if abi::read_u64(&header, 0)? != 0 {
+                                write_ip_address(
+                                    memory,
+                                    abi::read_u64(&header, 0)?,
+                                    a[1] + 8,
+                                    source,
+                                )?;
+                            }
+                            write_packet_info_control(
+                                memory,
+                                a[1],
+                                network,
+                                socket,
+                                snapshot.receive_packet_info,
+                            )?;
+                            memory.write(a[1] + 48, &0u32.to_ne_bytes())?;
+                            written as u64
+                        }
+                    } else {
+                        if abi::read_u64(&header, 0)? != 0 {
+                            return Err(starnix_kernel::EISCONN);
+                        }
+                        self.vectored(
+                            matches!(syscall, Recvmsg),
+                            fd,
+                            abi::read_u64(&header, 16)?,
+                            abi::read_u64(&header, 24)?,
+                            memory,
+                            vfs,
+                        )?
                     }
-                    memory.write(a[1] + 48, &0u32.to_ne_bytes())?;
+                } else {
+                    if abi::read_u64(&header, 32)? != 0 || abi::read_u64(&header, 40)? != 0 {
+                        return Err(ENOTSUP);
+                    }
+                    if matches!(syscall, Sendmsg) && abi::read_u64(&header, 0)? != 0 {
+                        return Err(ENOTSUP);
+                    }
+                    let result = self.vectored(
+                        matches!(syscall, Recvmsg),
+                        fd,
+                        abi::read_u64(&header, 16)?,
+                        abi::read_u64(&header, 24)?,
+                        memory,
+                        vfs,
+                    )?;
+                    if matches!(syscall, Recvmsg) {
+                        if abi::read_u64(&header, 0)? != 0 {
+                            let peer = vfs.unix_name(fd, true)?;
+                            write_unix_address(
+                                memory,
+                                abi::read_u64(&header, 0)?,
+                                a[1] + 8,
+                                &peer,
+                            )?;
+                        }
+                        memory.write(a[1] + 48, &0u32.to_ne_bytes())?;
+                    }
+                    result
                 }
-                result
             }
             Setsockopt => {
-                if a[1] != 1 || !matches!(a[2], 2 | 7 | 8 | 9 | 20 | 21) {
-                    return Err(ENOTSUP);
-                }
-                if a[4] < 4 {
-                    return Err(EINVAL);
+                if let Some(socket) = network.socket_by_fd(owned_fd(self.pid, a[0] as i32)) {
+                    match (a[1], a[2]) {
+                        (1, 25) => {
+                            let length = usize::try_from(a[4]).map_err(|_| EINVAL)?;
+                            if length > 16 {
+                                return Err(EINVAL);
+                            }
+                            let bytes = memory.read(a[3], length)?;
+                            let name =
+                                core::str::from_utf8(bytes.strip_suffix(&[0]).unwrap_or(bytes))
+                                    .map_err(|_| EINVAL)?;
+                            if name.is_empty() {
+                                network
+                                    .sockets
+                                    .get_mut(&socket)
+                                    .ok_or(EBADF)?
+                                    .bound_interface = None;
+                            } else {
+                                network.bind_interface(socket, name).map_err(net_errno)?;
+                            }
+                        }
+                        (1, 2 | 7 | 8 | 9 | 20 | 21) if a[4] >= 4 => {}
+                        (0, 64) => {
+                            let length = bounded(a[4])?;
+                            let bytes = memory.read(a[3], length)?;
+                            network
+                                .replace_iptables_ipv4(socket, bytes)
+                                .map_err(net_errno)?;
+                        }
+                        (0, 8) if a[4] >= 4 => {
+                            let enabled = abi::read_u32(memory.read(a[3], 4)?, 0)? != 0;
+                            network
+                                .set_receive_packet_info(socket, enabled)
+                                .map_err(net_errno)?;
+                        }
+                        (41, 49) if a[4] >= 4 => {
+                            let enabled = abi::read_u32(memory.read(a[3], 4)?, 0)? != 0;
+                            network
+                                .set_receive_packet_info(socket, enabled)
+                                .map_err(net_errno)?;
+                        }
+                        (0, option @ (35 | 36)) if matches!(a[4], 8 | 12) => {
+                            let bytes = memory.read(a[3], a[4] as usize)?;
+                            let group =
+                                IpAddr::V4(Ipv4Addr::new(bytes[0], bytes[1], bytes[2], bytes[3]));
+                            let interface = if bytes.len() == 12 {
+                                let index = u32::from_ne_bytes(bytes[8..12].try_into().unwrap());
+                                (index != 0).then_some(u64::from(index))
+                            } else {
+                                None
+                            };
+                            network
+                                .update_multicast_membership(socket, group, interface, option == 35)
+                                .map_err(net_errno)?;
+                        }
+                        (41, option @ (20 | 21)) if a[4] == 20 => {
+                            let bytes = memory.read(a[3], 20)?;
+                            let group = IpAddr::V6(Ipv6Addr::from(
+                                <[u8; 16]>::try_from(&bytes[..16]).unwrap(),
+                            ));
+                            let index = u32::from_ne_bytes(bytes[16..20].try_into().unwrap());
+                            network
+                                .update_multicast_membership(
+                                    socket,
+                                    group,
+                                    (index != 0).then_some(u64::from(index)),
+                                    option == 20,
+                                )
+                                .map_err(net_errno)?;
+                        }
+                        _ => return Err(ENOTSUP),
+                    }
+                } else {
+                    if a[1] != 1 || !matches!(a[2], 2 | 7 | 8 | 9 | 20 | 21) || a[4] < 4 {
+                        return Err(ENOTSUP);
+                    }
                 }
                 0
             }
             Getsockopt => {
-                if a[1] != 1 || !matches!(a[2], 3 | 4 | 30) {
-                    return Err(ENOTSUP);
-                }
                 let length = abi::read_u32(memory.read(a[4], 4)?, 0)?;
                 if length < 4 {
                     return Err(EINVAL);
                 }
-                let value = match a[2] {
-                    3 => 1u32,
-                    4 => 0,
-                    30 => u32::from(vfs.unix_accepting(a[0] as i32)?),
-                    _ => unreachable!(),
-                };
+                let value =
+                    if let Some(socket) = network.socket_by_fd(owned_fd(self.pid, a[0] as i32)) {
+                        let socket = network.sockets.get(&socket).ok_or(EBADF)?;
+                        match (a[1], a[2]) {
+                            (1, 3) => match socket.kind {
+                                SocketKind::Stream => 1,
+                                SocketKind::Datagram => 2,
+                                SocketKind::Raw => 3,
+                            },
+                            (1, 4) => 0,
+                            (1, 30) => u32::from(socket.listening),
+                            (1, 38) => u32::from(socket.protocol),
+                            (1, 39) => match socket.domain {
+                                SocketDomain::Inet4 => 2,
+                                SocketDomain::Inet6 => 10,
+                                SocketDomain::Packet => 17,
+                                _ => 16,
+                            },
+                            (0, 8) | (41, 49) => u32::from(socket.receive_packet_info),
+                            _ => return Err(ENOTSUP),
+                        }
+                    } else {
+                        if a[1] != 1 || !matches!(a[2], 3 | 4 | 30) {
+                            return Err(ENOTSUP);
+                        }
+                        match a[2] {
+                            3 => 1,
+                            4 => 0,
+                            30 => u32::from(vfs.unix_accepting(a[0] as i32)?),
+                            _ => unreachable!(),
+                        }
+                    };
                 memory.write(a[3], &value.to_ne_bytes())?;
                 memory.write(a[4], &4u32.to_ne_bytes())?;
                 0
@@ -2049,6 +2902,19 @@ impl Dispatcher {
                     self.egid,
                 )
                 .map_err(|_| EINVAL)?;
+                match vfs.get_xattr_path(dirfd, &path, false, "security.capability") {
+                    Ok(value) => {
+                        let (permitted, inheritable, effective) = decode_file_capabilities(&value)?;
+                        network
+                            .task_capabilities
+                            .get_mut(&self.current_tid)
+                            .ok_or(EPERM)?
+                            .apply_executable(permitted, inheritable, effective)
+                            .map_err(net_errno)?;
+                    }
+                    Err(61) => {}
+                    Err(error) => return Err(error),
+                }
                 return Ok(Outcome::Exec {
                     path,
                     image,
@@ -2085,6 +2951,62 @@ impl Dispatcher {
                     stack,
                     tls: abi::read_u64(clone, 56)?,
                 });
+            }
+            Unshare => {
+                const CLONE_NEWNET: u64 = 0x4000_0000;
+                if a[0] != CLONE_NEWNET {
+                    return Err(ENOTSUP);
+                }
+                network
+                    .create_namespace(self.current_tid)
+                    .map_err(net_errno)?;
+                0
+            }
+            Setns => {
+                const CLONE_NEWNET: u64 = 0x4000_0000;
+                if !matches!(a[1], 0 | CLONE_NEWNET) {
+                    return Err(EINVAL);
+                }
+                network
+                    .setns(self.current_tid, owned_fd(self.pid, a[0] as i32))
+                    .map_err(net_errno)?;
+                0
+            }
+            Capget => {
+                let header = memory.read(a[0], 8)?;
+                let version = abi::read_u32(header, 0)?;
+                let pid = abi::read_u32(header, 4)?;
+                if version != 0x2008_0522 || !matches!(pid, 0) && pid != self.current_tid {
+                    return Err(EINVAL);
+                }
+                let capabilities = network
+                    .capability_snapshot(self.current_tid)
+                    .map_err(net_errno)?;
+                let mut data = [0; 24];
+                abi::put_u32(&mut data, 0, capabilities.effective as u32);
+                abi::put_u32(&mut data, 4, capabilities.permitted as u32);
+                abi::put_u32(&mut data, 8, capabilities.inheritable as u32);
+                memory.write(a[1], &data)?;
+                0
+            }
+            Capset => {
+                let header = memory.read(a[0], 8)?;
+                let version = abi::read_u32(header, 0)?;
+                let pid = abi::read_u32(header, 4)?;
+                if version != 0x2008_0522 || pid != 0 {
+                    return Err(EINVAL);
+                }
+                let data = memory.read(a[1], 24)?;
+                let effective = u64::from(abi::read_u32(data, 0)?);
+                let permitted = u64::from(abi::read_u32(data, 4)?);
+                let inheritable = u64::from(abi::read_u32(data, 8)?);
+                network
+                    .task_capabilities
+                    .get_mut(&self.current_tid)
+                    .ok_or(EPERM)?
+                    .set(permitted, effective, inheritable)
+                    .map_err(net_errno)?;
+                0
             }
             Fork => {
                 return Ok(Outcome::Clone {
@@ -2480,7 +3402,12 @@ impl Dispatcher {
         }
     }
 
-    fn ioctl(&mut self, a: [u64; 6], memory: &mut AddressSpace) -> Result<u64, i64> {
+    fn ioctl(
+        &mut self,
+        a: [u64; 6],
+        memory: &mut AddressSpace,
+        network: &mut NetworkState,
+    ) -> Result<u64, i64> {
         match a[1] {
             0x5413 => {
                 let mut out = [0; 8];
@@ -2508,6 +3435,178 @@ impl Dispatcher {
                 Ok(0)
             }
             0x5421 => Ok(0),
+            0x8912 => {
+                let namespace = network
+                    .namespace_for_task(self.current_tid)
+                    .map_err(net_errno)?;
+                let interfaces = &network.namespaces.get(&namespace).ok_or(EINVAL)?.interfaces;
+                let requested = abi::read_u32(memory.read(a[2], 16)?, 0)? as usize;
+                let pointer = abi::read_u64(memory.read(a[2], 16)?, 8)?;
+                let mut records = Vec::new();
+                for interface in interfaces.values() {
+                    let mut record = [0u8; 40];
+                    copy_interface_name(&mut record[..16], &interface.name);
+                    if let Some(address) = interface
+                        .addresses
+                        .iter()
+                        .find(|address| address.address.is_ipv4())
+                    {
+                        record[16..18].copy_from_slice(&2u16.to_ne_bytes());
+                        if let IpAddr::V4(address) = address.address {
+                            record[20..24].copy_from_slice(&address.octets());
+                        }
+                    }
+                    records.extend_from_slice(&record);
+                }
+                records.truncate(requested.min(records.len()));
+                if pointer != 0 {
+                    memory.write(pointer, &records)?;
+                }
+                memory.write(a[2], &(records.len() as u32).to_ne_bytes())?;
+                Ok(0)
+            }
+            0x8910 | 0x8913 | 0x8914 | 0x8915 | 0x8916 | 0x891b | 0x891c | 0x8921 | 0x8922
+            | 0x8927 | 0x8933 => {
+                if matches!(a[1], 0x8914 | 0x8916 | 0x891c | 0x8922) {
+                    network
+                        .require(self.current_tid, bexos_starnix_net::CAP_NET_ADMIN)
+                        .map_err(net_errno)?;
+                }
+                let mut request = memory.read(a[2], 40)?.to_vec();
+                let namespace_id = network
+                    .namespace_for_task(self.current_tid)
+                    .map_err(net_errno)?;
+                let namespace = network.namespaces.get_mut(&namespace_id).ok_or(EINVAL)?;
+                let interface_id = if a[1] == 0x8910 {
+                    u32::from_ne_bytes(request[16..20].try_into().unwrap()) as u64
+                } else {
+                    let end = request[..16]
+                        .iter()
+                        .position(|byte| *byte == 0)
+                        .unwrap_or(16);
+                    let name = core::str::from_utf8(&request[..end]).map_err(|_| EINVAL)?;
+                    namespace
+                        .interfaces
+                        .values()
+                        .find(|interface| interface.name == name)
+                        .map(|interface| interface.id)
+                        .ok_or(starnix_kernel::ENODEV)?
+                };
+                let interface = namespace
+                    .interfaces
+                    .get_mut(&interface_id)
+                    .ok_or(starnix_kernel::ENODEV)?;
+                match a[1] {
+                    0x8910 => copy_interface_name(&mut request[..16], &interface.name),
+                    0x8913 => {
+                        let mut flags = if interface.up { 0x1 | 0x40 } else { 0 };
+                        if matches!(interface.backend, InterfaceBackend::Loopback) {
+                            flags |= 0x8;
+                        }
+                        request[16..18].copy_from_slice(&(flags as u16).to_ne_bytes());
+                    }
+                    0x8914 => {
+                        interface.up =
+                            u16::from_ne_bytes(request[16..18].try_into().unwrap()) & 1 != 0;
+                    }
+                    0x8915 => encode_ifreq_ipv4(
+                        &mut request,
+                        interface
+                            .addresses
+                            .iter()
+                            .find(|address| address.address.is_ipv4())
+                            .map(|address| address.address)
+                            .ok_or(starnix_kernel::EADDRNOTAVAIL)?,
+                    ),
+                    0x8916 => {
+                        if u16::from_ne_bytes(request[16..18].try_into().unwrap()) != 2 {
+                            return Err(EINVAL);
+                        }
+                        let address = IpAddr::V4(Ipv4Addr::new(
+                            request[20],
+                            request[21],
+                            request[22],
+                            request[23],
+                        ));
+                        if let Some(existing) = interface
+                            .addresses
+                            .iter_mut()
+                            .find(|address| address.address.is_ipv4())
+                        {
+                            existing.address = address;
+                        } else if interface.addresses.len() < 16 {
+                            interface.addresses.push(
+                                bexos_starnix_net::IpPrefix::new(address, 32).map_err(net_errno)?,
+                            );
+                        } else {
+                            return Err(starnix_kernel::ENOSPC);
+                        }
+                    }
+                    0x891b => {
+                        let prefix = interface
+                            .addresses
+                            .iter()
+                            .find(|address| address.address.is_ipv4())
+                            .ok_or(starnix_kernel::EADDRNOTAVAIL)?
+                            .prefix_len;
+                        let mask = if prefix == 0 {
+                            0
+                        } else {
+                            u32::MAX << (32 - prefix)
+                        };
+                        encode_ifreq_ipv4(&mut request, IpAddr::V4(Ipv4Addr::from(mask)));
+                    }
+                    0x891c => {
+                        if u16::from_ne_bytes(request[16..18].try_into().unwrap()) != 2 {
+                            return Err(EINVAL);
+                        }
+                        let mask = u32::from_be_bytes([
+                            request[20],
+                            request[21],
+                            request[22],
+                            request[23],
+                        ]);
+                        let prefix = mask.leading_ones() as u8;
+                        if mask
+                            != if prefix == 0 {
+                                0
+                            } else {
+                                u32::MAX << (32 - prefix)
+                            }
+                        {
+                            return Err(EINVAL);
+                        }
+                        interface
+                            .addresses
+                            .iter_mut()
+                            .find(|address| address.address.is_ipv4())
+                            .ok_or(starnix_kernel::EADDRNOTAVAIL)?
+                            .prefix_len = prefix;
+                    }
+                    0x8921 => {
+                        request[16..20].copy_from_slice(&(interface.mtu as i32).to_ne_bytes())
+                    }
+                    0x8922 => {
+                        let mtu = i32::from_ne_bytes(request[16..20].try_into().unwrap());
+                        if !(68..=65_536).contains(&mtu) {
+                            return Err(EINVAL);
+                        }
+                        interface.mtu = mtu as u32;
+                    }
+                    0x8927 => {
+                        request[16..18].copy_from_slice(&1u16.to_ne_bytes());
+                        if let InterfaceBackend::L2 { mac, .. } = &interface.backend {
+                            request[18..24].copy_from_slice(mac);
+                        } else {
+                            request[18..24].fill(0);
+                        }
+                    }
+                    0x8933 => request[16..20].copy_from_slice(&(interface.id as i32).to_ne_bytes()),
+                    _ => unreachable!(),
+                }
+                memory.write(a[2], &request)?;
+                Ok(0)
+            }
             _ => Err(ENOTSUP),
         }
     }
@@ -2566,6 +3665,19 @@ fn write_epoll_events(
         abi::put_u64(&mut bytes, offset + data_offset, *data);
     }
     memory.write(address, &bytes)
+}
+
+fn net_errno(error: NetError) -> i64 {
+    match error {
+        NetError::InvalidArgument | NetError::CorruptSnapshot => EINVAL,
+        NetError::NotFound => ENOENT,
+        NetError::AlreadyExists => EEXIST,
+        NetError::PermissionDenied => EPERM,
+        NetError::Unsupported | NetError::UnsupportedSnapshot => ENOTSUP,
+        NetError::ResourceExhausted => ENOMEM,
+        NetError::WouldBlock => starnix_kernel::EAGAIN,
+        NetError::NetworkUnreachable => starnix_kernel::ENETUNREACH,
+    }
 }
 
 fn decode_itimerspec(memory: &AddressSpace, address: u64) -> Result<(u64, u64), i64> {
@@ -2756,6 +3868,536 @@ fn decode_altstack(bytes: &[u8]) -> Result<AltStack, i64> {
         flags: abi::read_u32(bytes, 8)?,
         size: abi::read_u64(bytes, 16)?,
     })
+}
+
+fn decode_file_capabilities(bytes: &[u8]) -> Result<(u64, u64, bool), i64> {
+    if bytes.len() < 12 {
+        return Err(EINVAL);
+    }
+    let magic = u32::from_le_bytes(bytes[..4].try_into().unwrap());
+    let revision = magic & 0xff00_0000;
+    let effective = magic & 1 != 0;
+    let permitted_low = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as u64;
+    let inheritable_low = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as u64;
+    match revision {
+        0x0100_0000 if bytes.len() == 12 => Ok((permitted_low, inheritable_low, effective)),
+        0x0200_0000 | 0x0300_0000 if bytes.len() >= 20 => {
+            let permitted_high = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as u64;
+            let inheritable_high = u32::from_le_bytes(bytes[16..20].try_into().unwrap()) as u64;
+            Ok((
+                permitted_low | permitted_high << 32,
+                inheritable_low | inheritable_high << 32,
+                effective,
+            ))
+        }
+        _ => Err(EINVAL),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SocketBackend {
+    Direct {
+        provider: u64,
+        host_interface: Option<u64>,
+    },
+    L2 {
+        interface: u64,
+    },
+    Loopback {
+        namespace: u64,
+    },
+}
+
+fn is_icmp_socket(socket: &bexos_starnix_net::SocketState) -> bool {
+    matches!(
+        (socket.domain, socket.protocol),
+        (SocketDomain::Inet4, 1) | (SocketDomain::Inet6, 58)
+    ) && matches!(socket.kind, SocketKind::Datagram | SocketKind::Raw)
+}
+
+fn backend_for_socket(
+    network: &NetworkState,
+    socket: u64,
+    destination: Option<IpAddr>,
+) -> Result<SocketBackend, i64> {
+    let socket = network.sockets.get(&socket).ok_or(EBADF)?;
+    let namespace = network
+        .namespaces
+        .get(&socket.namespace)
+        .ok_or(starnix_kernel::ENETUNREACH)?;
+    let interface_id = if let Some(bound) = socket.bound_interface {
+        bound
+    } else if let Some(destination) = destination {
+        namespace
+            .route(destination, None)
+            .map(|route| route.interface_id)
+            .ok_or(starnix_kernel::ENETUNREACH)?
+    } else {
+        namespace
+            .interfaces
+            .values()
+            .find(|interface| {
+                interface.up && !matches!(interface.backend, InterfaceBackend::Loopback)
+            })
+            .map(|interface| interface.id)
+            .ok_or(starnix_kernel::ENETUNREACH)?
+    };
+    match &namespace
+        .interfaces
+        .get(&interface_id)
+        .ok_or(starnix_kernel::ENETUNREACH)?
+        .backend
+    {
+        InterfaceBackend::Direct {
+            provider,
+            host_interface_id,
+            ..
+        } => Ok(SocketBackend::Direct {
+            provider: *provider,
+            host_interface: (*host_interface_id != 0).then_some(*host_interface_id),
+        }),
+        InterfaceBackend::L2 { .. } => Ok(SocketBackend::L2 {
+            interface: interface_id,
+        }),
+        InterfaceBackend::Loopback => Ok(SocketBackend::Loopback {
+            namespace: socket.namespace,
+        }),
+        _ => Err(ENOTSUP),
+    }
+}
+
+fn ensure_udp(
+    network: &mut NetworkState,
+    l2: &mut crate::l2_backend::L2Runtime,
+    socket: u64,
+    destination: Option<IpAddr>,
+) -> Result<(), i64> {
+    let snapshot = network.sockets.get(&socket).cloned().ok_or(EBADF)?;
+    if snapshot.backend_control != 0 {
+        return Ok(());
+    }
+    if !matches!(snapshot.kind, SocketKind::Datagram) {
+        return Err(ENOTSUP);
+    }
+    let local = snapshot
+        .local
+        .unwrap_or_else(|| unspecified(snapshot.domain));
+    let route_destination = destination
+        .or_else(|| snapshot.peer.map(|peer| peer.0))
+        .or_else(|| (!local.0.is_unspecified()).then_some(local.0));
+    let control = match backend_for_socket(network, socket, route_destination)? {
+        SocketBackend::Direct {
+            provider,
+            host_interface,
+        } => crate::net_backend::create_udp(provider, local, snapshot.nonblocking, host_interface)?,
+        SocketBackend::L2 { interface } => l2.create_udp(interface, local)?,
+        SocketBackend::Loopback { namespace } => l2.create_loopback_udp(namespace, local)?,
+    };
+    network
+        .sockets
+        .get_mut(&socket)
+        .ok_or(EBADF)?
+        .backend_control = control;
+    Ok(())
+}
+
+fn owned_fd(pid: u32, fd: i32) -> u64 {
+    (u64::from(pid) << 32) | u64::from(fd as u32)
+}
+
+fn closing_backend(network: &NetworkState, fd: u64) -> Option<u64> {
+    let socket = network.socket_by_fd(fd)?;
+    let state = network.sockets.get(&socket)?;
+    (state.linux_fds.len() == 1 && state.backend_control != 0).then_some(state.backend_control)
+}
+
+fn close_backend(l2: &mut crate::l2_backend::L2Runtime, backend: Option<u64>) {
+    let Some(backend) = backend else { return };
+    if crate::l2_backend::L2Runtime::is_object(backend) {
+        l2.close(backend);
+    } else {
+        let _ = bexos_userspace::Memory::close(backend);
+    }
+}
+
+fn bind_netns_path(
+    network: &mut NetworkState,
+    tid: u32,
+    pid: u32,
+    fd: i32,
+    path: &str,
+) -> Result<(), i64> {
+    if !path.ends_with("/ns/net") || !path.starts_with("/proc/") {
+        return Ok(());
+    }
+    let owner = path
+        .strip_prefix("/proc/")
+        .and_then(|path| path.strip_suffix("/ns/net"))
+        .ok_or(EINVAL)?;
+    let target_tid = match owner {
+        "self" | "thread-self" => tid,
+        value => value.parse::<u32>().map_err(|_| EINVAL)?,
+    };
+    let namespace = network.namespace_for_task(target_tid).map_err(net_errno)?;
+    network
+        .bind_namespace_fd(owned_fd(pid, fd), namespace)
+        .map_err(net_errno)
+}
+
+fn clone_or_close_netns_fd(
+    network: &mut NetworkState,
+    source: u64,
+    target: u64,
+) -> Result<(), i64> {
+    if network.namespace_fds.contains_key(&source) {
+        network
+            .clone_namespace_fd(source, target)
+            .map_err(net_errno)
+    } else if network.namespace_fds.contains_key(&target) {
+        network.close_namespace_fd(target).map_err(net_errno)
+    } else {
+        Ok(())
+    }
+}
+
+fn refresh_network_files(vfs: &mut Vfs, network: &NetworkState, tid: u32, pid: u32) {
+    let Ok(namespace_id) = network.namespace_for_task(tid) else {
+        return;
+    };
+    let Some(namespace) = network.namespaces.get(&namespace_id) else {
+        return;
+    };
+    vfs.set_synthetic_directory(
+        "/proc/net",
+        vec!["dev".into(), "if_inet6".into(), "route".into()],
+    );
+    let mut dev = String::from(
+        "Inter-|   Receive                                                |  Transmit\n face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n",
+    );
+    let mut route = String::from(
+        "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n",
+    );
+    let mut inet6 = String::new();
+    let mut interface_names = Vec::new();
+    for interface in namespace.interfaces.values() {
+        interface_names.push(interface.name.clone());
+        dev.push_str(&format!(
+            "{:>6}: {:8} {:7}    0    0    0     0          0         0 {:8} {:7}    0    0    0     0       0          0\n",
+            interface.name, 0, 0, 0, 0
+        ));
+        for address in &interface.addresses {
+            if let IpAddr::V6(ipv6) = address.address {
+                let hex = ipv6
+                    .octets()
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>();
+                inet6.push_str(&format!(
+                    "{hex} {:02x} {:02x} 00 80 {}\n",
+                    interface.id, address.prefix_len, interface.name
+                ));
+            }
+        }
+        vfs.set_synthetic(
+            &format!("/sys/class/net/{}/ifindex", interface.name),
+            format!("{}\n", interface.id).into_bytes(),
+        );
+        vfs.set_synthetic(
+            &format!("/sys/class/net/{}/mtu", interface.name),
+            format!("{}\n", interface.mtu).into_bytes(),
+        );
+        vfs.set_synthetic(
+            &format!("/sys/class/net/{}/operstate", interface.name),
+            if interface.up {
+                b"up\n".to_vec()
+            } else {
+                b"down\n".to_vec()
+            },
+        );
+        let mac = match &interface.backend {
+            InterfaceBackend::L2 { mac, .. } => *mac,
+            _ => [0; 6],
+        };
+        vfs.set_synthetic(
+            &format!("/sys/class/net/{}/address", interface.name),
+            format!(
+                "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+            )
+            .into_bytes(),
+        );
+        vfs.set_synthetic_directory(
+            &format!("/sys/class/net/{}", interface.name),
+            vec![
+                "address".into(),
+                "ifindex".into(),
+                "mtu".into(),
+                "operstate".into(),
+            ],
+        );
+    }
+    for item in &namespace.routes {
+        if let (IpAddr::V4(destination), Some(interface)) = (
+            item.destination.address,
+            namespace.interfaces.get(&item.interface_id),
+        ) {
+            let gateway = match item.gateway {
+                Some(IpAddr::V4(value)) => u32::from_le_bytes(value.octets()),
+                _ => 0,
+            };
+            let mask = if item.destination.prefix_len == 0 {
+                0
+            } else {
+                u32::MAX << (32 - item.destination.prefix_len)
+            };
+            route.push_str(&format!(
+                "{}\t{:08X}\t{:08X}\t0003\t0\t0\t{}\t{:08X}\t0\t{}\t0\t0\n",
+                interface.name,
+                u32::from_le_bytes(destination.octets()),
+                gateway,
+                item.metric,
+                u32::from_be(mask),
+                interface.mtu
+            ));
+        }
+    }
+    vfs.set_synthetic("/proc/net/dev", dev.into_bytes());
+    vfs.set_synthetic("/proc/net/route", route.into_bytes());
+    vfs.set_synthetic("/proc/net/if_inet6", inet6.into_bytes());
+    let resolv = namespace
+        .dns_servers
+        .iter()
+        .map(|server| format!("nameserver {server}\n"))
+        .collect::<String>();
+    vfs.set_synthetic("/etc/resolv.conf", resolv.into_bytes());
+    vfs.set_synthetic_directory("/sys/class/net", interface_names);
+    for owner in [
+        "self".to_string(),
+        "thread-self".to_string(),
+        pid.to_string(),
+    ] {
+        vfs.set_synthetic_directory(&format!("/proc/{owner}/ns"), vec!["net".into()]);
+        vfs.set_synthetic(
+            &format!("/proc/{owner}/ns/net"),
+            format!("net:[{namespace_id}]\n").into_bytes(),
+        );
+    }
+}
+
+fn unspecified(domain: SocketDomain) -> (IpAddr, u16) {
+    match domain {
+        SocketDomain::Inet6 => (IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
+        _ => (IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+    }
+}
+
+fn decode_icmp_frame(frame: &[u8]) -> Result<(Vec<u8>, IpAddr), i64> {
+    if frame.len() >= 42 && frame[12..14] == 0x0800u16.to_be_bytes() && frame[14] >> 4 == 4 {
+        let header = usize::from(frame[14] & 0x0f) * 4;
+        let total = u16::from_be_bytes([frame[16], frame[17]]) as usize;
+        if header < 20 || frame[23] != 1 || total < header + 8 || frame.len() < 14 + total {
+            return Err(starnix_kernel::EIO);
+        }
+        return Ok((
+            frame[14 + header..14 + total].to_vec(),
+            IpAddr::V4(Ipv4Addr::new(frame[26], frame[27], frame[28], frame[29])),
+        ));
+    }
+    if frame.len() >= 62 && frame[12..14] == 0x86ddu16.to_be_bytes() && frame[14] >> 4 == 6 {
+        let payload = u16::from_be_bytes([frame[18], frame[19]]) as usize;
+        if frame[20] != 58 || payload < 8 || frame.len() < 54 + payload {
+            return Err(starnix_kernel::EIO);
+        }
+        return Ok((
+            frame[54..54 + payload].to_vec(),
+            IpAddr::V6(Ipv6Addr::from(
+                <[u8; 16]>::try_from(&frame[22..38]).unwrap(),
+            )),
+        ));
+    }
+    Err(starnix_kernel::EIO)
+}
+
+fn decode_ip_address(
+    memory: &AddressSpace,
+    pointer: u64,
+    length: u64,
+    domain: SocketDomain,
+) -> Result<(IpAddr, u16), i64> {
+    let family = match domain {
+        SocketDomain::Inet4 => 2u16,
+        SocketDomain::Inet6 => 10,
+        _ => return Err(EAFNOSUPPORT),
+    };
+    let required = if family == 2 { 16 } else { 28 };
+    if pointer == 0 || length < required {
+        return Err(EINVAL);
+    }
+    let bytes = memory.read(pointer, required as usize)?;
+    if u16::from_ne_bytes(bytes[..2].try_into().unwrap()) != family {
+        return Err(EAFNOSUPPORT);
+    }
+    let port = u16::from_be_bytes(bytes[2..4].try_into().unwrap());
+    Ok(if family == 2 {
+        (
+            IpAddr::V4(Ipv4Addr::new(bytes[4], bytes[5], bytes[6], bytes[7])),
+            port,
+        )
+    } else {
+        (
+            IpAddr::V6(Ipv6Addr::from(<[u8; 16]>::try_from(&bytes[8..24]).unwrap())),
+            port,
+        )
+    })
+}
+
+fn write_ip_address(
+    memory: &mut AddressSpace,
+    pointer: u64,
+    length_pointer: u64,
+    address: (IpAddr, u16),
+) -> Result<(), i64> {
+    if pointer == 0 || length_pointer == 0 {
+        return Err(EINVAL);
+    }
+    let mut bytes = match address.0 {
+        IpAddr::V4(ip) => {
+            let mut bytes = vec![0; 16];
+            bytes[..2].copy_from_slice(&2u16.to_ne_bytes());
+            bytes[2..4].copy_from_slice(&address.1.to_be_bytes());
+            bytes[4..8].copy_from_slice(&ip.octets());
+            bytes
+        }
+        IpAddr::V6(ip) => {
+            let mut bytes = vec![0; 28];
+            bytes[..2].copy_from_slice(&10u16.to_ne_bytes());
+            bytes[2..4].copy_from_slice(&address.1.to_be_bytes());
+            bytes[8..24].copy_from_slice(&ip.octets());
+            bytes
+        }
+    };
+    let supplied = abi::read_u32(memory.read(length_pointer, 4)?, 0)? as usize;
+    let actual = bytes.len();
+    bytes.truncate(supplied.min(actual));
+    memory.write(pointer, &bytes)?;
+    memory.write(length_pointer, &(actual as u32).to_ne_bytes())?;
+    Ok(())
+}
+
+fn write_packet_info_control(
+    memory: &mut AddressSpace,
+    message_header: u64,
+    network: &NetworkState,
+    socket: u64,
+    enabled: bool,
+) -> Result<(), i64> {
+    let header = memory.read(message_header, 56)?.to_vec();
+    let pointer = abi::read_u64(&header, 32)?;
+    let capacity = abi::read_u64(&header, 40)? as usize;
+    if !enabled || pointer == 0 || capacity == 0 {
+        memory.write(message_header + 40, &0u64.to_ne_bytes())?;
+        return Ok(());
+    }
+    let state = network.sockets.get(&socket).ok_or(EBADF)?;
+    let (interface, destination) = network.packet_info(socket).map_err(net_errno)?;
+    let mut control = Vec::new();
+    match destination {
+        IpAddr::V4(address) => {
+            // cmsghdr followed by Linux in_pktinfo. cmsg_len excludes the
+            // trailing alignment but includes the header and payload.
+            control.extend_from_slice(&28u64.to_ne_bytes());
+            control.extend_from_slice(&0i32.to_ne_bytes()); // IPPROTO_IP
+            control.extend_from_slice(&8i32.to_ne_bytes()); // IP_PKTINFO
+            control.extend_from_slice(&(interface as u32).to_ne_bytes());
+            control.extend_from_slice(&address.octets());
+            control.extend_from_slice(&address.octets());
+            control.resize(32, 0);
+        }
+        IpAddr::V6(address) => {
+            control.extend_from_slice(&36u64.to_ne_bytes());
+            control.extend_from_slice(&41i32.to_ne_bytes()); // IPPROTO_IPV6
+            control.extend_from_slice(&50i32.to_ne_bytes()); // IPV6_PKTINFO
+            control.extend_from_slice(&address.octets());
+            control.extend_from_slice(&(interface as u32).to_ne_bytes());
+            control.resize(40, 0);
+        }
+    }
+    if (matches!(state.domain, SocketDomain::Inet4) && control.len() != 32)
+        || (matches!(state.domain, SocketDomain::Inet6) && control.len() != 40)
+    {
+        return Err(EINVAL);
+    }
+    let written = capacity.min(control.len());
+    memory.write(pointer, &control[..written])?;
+    memory.write(message_header + 40, &(written as u64).to_ne_bytes())?;
+    if written < control.len() {
+        let flags = abi::read_u32(&header, 48)? | 0x8; // MSG_CTRUNC
+        memory.write(message_header + 48, &flags.to_ne_bytes())?;
+    }
+    Ok(())
+}
+
+fn format_socket_address(address: (IpAddr, u16)) -> String {
+    match address.0 {
+        IpAddr::V4(ip) => format!("{ip}:{}", address.1),
+        IpAddr::V6(ip) => format!("[{ip}]:{}", address.1),
+    }
+}
+
+fn read_iovecs(memory: &AddressSpace, address: u64, count: u64) -> Result<Vec<u8>, i64> {
+    if count > 64 {
+        return Err(EINVAL);
+    }
+    let table = memory.read(address, count as usize * 16)?;
+    let mut output = Vec::new();
+    for index in 0..count as usize {
+        let pointer = abi::read_u64(table, index * 16)?;
+        let length = bounded(abi::read_u64(table, index * 16 + 8)?)?;
+        if output.len().checked_add(length).ok_or(EINVAL)? > 65_507 {
+            return Err(EINVAL);
+        }
+        output.extend_from_slice(memory.read(pointer, length)?);
+    }
+    Ok(output)
+}
+
+fn write_iovecs(
+    memory: &mut AddressSpace,
+    address: u64,
+    count: u64,
+    bytes: &[u8],
+) -> Result<usize, i64> {
+    if count > 64 {
+        return Err(EINVAL);
+    }
+    let table = memory.read(address, count as usize * 16)?.to_vec();
+    let mut written = 0;
+    for index in 0..count as usize {
+        if written == bytes.len() {
+            break;
+        }
+        let pointer = abi::read_u64(&table, index * 16)?;
+        let length = bounded(abi::read_u64(&table, index * 16 + 8)?)?;
+        let take = length.min(bytes.len() - written);
+        memory.write(pointer, &bytes[written..written + take])?;
+        written += take;
+    }
+    Ok(written)
+}
+
+fn copy_interface_name(output: &mut [u8], name: &str) {
+    output.fill(0);
+    let bytes = name.as_bytes();
+    let length = bytes.len().min(output.len().saturating_sub(1));
+    output[..length].copy_from_slice(&bytes[..length]);
+}
+
+fn encode_ifreq_ipv4(output: &mut [u8], address: IpAddr) {
+    output[16..32].fill(0);
+    output[16..18].copy_from_slice(&2u16.to_ne_bytes());
+    if let IpAddr::V4(address) = address {
+        output[20..24].copy_from_slice(&address.octets());
+    }
 }
 
 #[cfg(test)]

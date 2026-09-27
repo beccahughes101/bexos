@@ -1,8 +1,8 @@
 syntax = "proto3";
 package bexos.container;
 
-// Durable container configuration. The offline profile deliberately has no
-// network namespace or socket-provider field.
+// Durable container configuration. Version 1 records are offline. Version 2
+// records may contain ordered, policy-authorized network attachments.
 message ContainerSpec {
   uint32 version = 1;
   string container_id = 2;
@@ -16,6 +16,12 @@ message ContainerSpec {
   Resources resources = 10;
   bool readonly_rootfs = 11;
   bytes manifest_digest = 12;
+  repeated NetworkAttachment network_attachments = 13;
+}
+
+message NetworkAttachment {
+  string profile = 1;
+  string interface_name = 2;
 }
 
 message ImageReference {

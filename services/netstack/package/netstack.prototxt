@@ -160,6 +160,9 @@ services_exposed {
   method_ordinals: 7
   method_ordinals: 8
   method_ordinals: 9
+  method_ordinals: 10
+  method_ordinals: 11
+  method_ordinals: 12
  }
 }
 services_exposed {
@@ -177,6 +180,9 @@ services_exposed {
   method_ordinals: 4
   method_ordinals: 5
   method_ordinals: 6
+  method_ordinals: 7
+  method_ordinals: 8
+  method_ordinals: 9
  }
 }
 services_consumed {

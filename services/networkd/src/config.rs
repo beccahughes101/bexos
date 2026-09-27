@@ -24,6 +24,49 @@ pub struct BootConfig {
     pub nat_enabled: bool,
     pub nat_config: Vec<u8>,
     pub nat_artifact: ExtensionArtifactConfig,
+    pub workload_profiles: Vec<WorkloadProfileConfig>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkloadMode {
+    DirectProvider,
+    VirtualL2,
+}
+
+#[derive(Clone, Debug)]
+pub struct WorkloadPackageGrant {
+    pub package_id: String,
+    pub signer: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct WorkloadOciGrant {
+    pub registry_host: String,
+    pub repository: String,
+    pub manifest_digest: [u8; 32],
+}
+
+#[derive(Clone, Debug)]
+pub struct WorkloadProfileConfig {
+    pub name: String,
+    pub mode: WorkloadMode,
+    pub isolation_group: String,
+    pub domain: String,
+    pub physical_interface: u64,
+    pub physical_selector: String,
+    pub vlan_id: u16,
+    pub mtu: u32,
+    pub rx_queue_depth: u32,
+    pub tx_queue_depth: u32,
+    pub addressing: u8,
+    pub static_addresses: Vec<(IpAddress, u8)>,
+    pub gateways: Vec<(IpAddress, u8)>,
+    pub dns_servers: Vec<IpAddress>,
+    pub max_instances: u32,
+    pub allow_raw: bool,
+    pub allow_promiscuous: bool,
+    pub package_grants: Vec<WorkloadPackageGrant>,
+    pub oci_grants: Vec<WorkloadOciGrant>,
 }
 
 #[derive(Clone, Debug)]
@@ -129,7 +172,7 @@ impl BootConfig {
             return Err(Error::InvalidData);
         }
         let version = r.word()?;
-        if !matches!(version, 1 | 2) {
+        if !matches!(version, 1 | 2 | 3) {
             return Err(Error::UnsupportedVersion);
         }
         let instance_id: String = r.text(64)?.into();
@@ -216,6 +259,7 @@ impl BootConfig {
         let mut nat_enabled = false;
         let mut nat_config = Vec::new();
         let mut nat_artifact = ExtensionArtifactConfig::default();
+        let mut workload_profiles = Vec::new();
         if version >= 2 {
             for _ in 0..r.count(256)? {
                 let id = r.word()?;
@@ -270,6 +314,86 @@ impl BootConfig {
             nat_config = r.bytes(65_536)?.to_vec();
             nat_artifact = extension_artifact(&mut r)?;
         }
+        if version >= 3 {
+            for _ in 0..r.count(64)? {
+                let name: String = r.text(64)?.into();
+                let mode = match r.word()? {
+                    1 => WorkloadMode::DirectProvider,
+                    2 => WorkloadMode::VirtualL2,
+                    _ => return Err(Error::InvalidData),
+                };
+                let isolation_group: String = r.text(64)?.into();
+                let domain: String = r.text(64)?.into();
+                let selector = r.text(128)?;
+                let physical_interface = if selector.is_empty() {
+                    0
+                } else {
+                    bexos_network_policy::selector_id(selector).ok_or(Error::InvalidData)?
+                };
+                let vlan_id = u16::try_from(r.word()?).map_err(|_| Error::InvalidData)?;
+                let mtu = word_u32(&mut r)?;
+                let rx_queue_depth = word_u32(&mut r)?;
+                let tx_queue_depth = word_u32(&mut r)?;
+                let addressing = u8::try_from(r.word()?).map_err(|_| Error::InvalidData)?;
+                let mut static_addresses = Vec::new();
+                for _ in 0..r.count(16)? {
+                    static_addresses.push((
+                        ip(r.bytes(16)?)?,
+                        u8::try_from(r.word()?).map_err(|_| Error::InvalidData)?,
+                    ));
+                }
+                let mut gateways = Vec::new();
+                for _ in 0..r.count(8)? {
+                    gateways.push((
+                        ip(r.bytes(16)?)?,
+                        u8::try_from(r.word()?).map_err(|_| Error::InvalidData)?,
+                    ));
+                }
+                let mut dns_servers = Vec::new();
+                for _ in 0..r.count(8)? {
+                    dns_servers.push(ip(r.bytes(16)?)?);
+                }
+                let max_instances = word_u32(&mut r)?;
+                let allow_raw = r.flag()?;
+                let allow_promiscuous = r.flag()?;
+                let mut package_grants = Vec::new();
+                for _ in 0..r.count(64)? {
+                    package_grants.push(WorkloadPackageGrant {
+                        package_id: r.text(128)?.into(),
+                        signer: r.text(128)?.into(),
+                    });
+                }
+                let mut oci_grants = Vec::new();
+                for _ in 0..r.count(64)? {
+                    oci_grants.push(WorkloadOciGrant {
+                        registry_host: r.text(128)?.into(),
+                        repository: r.text(128)?.into(),
+                        manifest_digest: r.bytes(32)?.try_into().map_err(|_| Error::InvalidData)?,
+                    });
+                }
+                workload_profiles.push(WorkloadProfileConfig {
+                    name,
+                    mode,
+                    isolation_group,
+                    domain,
+                    physical_interface,
+                    physical_selector: selector.into(),
+                    vlan_id,
+                    mtu,
+                    rx_queue_depth,
+                    tx_queue_depth,
+                    addressing,
+                    static_addresses,
+                    gateways,
+                    dns_servers,
+                    max_instances,
+                    allow_raw,
+                    allow_promiscuous,
+                    package_grants,
+                    oci_grants,
+                });
+            }
+        }
         r.finish()?;
         if instance_id.is_empty()
             || domains.is_empty()
@@ -295,6 +419,16 @@ impl BootConfig {
             || domains
                 .iter()
                 .any(|domain| domain.system_default && domain.name != "system_default")
+            || workload_profiles.iter().any(|profile| {
+                profile.name.is_empty()
+                    || profile.max_instances == 0
+                    || profile.mtu < 576
+                    || profile.mtu > 9216
+                    || (profile.mode == WorkloadMode::DirectProvider
+                        && !domains.iter().any(|domain| domain.name == profile.domain))
+                    || (profile.mode == WorkloadMode::VirtualL2
+                        && profile.isolation_group != instance_id)
+            })
         {
             return Err(Error::InvalidData);
         }
@@ -314,6 +448,7 @@ impl BootConfig {
             nat_enabled,
             nat_config,
             nat_artifact,
+            workload_profiles,
         })
     }
 }

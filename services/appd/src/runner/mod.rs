@@ -88,6 +88,7 @@ pub struct LaunchResult {
 pub enum LaunchError {
     UnsupportedRunner(String),
     MissingRunnerOptions,
+    InvalidElfOptions,
     InvalidWasmOptions,
     InvalidNixOptions,
     LibraryPackageNotLaunchable,

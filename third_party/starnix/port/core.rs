@@ -171,6 +171,8 @@ pub enum Syscall {
     Setfsuid,
     Setfsgid,
     Setgroups,
+    Capget,
+    Capset,
     Getppid,
     Getpgid,
     Getpgrp,
@@ -202,6 +204,8 @@ pub enum Syscall {
     Rseq,
     Clone,
     Clone3,
+    Unshare,
+    Setns,
     Fork,
     Vfork,
     Wait4,
@@ -248,6 +252,7 @@ impl Syscall {
                 113 => Setreuid, 114 => Setregid, 116 => Setgroups,
                 117 => Setresuid, 118 => Getresuid, 119 => Setresgid,
                 120 => Getresgid, 121 => Getpgid, 122 => Setfsuid, 123 => Setfsgid,
+                125 => Capget, 126 => Capset,
                 127 => RtSigpending, 130 => RtSigsuspend, 131 => Sigaltstack, 137 => Statfs,
                 138 => Fstatfs, 140 => Getpriority, 141 => Setpriority,
                 142 => SchedSetparam, 143 => SchedGetparam,
@@ -269,11 +274,12 @@ impl Syscall {
                 262 => NewFstatAt, 263 => UnlinkAt, 264 => RenameAt,
                 265 => LinkAt, 266 => SymlinkAt, 267 => ReadlinkAt, 268 => FchmodAt,
                 269 => FaccessAt, 270 => Pselect6, 271 => Ppoll,
+                272 => Unshare,
                 273 => SetRobustList, 274 => GetRobustList,
                 281 => EpollPwait, 283 => TimerfdCreate,
                 286 => TimerfdSettime, 287 => TimerfdGettime, 288 => Accept4,
                 290 => Eventfd2, 291 => EpollCreate1, 292 => Dup3, 293 => Pipe2,
-                295 => Preadv, 296 => Pwritev, 302 => Prlimit64, 309 => Getcpu,
+                295 => Preadv, 296 => Pwritev, 302 => Prlimit64, 308 => Setns, 309 => Getcpu,
                 316 => RenameAt2, 318 => Getrandom,
                 322 => ExecveAt, 324 => Membarrier, 332 => Statx,
                 327 => Preadv2, 328 => Pwritev2, 334 => Rseq,
@@ -299,8 +305,8 @@ impl Syscall {
                 72 => Pselect6, 73 => Ppoll, 78 => ReadlinkAt,
                 79 => NewFstatAt, 80 => Fstat, 82 => Fsync,
                 83 => Fdatasync, 85 => TimerfdCreate, 86 => TimerfdSettime,
-                87 => TimerfdGettime, 93 => Exit, 94 => ExitGroup,
-                96 => SetTidAddress, 98 => Futex, 99 => SetRobustList,
+                87 => TimerfdGettime, 90 => Capget, 91 => Capset, 93 => Exit, 94 => ExitGroup,
+                96 => SetTidAddress, 97 => Unshare, 98 => Futex, 99 => SetRobustList,
                 100 => GetRobustList,
                 101 => Nanosleep, 113 => ClockGettime, 114 => ClockGetres,
                 115 => ClockNanosleep, 118 => SchedSetparam,
@@ -329,7 +335,7 @@ impl Syscall {
                 211 => Sendmsg, 212 => Recvmsg, 214 => Brk, 215 => Munmap, 216 => Mremap,
                 220 => Clone, 221 => Execve,
                 222 => Mmap, 223 => Fadvise64, 226 => Mprotect, 227 => Msync,
-                233 => Madvise, 242 => Accept4, 261 => Prlimit64, 276 => RenameAt2,
+                233 => Madvise, 242 => Accept4, 261 => Prlimit64, 268 => Setns, 276 => RenameAt2,
                 278 => Getrandom, 286 => Preadv2, 287 => Pwritev2,
                 260 => Wait4, 281 => ExecveAt, 283 => Membarrier, 291 => Statx, 293 => Rseq,
                 435 => Clone3,
@@ -358,6 +364,7 @@ pub const EISDIR: i64 = 21;
 pub const EINVAL: i64 = 22;
 pub const EMFILE: i64 = 24;
 pub const ENOSPC: i64 = 28;
+pub const ENODEV: i64 = 19;
 pub const EPIPE: i64 = 32;
 pub const EDEADLK: i64 = 35;
 pub const ESPIPE: i64 = 29;
@@ -369,10 +376,13 @@ pub const ELOOP: i64 = 40;
 pub const ERANGE: i64 = 34;
 pub const ENOTSUP: i64 = 95;
 pub const EAFNOSUPPORT: i64 = 97;
+pub const ENETUNREACH: i64 = 101;
 pub const ETIMEDOUT: i64 = 110;
 pub const EOWNERDEAD: i64 = 130;
 pub const ENOTSOCK: i64 = 88;
+pub const EDESTADDRREQ: i64 = 89;
 pub const EADDRINUSE: i64 = 98;
+pub const EADDRNOTAVAIL: i64 = 99;
 pub const EISCONN: i64 = 106;
 pub const ENOTCONN: i64 = 107;
 pub const ECONNREFUSED: i64 = 111;

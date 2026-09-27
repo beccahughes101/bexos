@@ -37,8 +37,13 @@ fn encode_desired(w: &mut Encoder, value: &DesiredSpec) {
     w.word(value.resources.memory_limit_bytes);
     w.word(value.resources.process_limit.into());
     w.word(u64::from(value.readonly_rootfs));
+    w.word(value.network_attachments.len() as u64);
+    for attachment in &value.network_attachments {
+        w.text(&attachment.profile);
+        w.text(&attachment.interface_name);
+    }
 }
-fn decode_desired(r: &mut Decoder<'_>) -> Result<DesiredSpec, Error> {
+fn decode_desired(r: &mut Decoder<'_>, version: u64) -> Result<DesiredSpec, Error> {
     let container_id = r.text(64)?.into();
     let registry_host = r.text(128)?.into();
     let repository = r.text(128)?.into();
@@ -72,6 +77,18 @@ fn decode_desired(r: &mut Decoder<'_>) -> Result<DesiredSpec, Error> {
             process_limit: r.word()?.try_into().map_err(|_| Error::InvalidData)?,
         },
         readonly_rootfs: r.flag()?,
+        network_attachments: if version >= 3 {
+            let mut attachments = Vec::new();
+            for _ in 0..r.count(8)? {
+                attachments.push(NetworkAttachment {
+                    profile: r.text(64)?.into(),
+                    interface_name: r.text(15)?.into(),
+                });
+            }
+            attachments
+        } else {
+            Vec::new()
+        },
     };
     value.validate().map_err(|_| Error::InvalidData)?;
     Ok(value)
@@ -86,7 +103,7 @@ impl State for Runtime {
     }
     fn encode_record(&self, key: u64) -> Result<Option<Vec<u8>>, Error> {
         let mut w = Encoder::new();
-        w.word(2);
+        w.word(3);
         if key == 0 {
             for value in [
                 self.control.0,
@@ -109,6 +126,7 @@ impl State for Runtime {
             if let Some(p) = &self.pending {
                 w.word(1);
                 w.word(p.client);
+                w.word(p.response_ordinal);
                 w.word(p.resolution.channel().map_or(0, |c| c.0));
                 encode_desired(&mut w, &p.desired);
             } else {
@@ -156,7 +174,7 @@ impl State for Runtime {
         };
         let mut r = Decoder::new(bytes);
         let version = r.word()?;
-        if !matches!(version, 1 | 2) {
+        if !matches!(version, 1 | 2 | 3) {
             return Err(Error::UnsupportedVersion);
         }
         if key == 0 {
@@ -170,7 +188,7 @@ impl State for Runtime {
             for _ in 0..r.count(256)? {
                 let channel = r.word()?;
                 let mut methods = Vec::new();
-                for _ in 0..r.count(6)? {
+                for _ in 0..r.count(8)? {
                     methods.push(r.word()?);
                 }
                 self.clients.push(Client { channel, methods });
@@ -178,10 +196,12 @@ impl State for Runtime {
             self.poll_tick = r.word()?.try_into().map_err(|_| Error::InvalidData)?;
             self.pending = if r.flag()? {
                 let client = r.word()?;
+                let response_ordinal = if version >= 3 { r.word()? } else { 1 };
                 let channel = r.word()?;
-                let desired = decode_desired(&mut r)?;
+                let desired = decode_desired(&mut r, version)?;
                 Some(PendingCreate {
                     client,
+                    response_ordinal,
                     resolution: PendingResolution::adopt(
                         Channel(channel),
                         desired.query().expected_digest,
@@ -246,7 +266,7 @@ impl State for Runtime {
         if self
             .clients
             .iter()
-            .any(|c| c.channel == 0 || c.methods.iter().any(|m| !matches!(m, 1..=6)))
+            .any(|c| c.channel == 0 || c.methods.iter().any(|m| !matches!(m, 1..=8)))
         {
             return Err(Error::InvalidData);
         }

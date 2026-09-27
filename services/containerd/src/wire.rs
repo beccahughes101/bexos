@@ -40,6 +40,12 @@ fn status(channel: u64, ordinal: u64, value: ContainerStatus) {
         4 => {
             let _ = reply(channel, &ContainerManagerDeleteResponse { status: value });
         }
+        7 => {
+            let _ = reply(
+                channel,
+                &ContainerManagerCreateWithNetworkResponse { status: value },
+            );
+        }
         _ => {}
     }
 }
@@ -171,6 +177,7 @@ fn dispatch(runtime: &mut Runtime, channel: u64, ordinal: u64, bytes: &[u8], han
                         process_limit: q.resources.process_limit,
                     },
                     readonly_rootfs: q.readonly_rootfs,
+                    network_attachments: Vec::new(),
                 };
                 desired.validate()?;
                 if runtime.containers.contains_key(&desired.container_id) {
@@ -189,6 +196,7 @@ fn dispatch(runtime: &mut Runtime, channel: u64, ordinal: u64, bytes: &[u8], han
                 };
                 runtime.pending = Some(PendingCreate {
                     client: channel,
+                    response_ordinal: 1,
                     desired,
                     resolution,
                 });
@@ -322,12 +330,172 @@ fn dispatch(runtime: &mut Runtime, channel: u64, ordinal: u64, bytes: &[u8], han
                 },
             );
         }
+        7 => create_with_network(runtime, channel, bytes, handles, &refs),
+        8 => inspect_versioned(runtime, channel, bytes, handles, &refs),
         _ => {
             for handle in handles {
                 let _ = Memory::close(*handle);
             }
         }
     }
+}
+
+fn create_with_network(
+    runtime: &mut Runtime,
+    channel: u64,
+    bytes: &[u8],
+    handles: &[u64],
+    refs: &[HandleRef],
+) {
+    if !handles.is_empty() || runtime.pending.is_some() || runtime.resolver == 0 {
+        close_handles(handles);
+        status(
+            channel,
+            7,
+            if runtime.pending.is_some() {
+                ContainerStatus::Busy
+            } else {
+                ContainerStatus::InvalidArgs
+            },
+        );
+        return;
+    }
+    let result = (|| {
+        let q = ContainerManagerCreateWithNetworkRequest::decode(bytes, refs)
+            .map_err(|_| ContainerStatus::InvalidArgs)?;
+        let arguments = (0..q.arguments.len())
+            .map(|index| {
+                q.arguments
+                    .get(index)
+                    .map(str::to_string)
+                    .map_err(|_| ContainerStatus::InvalidArgs)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let environment = (0..q.environment.len())
+            .map(|index| {
+                q.environment
+                    .get(index)
+                    .map(str::to_string)
+                    .map_err(|_| ContainerStatus::InvalidArgs)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let network_attachments = (0..q.network_attachments.len())
+            .map(|index| {
+                q.network_attachments
+                    .get(index)
+                    .map(|attachment| crate::spec::NetworkAttachment {
+                        profile: attachment.profile.into(),
+                        interface_name: attachment.interface_name.into(),
+                    })
+                    .map_err(|_| ContainerStatus::InvalidArgs)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if network_attachments.is_empty() {
+            return Err(ContainerStatus::InvalidArgs);
+        }
+        let desired = DesiredSpec {
+            container_id: q.container_id.into(),
+            image: crate::spec::ImageReference {
+                registry_host: q.image.registry_host.into(),
+                repository: q.image.repository.into(),
+                tag: q.image.tag.into(),
+                expected_sha256: q.image.expected_sha256.to_vec(),
+            },
+            arguments,
+            environment,
+            working_directory: q.working_directory.into(),
+            uid: q.uid,
+            gid: q.gid,
+            hostname: q.hostname.into(),
+            resources: Resources {
+                cpu_shares: q.resources.cpu_shares,
+                memory_limit_bytes: q.resources.memory_limit_bytes,
+                process_limit: q.resources.process_limit,
+            },
+            readonly_rootfs: q.readonly_rootfs,
+            network_attachments,
+        };
+        desired.validate()?;
+        if runtime.containers.contains_key(&desired.container_id) {
+            return Err(ContainerStatus::AlreadyExists);
+        }
+        if runtime.containers.len() >= MAX_CONTAINERS {
+            return Err(ContainerStatus::Busy);
+        }
+        let resolver = Channel(core::mem::replace(&mut runtime.resolver, 0));
+        let resolution = match PendingResolution::begin(resolver, &desired.query()) {
+            Ok(pending) => pending,
+            Err(error) => {
+                runtime.resolver = resolver.0;
+                return Err(map_package(error));
+            }
+        };
+        runtime.pending = Some(PendingCreate {
+            client: channel,
+            response_ordinal: 7,
+            desired,
+            resolution,
+        });
+        Ok(())
+    })();
+    if let Err(error) = result {
+        status(channel, 7, error);
+    }
+}
+
+fn inspect_versioned(
+    runtime: &Runtime,
+    channel: u64,
+    bytes: &[u8],
+    handles: &[u64],
+    refs: &[HandleRef],
+) {
+    if !handles.is_empty() {
+        close_handles(handles);
+    }
+    let request = handles
+        .is_empty()
+        .then(|| ContainerManagerInspectVersionedRequest::decode(bytes, refs))
+        .transpose();
+    let container = request
+        .as_ref()
+        .ok()
+        .and_then(|request| request.as_ref())
+        .and_then(|request| runtime.containers.get(request.container_id));
+    let attachment_storage = container
+        .map(|container| {
+            container
+                .spec
+                .network_attachments
+                .iter()
+                .map(|attachment| container_fidl::NetworkAttachment {
+                    profile: attachment.profile.as_str(),
+                    interface_name: attachment.interface_name.as_str(),
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let inspections = container
+        .map(|container| ContainerInspection {
+            version: 2,
+            info: info(container),
+            network_attachments: WireVector::from_slice(&attachment_storage),
+        })
+        .into_iter()
+        .collect::<Vec<_>>();
+    let _ = reply(
+        channel,
+        &ContainerManagerInspectVersionedResponse {
+            status: if request.is_err() {
+                ContainerStatus::InvalidArgs
+            } else if container.is_none() {
+                ContainerStatus::NotFound
+            } else {
+                ContainerStatus::Ok
+            },
+            inspection: WireVector::from_slice(&inspections),
+        },
+    );
 }
 
 fn start(runtime: &mut Runtime, channel: u64, bytes: &[u8], handles: &[u64], refs: &[HandleRef]) {
@@ -464,7 +632,7 @@ pub fn poll_pending(runtime: &mut Runtime) {
     if pending.client != 0 {
         status(
             pending.client,
-            1,
+            pending.response_ordinal,
             result.map_or_else(|e| e, |_| ContainerStatus::Ok),
         );
     }

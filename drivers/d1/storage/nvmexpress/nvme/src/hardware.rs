@@ -13,6 +13,10 @@ const DEPTH: u16 = 16;
 // reads from paying one IPC and queue-completion round trip per 64 KiB.
 const MAX_TRANSFER_BYTES: usize = 512 * 1024;
 const PAGE_BYTES: usize = 4096;
+// A namespace command can run while the complete userspace service graph is
+// executing under TCG. Match the block client's bounded storage allowance so
+// scheduler latency is not misreported as an NVMe I/O failure.
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(300);
 pub struct Dma {
     handle: u64,
     va: u64,
@@ -159,7 +163,7 @@ impl Queue {
             self.tail as u32,
         )
         .map_err(linux_error_status)?;
-        bexos_d1_linux_shim::task::wait_until(Duration::from_secs(5), || {
+        bexos_d1_linux_shim::task::wait_until(COMMAND_TIMEOUT, || {
             let pos = self.cq.va() + self.head as u64 * 16;
             let last = read32(pos + 12);
             if (last >> 16) & 1 == self.phase as u32 {

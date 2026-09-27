@@ -51,6 +51,7 @@ rust_library(
         "//idl:fs_fidl_rust",
         "//idl:block_fidl_rust",
         "//idl:kernel_fidl_rust",
+        "//idl:net_fidl_rust",
         "//idl:graphics_fidl_rust",
         "//idl:shell_session_fidl_rust",
         "//lib/graphics_runtime",

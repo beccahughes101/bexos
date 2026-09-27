@@ -83,6 +83,7 @@ pub(super) fn launch<K: KernelOps, R: PackageImageResolver>(
     process.runner = "elf".into();
     process.runner_options = Some(ProcessRunnerOptions::Elf(ElfRunnerOptions {
         path: RUNNER_PATH.into(),
+        stack_size_bytes: 0,
     }));
     let native = LaunchRequest {
         manifest: &manifest,

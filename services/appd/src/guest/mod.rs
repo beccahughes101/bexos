@@ -5680,6 +5680,46 @@ fn launch_application(
     } else {
         PackageTrustTier::PlatformCore
     };
+    let workload_network_grants = if container.is_none() {
+        match &process.runner_options {
+            Some(crate::ProcessRunnerOptions::Nix(options))
+                if !options.network_attachments.is_empty() =>
+            {
+                match command_runtime::provision_package_networks(
+                    config,
+                    broker,
+                    kernel,
+                    &options.network_attachments,
+                    &record.package_id,
+                    signer,
+                    uid,
+                ) {
+                    Ok(grants) => Some(command_runtime::NetworkGrants(grants)),
+                    Err(status) => {
+                        log(&alloc::format!(
+                            "appd: workload network provisioning denied package={package_id} process={process_name} status={status:?}\n"
+                        ));
+                        close_bound_capabilities(&bound_capabilities);
+                        close_shared_vault_roots(shared_vault_roots);
+                        close_dependency_roots(dependency_roots);
+                        let _ = Memory::close(archive_root.0);
+                        return match status {
+                            opener_fidl::OpenerStatus::AccessDenied => {
+                                lifecycle::AppLifecycleStatus::AccessDenied
+                            }
+                            opener_fidl::OpenerStatus::InvalidArgs => {
+                                lifecycle::AppLifecycleStatus::InvalidArgs
+                            }
+                            _ => lifecycle::AppLifecycleStatus::LaunchFailed,
+                        };
+                    }
+                }
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
     let disk_resolver = match resolver::Resolver::disk_with_dependencies(
         archive_root,
         &manifest,
@@ -5904,7 +5944,14 @@ fn launch_application(
         }
     }
     let mut resources = Vec::new();
-    let service_grants = startup_service_grants(&bound_capabilities, &manifest.package_name, uid);
+    let mut service_grants =
+        startup_service_grants(&bound_capabilities, &manifest.package_name, uid);
+    if let Some(container) = container {
+        service_grants.extend(container.network_grants.0.iter().cloned());
+    }
+    if let Some(network_grants) = &workload_network_grants {
+        service_grants.extend(network_grants.0.iter().cloned());
+    }
     let incoming_service_grants = incoming_service_grants(&initial_incoming_bindings);
     if let Err(error) = notify_bound_providers(&bound_capabilities) {
         log(&alloc::format!(
@@ -6336,7 +6383,7 @@ fn networkd_config_snapshot(
         .find(|group| group.name == instance_id)?;
     let mut policy = Encoder::new();
     policy.word(0x4e45_5450_4f4c_3031);
-    policy.word(2);
+    policy.word(3);
     policy.text(instance_id);
     policy.word(config.network_policy.max_dynamic_providers as u64);
     let domains = config
@@ -6458,6 +6505,69 @@ fn networkd_config_snapshot(
     policy.word(config.network_policy.nat.enabled as u64);
     policy.bytes(&nat_extension_config(&config.network_policy.nat)?);
     encode_extension_artifact(&mut policy, &config.network_policy.nat.desired_artifact);
+    let profiles = config
+        .network_policy
+        .workload_profiles
+        .iter()
+        .filter(|profile| {
+            profile.isolation_group == instance_id
+                || config
+                    .network_policy
+                    .domain(&profile.domain)
+                    .is_some_and(|domain| domain.isolation_group == instance_id)
+        })
+        .collect::<Vec<_>>();
+    policy.word(profiles.len() as u64);
+    for profile in profiles {
+        policy.text(&profile.name);
+        policy.word(match profile.mode {
+            crate::platform_config::WorkloadNetworkMode::DirectProvider => 1,
+            crate::platform_config::WorkloadNetworkMode::VirtualL2 => 2,
+            crate::platform_config::WorkloadNetworkMode::Unspecified => return None,
+        });
+        policy.text(&profile.isolation_group);
+        policy.text(&profile.domain);
+        policy.text(&profile.physical_selector);
+        policy.word(profile.vlan_id as u64);
+        policy.word(profile.mtu as u64);
+        policy.word(profile.rx_queue_depth as u64);
+        policy.word(profile.tx_queue_depth as u64);
+        policy.word(match profile.addressing {
+            crate::platform_config::WorkloadAddressingMode::Static => 1,
+            crate::platform_config::WorkloadAddressingMode::Dhcp => 2,
+            crate::platform_config::WorkloadAddressingMode::Slaac => 3,
+            crate::platform_config::WorkloadAddressingMode::DhcpAndSlaac => 4,
+            crate::platform_config::WorkloadAddressingMode::Unspecified => 0,
+        });
+        policy.word(profile.static_addresses.len() as u64);
+        for address in &profile.static_addresses {
+            policy.bytes(&address.address);
+            policy.word(address.prefix_len as u64);
+        }
+        policy.word(profile.gateways.len() as u64);
+        for gateway in &profile.gateways {
+            policy.bytes(&gateway.address);
+            policy.word(gateway.prefix_len as u64);
+        }
+        policy.word(profile.dns_servers.len() as u64);
+        for address in &profile.dns_servers {
+            policy.bytes(address);
+        }
+        policy.word(profile.max_instances as u64);
+        policy.word(profile.allow_raw as u64);
+        policy.word(profile.allow_promiscuous as u64);
+        policy.word(profile.package_grants.len() as u64);
+        for grant in &profile.package_grants {
+            policy.text(&grant.package_id);
+            policy.text(&grant.expected_signer);
+        }
+        policy.word(profile.oci_grants.len() as u64);
+        for grant in &profile.oci_grants {
+            policy.text(&grant.registry_host);
+            policy.text(&grant.repository);
+            policy.bytes(&grant.manifest_digest);
+        }
+    }
     let mut values = manifest
         .config_schema
         .resolve(

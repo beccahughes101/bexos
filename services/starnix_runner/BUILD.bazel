@@ -21,9 +21,13 @@ rust_library(
         "//lib/compat/zircon",
         "//lib/migration",
         "//lib/starnix_abi",
+        "//lib/starnix_net",
         "//lib/userspace",
+        "//services/netstack:ethernet_ring",
+        "//services/netstack:netstackd",
         "//idl:fs_fidl_rust",
         "//idl:kernel_fidl_rust",
+        "//idl:net_fidl_rust",
         "//third_party/starnix:starnix_kernel",
     ],
 )

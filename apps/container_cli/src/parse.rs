@@ -15,6 +15,13 @@ pub struct Create {
     pub memory: u64,
     pub pids: u32,
     pub readonly: bool,
+    pub networks: Vec<NetworkAttachment>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct NetworkAttachment {
+    pub profile: String,
+    pub interface_name: String,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Command {
@@ -56,6 +63,7 @@ fn create(args: &[String]) -> Result<Create, &'static str> {
         ..Create::default()
     };
     let mut at = 4;
+    let mut next_default_network = 0usize;
     while at < args.len() {
         match args[at].as_str() {
             "--" => {
@@ -106,10 +114,58 @@ fn create(args: &[String]) -> Result<Create, &'static str> {
                 out.readonly = true;
                 at += 1;
             }
+            "--network" => {
+                let value = args.get(at + 1).ok_or("missing network profile")?;
+                if out.networks.len() == 8 {
+                    return Err("too many network attachments");
+                }
+                let (profile, explicit_name) = value
+                    .split_once(':')
+                    .map_or((value.as_str(), None), |(profile, name)| {
+                        (profile, Some(name))
+                    });
+                let interface_name = if let Some(name) = explicit_name {
+                    name.to_string()
+                } else {
+                    loop {
+                        let candidate = format!("eth{next_default_network}");
+                        next_default_network += 1;
+                        if !out
+                            .networks
+                            .iter()
+                            .any(|network| network.interface_name == candidate)
+                        {
+                            break candidate;
+                        }
+                    }
+                };
+                if profile.is_empty()
+                    || profile.len() > 64
+                    || interface_name.is_empty()
+                    || interface_name.len() > 15
+                    || !profile.bytes().all(valid_name_byte)
+                    || !interface_name.bytes().all(valid_name_byte)
+                    || out
+                        .networks
+                        .iter()
+                        .any(|network| network.interface_name == interface_name)
+                {
+                    return Err("invalid network attachment");
+                }
+                out.networks.push(NetworkAttachment {
+                    profile: profile.into(),
+                    interface_name,
+                });
+                at += 2;
+            }
             _ => return Err("unknown create option"),
         }
     }
     Ok(out)
+}
+
+fn valid_name_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-')
 }
 pub fn parse(args: &[String]) -> Result<Command, &'static str> {
     match args.get(1).map(String::as_str) {
@@ -156,5 +212,46 @@ mod tests {
         assert!(c.readonly);
         assert_eq!(c.memory, 4096);
         assert_eq!(c.arguments, ["/bin/true"]);
+    }
+
+    #[test]
+    fn parses_ordered_networks_and_assigns_linux_names() {
+        let a = [
+            "container",
+            "create",
+            "id",
+            "r.test",
+            "a/b",
+            "v1",
+            "--network",
+            "public",
+            "--network",
+            "storage:back0",
+        ]
+        .map(String::from);
+        let Command::Create(c) = parse(&a).unwrap() else {
+            panic!()
+        };
+        assert_eq!(c.networks[0].interface_name, "eth0");
+        assert_eq!(c.networks[1].profile, "storage");
+        assert_eq!(c.networks[1].interface_name, "back0");
+
+        let explicit_then_default = [
+            "container",
+            "create",
+            "id",
+            "r.test",
+            "a/b",
+            "v1",
+            "--network",
+            "storage:back0",
+            "--network",
+            "public",
+        ]
+        .map(String::from);
+        let Command::Create(c) = parse(&explicit_then_default).unwrap() else {
+            panic!()
+        };
+        assert_eq!(c.networks[1].interface_name, "eth0");
     }
 }

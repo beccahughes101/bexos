@@ -1095,7 +1095,7 @@ impl Vfs {
         result
     }
 
-    pub fn finish_exec(&mut self, executable: &str) {
+    pub fn finish_exec(&mut self, executable: &str) -> Vec<i32> {
         self.executable = normalize(&self.cwd, executable).unwrap_or_else(|_| executable.into());
         let close: Vec<_> = self
             .fds
@@ -1108,9 +1108,10 @@ impl Vfs {
                     .then_some(fd as i32)
             })
             .collect();
-        for fd in close {
-            let _ = self.close(fd);
+        for fd in &close {
+            let _ = self.close(*fd);
         }
+        close
     }
 
     pub fn stat_fd(&self, fd: i32) -> Result<Stat, i64> {
@@ -1910,6 +1911,50 @@ impl Vfs {
         )
     }
 
+    pub fn install_native_socket(
+        &mut self,
+        fd: i32,
+        handle: u64,
+        local: String,
+        peer: String,
+    ) -> Result<(), i64> {
+        let entry = self
+            .fds
+            .get_mut(usize::try_from(fd).map_err(|_| EBADF)?)
+            .and_then(Option::as_mut)
+            .ok_or(EBADF)?;
+        entry.descriptor = Descriptor::Socket {
+            handle,
+            readable: true,
+            writable: true,
+            local,
+            peer,
+        };
+        Ok(())
+    }
+
+    pub fn allocate_native_socket(
+        &mut self,
+        handle: u64,
+        flags: u32,
+        local: String,
+        peer: String,
+    ) -> Result<i32, i64> {
+        self.allocate(
+            Fd {
+                descriptor: Descriptor::Socket {
+                    handle,
+                    readable: true,
+                    writable: true,
+                    local,
+                    peer,
+                },
+                flags,
+            },
+            0,
+        )
+    }
+
     pub fn eventfd(&mut self, initial: u64, flags: u32) -> Result<i32, i64> {
         self.allocate(
             Fd {
@@ -2495,6 +2540,7 @@ pub(crate) fn synthetic_directory(path: &str) -> Option<Vec<String>> {
             "loadavg",
             "meminfo",
             "mounts",
+            "net",
             "self",
             "sys",
             "thread-self",
@@ -2503,7 +2549,7 @@ pub(crate) fn synthetic_directory(path: &str) -> Option<Vec<String>> {
         ],
         "/proc/1" | "/proc/self" | "/proc/thread-self" => {
             vec![
-                "cmdline", "exe", "fd", "maps", "mounts", "stat", "status", "task",
+                "cmdline", "exe", "fd", "maps", "mounts", "ns", "stat", "status", "task",
             ]
         }
         "/proc/self/fd" | "/proc/1/fd" | "/proc/thread-self/fd" => vec![],
@@ -2512,7 +2558,7 @@ pub(crate) fn synthetic_directory(path: &str) -> Option<Vec<String>> {
         "/proc/sys/kernel" => vec!["hostname", "osrelease", "ostype"],
         "/proc/sys/vm" => vec!["overcommit_memory"],
         "/sys" => vec!["class", "devices"],
-        "/sys/class" => vec![],
+        "/sys/class" => vec!["net"],
         "/sys/devices" => vec!["system"],
         "/sys/devices/system" => vec!["cpu"],
         "/sys/devices/system/cpu" => vec!["online", "possible", "present"],

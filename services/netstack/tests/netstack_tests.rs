@@ -336,6 +336,7 @@ fn migration_record_preserves_config_clients_dns_sockets_and_link_resources() {
             }),
         }],
         generation: 9,
+        ..Runtime::empty()
     };
 
     let record = runtime.encode_record(0).unwrap().unwrap();

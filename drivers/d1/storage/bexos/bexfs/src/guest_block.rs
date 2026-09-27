@@ -96,7 +96,7 @@ impl BlockFifoBackend for RpcBlock {
     }
     fn transfer(
         &mut self,
-        request: BlockRequest,
+        mut request: BlockRequest,
         buffer: &mut [u8],
         write: bool,
     ) -> Result<BlockResponse, Status> {
@@ -109,13 +109,19 @@ impl BlockFifoBackend for RpcBlock {
             }
         }
         let mut bytes = [0; 64];
-        let e = request
+        let mut encoded = request
             .encode(&mut bytes, &mut [])
-            .map_err(|_| Status::ErrInvalidArgs)?;
-        if self.fifo.send(&bytes[..e.bytes], &[]).is_err() {
+            .map_err(|_| Status::ErrInvalidArgs)?
+            .bytes;
+        if self.fifo.send(&bytes[..encoded], &[]).is_err() {
             self.reconnect_data_plane()?;
+            request.vmo_id = self.id;
+            encoded = request
+                .encode(&mut bytes, &mut [])
+                .map_err(|_| Status::ErrInvalidArgs)?
+                .bytes;
             self.fifo
-                .send(&bytes[..e.bytes], &[])
+                .send(&bytes[..encoded], &[])
                 .map_err(|_| Status::ErrPeerClosed)?;
         }
         // A diskimage flush synchronizes its backing BexFS namespace. Match the

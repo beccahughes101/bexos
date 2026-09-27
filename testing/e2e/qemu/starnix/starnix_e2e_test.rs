@@ -1,6 +1,10 @@
+mod network_echo;
+
+use bexos_debug_client::DebugTransport;
 use bexos_e2e::{DEFAULT_STALL_TIMEOUT, E2eContext, E2eDevice};
 use bexos_qemu_test::{QemuArtifacts, QemuDevice};
-use std::time::Duration;
+use network_echo::NetworkEcho;
+use std::time::{Duration, Instant};
 
 fn loop_sequences(trace: &[u8]) -> Vec<u64> {
     String::from_utf8_lossy(trace)
@@ -11,6 +15,109 @@ fn loop_sequences(trace: &[u8]) -> Vec<u64> {
         })
         .collect()
 }
+
+fn network_sequences(trace: &[u8]) -> Vec<u64> {
+    String::from_utf8_lossy(trace)
+        .lines()
+        .filter_map(|line| {
+            let value = line.split_once("starnix net flow ")?.1.get(..16)?;
+            u64::from_str_radix(value, 16).ok()
+        })
+        .collect()
+}
+
+fn replace_network_services<T: DebugTransport>(
+    session: &mut bexos_e2e::DebugSession<T>,
+    archives: &[Vec<u8>],
+) -> Result<(), String> {
+    let replacements = [
+        ("bexos.driver.network.virtio_net", 81),
+        ("bexos.service.vswitchd", 82),
+        ("bexos.service.netstackd", 83),
+        ("bexos.service.networkd", 84),
+    ];
+    if archives.len() != replacements.len() {
+        return Err(format!(
+            "expected {} network replacement archives, got {}",
+            replacements.len(),
+            archives.len()
+        ));
+    }
+    for (index, ((package, generation), archive)) in
+        replacements.into_iter().zip(archives).enumerate()
+    {
+        let before = session
+            .client
+            .list_processes()
+            .map_err(|error| format!("process list before replacing {package}: {error:?}"))?;
+        let old = before
+            .iter()
+            .find(|process| process.package_id == package && process.state == "Running")
+            .ok_or_else(|| format!("missing live {package}: {before:?}"))?
+            .pid;
+        let update = bexos_update::build_signed_manifest(
+            generation,
+            package,
+            bexos_update::ArtifactKind::AppPackage,
+            archive,
+            KEY_ID,
+            SEED,
+        );
+        session
+            .client
+            .upload_update(0x4e45_5400 + index as u64, &update, archive)
+            .map_err(|error| format!("upload {package}: {error:?}"))?;
+        let response = session
+            .client
+            .exec_command("update.apply_service", &[])
+            .map_err(|error| format!("replace {package}: {error:?}"))?;
+        if response.exit_code != 0 {
+            return Err(format!("replace {package} rejected: {response:?}"));
+        }
+        let marker = format!("service-transplant: committed generation={generation} cutover_ms=");
+        let deadline = Instant::now() + Duration::from_secs(120);
+        loop {
+            let trace = String::from_utf8_lossy(session.client.received_trace());
+            if trace.contains("appd: migration task failed:") || trace.contains("guest-fault") {
+                return Err(format!("{package} replacement failed: {trace}"));
+            }
+            if let Some(milliseconds) = trace.lines().find_map(|line| {
+                line.split_once(&marker)
+                    .and_then(|(_, value)| value.trim().parse::<u64>().ok())
+            }) {
+                if milliseconds > 150 {
+                    return Err(format!("{package} cutover exceeded 150 ms: {milliseconds}"));
+                }
+                break;
+            }
+            if Instant::now() >= deadline {
+                return Err(format!("{package} replacement timed out: {trace}"));
+            }
+            session
+                .client
+                .drain_for(Duration::from_millis(25))
+                .map_err(|error| format!("trace while replacing {package}: {error:?}"))?;
+        }
+        let after = session
+            .client
+            .list_processes()
+            .map_err(|error| format!("process list after replacing {package}: {error:?}"))?;
+        if !after.iter().any(|process| {
+            process.package_id == package && process.state == "Running" && process.pid != old
+        }) {
+            return Err(format!(
+                "replacement identity missing for {package}: {after:?}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+const KEY_ID: [u8; 32] = *b"bexos-qemu-test-ed25519-key-v001";
+const SEED: [u8; 32] = [
+    0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c, 0xc4,
+    0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19, 0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae, 0x7f, 0x60,
+];
 
 fn main() {
     if let Err(error) = run() {
@@ -24,6 +131,13 @@ fn run() -> Result<(), String> {
     let (artifacts, extra) =
         QemuArtifacts::from_env_or_args(&std::env::args().skip(1).collect::<Vec<_>>())?;
     let archive = std::fs::read(extra.first().ok_or("missing Starnix fixture archive")?)
+        .map_err(|error| error.to_string())?;
+    let network_archives = extra
+        .get(1..)
+        .ok_or("missing network replacement archives")?
+        .iter()
+        .map(std::fs::read)
+        .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
     let mut device = QemuDevice::new(artifacts)?;
     let mut session = context.run_phase("boot", || {
@@ -116,6 +230,49 @@ fn run() -> Result<(), String> {
         )
     })?;
 
+    context.run_phase("network-musl-process", || {
+        session.client.clear_received_trace();
+        session
+            .client
+            .launch_app("bexos.platform.starnix_fixture", "network_musl", 0, 0)
+            .map_err(|error| format!("launch networking fixture: {error:?}"))?;
+        context.wait_until(
+            "networking fixture completion",
+            Duration::from_secs(60),
+            Duration::from_millis(50),
+            Duration::from_secs(60),
+            || {
+                session
+                    .client
+                    .health_check()
+                    .map_err(|error| format!("networking fixture health: {error:?}"))?;
+                let trace = String::from_utf8_lossy(session.client.received_trace());
+                if trace.contains("network fixture:") || trace.contains("panic") {
+                    return Err(format!("networking fixture failed: {trace}"));
+                }
+                let output = trace.contains("starnix networking ok\n");
+                let exited = trace.contains("starnix_runner: guest exited 0");
+                Ok((
+                    (output && exited).then_some(()),
+                    output as u64 + exited as u64,
+                ))
+            },
+        )
+    })?;
+
+    let _network_echo = NetworkEcho::start()?;
+    context.run_phase("network-survivor-start", || {
+        session.client.clear_received_trace();
+        session
+            .client
+            .launch_app("bexos.platform.starnix_fixture", "network_survivor", 0, 0)
+            .map_err(|error| format!("launch network survivor: {error:?}"))?;
+        session.wait_for_serial_markers(
+            &[b"starnix net flow 0000000000000000"],
+            Duration::from_secs(60),
+        )
+    })?;
+
     context.run_phase("looping-start", || {
         session.client.clear_received_trace();
         if let Err(error) =
@@ -146,12 +303,6 @@ fn run() -> Result<(), String> {
         })
         .ok_or_else(|| format!("live looping Starnix process missing: {before:?}"))?
         .pid;
-    const KEY_ID: [u8; 32] = *b"bexos-qemu-test-ed25519-key-v001";
-    const SEED: [u8; 32] = [
-        0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c,
-        0xc4, 0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19, 0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae,
-        0x7f, 0x60,
-    ];
     let update = bexos_update::build_signed_manifest(
         1,
         "bexos.platform.starnix_fixture",
@@ -233,6 +384,43 @@ fn run() -> Result<(), String> {
                     ));
                 }
                 Ok((None, 0))
+            },
+        )
+    })?;
+    let network_before_replacements = network_sequences(session.client.received_trace())
+        .into_iter()
+        .last()
+        .ok_or("missing network flow after Starnix transplant")?;
+    context.run_phase("network-service-transplants", || {
+        session.client.clear_received_trace();
+        replace_network_services(&mut session, &network_archives)
+    })?;
+    context.run_phase("retained-network-flows", || {
+        context.wait_until(
+            "direct and L2 TCP/UDP flows after network replacements",
+            Duration::from_secs(90),
+            Duration::from_millis(50),
+            Duration::from_secs(60),
+            || {
+                session
+                    .client
+                    .health_check()
+                    .map_err(|error| format!("health after network replacements: {error:?}"))?;
+                let trace = session.client.received_trace();
+                let sequences = network_sequences(trace);
+                if String::from_utf8_lossy(trace).contains("starnix network survivor: flow failed")
+                {
+                    return Err(format!(
+                        "network flow failed after replacement: {}",
+                        String::from_utf8_lossy(trace)
+                    ));
+                }
+                if let Some(last) = sequences.last().copied()
+                    && last > network_before_replacements
+                {
+                    return Ok((Some(()), last));
+                }
+                Ok((None, sequences.last().copied().unwrap_or(0)))
             },
         )
     })?;

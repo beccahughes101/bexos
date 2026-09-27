@@ -11,6 +11,7 @@ fn manifest() -> Manifest {
             runner: "elf".into(),
             runner_options: Some(ProcessRunnerOptions::Elf(ElfRunnerOptions {
                 path: "/pkg/bin/tool".into(),
+                stack_size_bytes: 0,
             })),
             ..Default::default()
         }],
@@ -57,6 +58,7 @@ fn declarations_require_safe_names_and_launchable_processes() {
         let mut m = good.clone();
         m.processes[0].runner_options = Some(ProcessRunnerOptions::Elf(ElfRunnerOptions {
             path: path.into(),
+            stack_size_bytes: 0,
         }));
         assert!(m.validate_commands().is_err(), "{path:?}");
     }

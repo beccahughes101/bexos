@@ -3,7 +3,7 @@ mod client;
 mod parse;
 use bexos_userspace::{Channel, Memory, Socket, Startup};
 
-const HELP: &str = "container - offline OCI lifecycle\n\n  create ID HOST REPOSITORY TAG [--digest SHA256] [--env NAME=value] [--cwd PATH] [--uid N] [--gid N] [--hostname NAME] [--cpu-shares N] [--memory BYTES] [--pids N] [--read-only] [--] COMMAND...\n  run    ID HOST REPOSITORY TAG [options] [--] COMMAND...\n  start ID\n  inspect ID\n  list\n  signal ID SIGNAL\n  delete [--force] ID\n";
+const HELP: &str = "container - OCI lifecycle (offline unless --network is supplied)\n\n  create ID HOST REPOSITORY TAG [--digest SHA256] [--network PROFILE[:IFNAME]]... [--env NAME=value] [--cwd PATH] [--uid N] [--gid N] [--hostname NAME] [--cpu-shares N] [--memory BYTES] [--pids N] [--read-only] [--] COMMAND...\n  run    ID HOST REPOSITORY TAG [options] [--] COMMAND...\n  start ID\n  inspect ID\n  list\n  signal ID SIGNAL\n  delete [--force] ID\n";
 
 fn write(socket: u64, text: &str) {
     let mut bytes = text.as_bytes();

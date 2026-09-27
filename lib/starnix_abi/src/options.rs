@@ -29,6 +29,12 @@ pub struct NixResourceLimit {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct NetworkAttachment {
+    pub profile: String,
+    pub interface_name: String,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct NixRunnerOptions {
     pub path: String,
     pub arguments: Vec<String>,
@@ -40,6 +46,7 @@ pub struct NixRunnerOptions {
     pub umask: u32,
     pub resource_limits: Vec<NixResourceLimit>,
     pub hostname: String,
+    pub network_attachments: Vec<NetworkAttachment>,
 }
 
 impl NixRunnerOptions {
@@ -53,11 +60,27 @@ impl NixRunnerOptions {
             || self.arguments.len() > 64
             || self.environment.len() > 64
             || self.resource_limits.len() > 32
+            || self.network_attachments.len() > 8
             || self.umask & !0o777 != 0
             || self.hostname.len() > 64
             || self.hostname.contains(['/', '\0'])
         {
             return Err(Error::InvalidOptions);
+        }
+        for (index, attachment) in self.network_attachments.iter().enumerate() {
+            if attachment.profile.is_empty()
+                || attachment.profile.len() > 64
+                || !attachment
+                    .profile
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
+                || !valid_interface_name(&attachment.interface_name)
+                || self.network_attachments[..index]
+                    .iter()
+                    .any(|prior| prior.interface_name == attachment.interface_name)
+            {
+                return Err(Error::InvalidOptions);
+            }
         }
         if self
             .arguments
@@ -199,6 +222,21 @@ impl NixRunnerOptions {
                     value.resource_limits.push(limit);
                 }
                 10 => value.hostname = encoded.string()?,
+                11 => {
+                    if value.network_attachments.len() == 8 {
+                        return Err(Error::LimitExceeded);
+                    }
+                    let mut attachment = NetworkAttachment::default();
+                    let mut nested = wire::Reader(encoded.bytes()?);
+                    while let Some((field, encoded)) = nested.field()? {
+                        match field {
+                            1 => attachment.profile = encoded.string()?,
+                            2 => attachment.interface_name = encoded.string()?,
+                            _ => {}
+                        }
+                    }
+                    value.network_attachments.push(attachment);
+                }
                 _ => {}
             }
         }
@@ -259,8 +297,25 @@ impl NixRunnerOptions {
         if !self.hostname.is_empty() {
             wire::bytes(&mut out, 10, self.hostname.as_bytes());
         }
+        for attachment in &self.network_attachments {
+            let mut nested = Vec::new();
+            wire::bytes(&mut nested, 1, attachment.profile.as_bytes());
+            wire::bytes(&mut nested, 2, attachment.interface_name.as_bytes());
+            wire::bytes(&mut out, 11, &nested);
+        }
         Ok(out)
     }
+}
+
+fn valid_interface_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 15
+        && value != "."
+        && value != ".."
+        && !value.contains(['/', '\0', ':'])
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
 }
 
 #[cfg(test)]
@@ -283,8 +338,30 @@ mod tests {
                 soft: 64,
                 hard: 128,
             }],
+            network_attachments: vec![NetworkAttachment {
+                profile: "lan".into(),
+                interface_name: "eth0".into(),
+            }],
             ..Default::default()
         };
+        assert_eq!(
+            NixRunnerOptions::decode(&options.encode().unwrap()),
+            Ok(options)
+        );
+    }
+
+    #[test]
+    fn offline_v2_options_remain_compatible_and_attachments_are_bounded() {
+        let mut options = NixRunnerOptions {
+            path: "/bin/tool".into(),
+            ..Default::default()
+        };
+        let offline = options.encode().unwrap();
+        assert_eq!(NixRunnerOptions::decode(&offline), Ok(options.clone()));
+        options.network_attachments.push(NetworkAttachment {
+            profile: "direct.public".into(),
+            interface_name: "eth0".into(),
+        });
         assert_eq!(
             NixRunnerOptions::decode(&options.encode().unwrap()),
             Ok(options)

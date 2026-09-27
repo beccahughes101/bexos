@@ -636,6 +636,7 @@ impl TimedService {
             keep_alive_ms: None,
             rx_buffer_size: Some(8192),
             tx_buffer_size: Some(8192),
+            bound_interface_id: None,
         };
         let status = if self.scoped_network {
             net_fidl::SocketProviderPublicClient::new(Rpc(netstack))

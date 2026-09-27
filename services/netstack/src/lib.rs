@@ -3,8 +3,12 @@ extern crate alloc;
 pub mod config;
 pub mod dhcp;
 pub mod dns;
-pub mod ethernet;
-pub mod link;
+pub mod ethernet {
+    pub use bexos_ethernet_ring::ethernet::*;
+}
+pub mod link {
+    pub use bexos_ethernet_ring::link::*;
+}
 pub mod migration;
 mod recovery;
 pub mod router;

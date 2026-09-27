@@ -15,7 +15,7 @@ use std::{string::String, vec::Vec};
 const RECORD_VERSION: u64 = 4;
 const MAX_MAPPINGS: usize = 96;
 const MAX_REGISTER_BYTES: usize = 1024;
-const MAX_RUNTIME_BYTES: usize = 512 * 1024;
+const MAX_RUNTIME_BYTES: usize = 64 * 1024 * 1024;
 const MAX_FDS: usize = 256;
 const MAX_PROCESSES: usize = 64;
 const MAX_STARTUP_WRITES: usize = 32;
@@ -24,6 +24,8 @@ const MAX_SYNTHETIC_BYTES: usize = 256 * 1024;
 pub(crate) struct RuntimeState {
     pub signals: Vec<u8>,
     pub dispatcher: Vec<u8>,
+    pub network: Vec<u8>,
+    pub l2: Vec<u8>,
     pub vfs: VfsSnapshot,
     pub signal_frames: Vec<(u64, u64, u64)>,
     pub tasks: Vec<TaskSnapshot>,
@@ -86,9 +88,11 @@ pub(crate) struct ProcessSnapshot {
 impl RuntimeState {
     pub fn encode(&self) -> Result<Vec<u8>, Error> {
         let mut out = Encoder::new();
-        out.word(15);
+        out.word(17);
         out.bytes(&self.signals);
         out.bytes(&self.dispatcher);
+        out.bytes(&self.network);
+        out.bytes(&self.l2);
         out.text(&self.vfs.cwd);
         out.word(self.vfs.descriptors.len() as u64);
         for (fd, descriptor) in &self.vfs.descriptors {
@@ -348,11 +352,25 @@ impl RuntimeState {
         }
         let mut input = Decoder::new(bytes);
         let version = input.word()?;
-        if !matches!(version, 1..=15) {
+        if !matches!(version, 1..=17) {
             return Err(Error::UnsupportedVersion);
         }
         let signals = input.bytes(16 * 1024)?.to_vec();
         let dispatcher = input.bytes(16 * 1024)?.to_vec();
+        let network = if version >= 16 {
+            let bytes = input.bytes(8 * 1024 * 1024)?.to_vec();
+            if !bytes.is_empty() {
+                bexos_starnix_net::NetworkState::restore(&bytes).map_err(|_| Error::InvalidData)?;
+            }
+            bytes
+        } else {
+            Vec::new()
+        };
+        let l2 = if version >= 17 {
+            input.bytes(48 * 1024 * 1024)?.to_vec()
+        } else {
+            Vec::new()
+        };
         let cwd = input.text(4096)?.into();
         let mut descriptors = Vec::new();
         for _ in 0..input.count(MAX_FDS)? {
@@ -738,6 +756,8 @@ impl RuntimeState {
         Ok(Self {
             signals,
             dispatcher,
+            network,
+            l2,
             vfs: VfsSnapshot { cwd, descriptors },
             signal_frames,
             tasks,
@@ -925,8 +945,10 @@ impl State for Snapshot {
             return Err(Error::InvalidData);
         }
         let mut input = Decoder::new(bytes.ok_or(Error::InvalidData)?);
-        if input.word()? != RECORD_VERSION
-            || input.word()? != u64::from(ABI_VERSION)
+        let record_version = input.word()?;
+        let abi_version = input.word()?;
+        if record_version != RECORD_VERSION
+            || !matches!(abi_version, 2 | 3)
             || input.text(64)? != UPSTREAM_REVISION
             || input.word()? != self.architecture
         {
@@ -1066,6 +1088,17 @@ impl State for Snapshot {
             .collect();
         if let Ok(runtime) = RuntimeState::decode(&self.runtime) {
             append_vfs_resources(&runtime.vfs, &mut resources);
+            if let Ok(network) = bexos_starnix_net::NetworkState::restore(&runtime.network) {
+                resources.extend(
+                    network
+                        .migration_handles()
+                        .into_iter()
+                        .map(Resource::Handle),
+                );
+            }
+            if let Ok(l2) = crate::l2_backend::L2Runtime::resources_from_snapshot(&runtime.l2) {
+                resources.extend(l2);
+            }
             for process in &runtime.processes {
                 resources.extend(
                     process
@@ -1164,6 +1197,8 @@ mod tests {
             RuntimeState {
                 signals: vec![1],
                 dispatcher: vec![2],
+                network: Vec::new(),
+                l2: Vec::new(),
                 vfs: VfsSnapshot {
                     cwd: "/".into(),
                     descriptors: Vec::new(),
@@ -1250,6 +1285,8 @@ mod tests {
                     RuntimeState {
                         signals: vec![1],
                         dispatcher: vec![2],
+                        network: Vec::new(),
+                        l2: Vec::new(),
                         vfs: VfsSnapshot {
                             cwd: "/".into(),
                             descriptors: Vec::new(),
@@ -1310,6 +1347,8 @@ mod tests {
         let state = RuntimeState {
             signals: vec![1],
             dispatcher: vec![2],
+            network: Vec::new(),
+            l2: Vec::new(),
             vfs: VfsSnapshot {
                 cwd: "/work".into(),
                 descriptors: vec![
@@ -1485,6 +1524,8 @@ mod tests {
         let child = RuntimeState {
             signals: vec![3],
             dispatcher: vec![4],
+            network: Vec::new(),
+            l2: Vec::new(),
             vfs: VfsSnapshot {
                 cwd: "/child".into(),
                 descriptors: Vec::new(),
@@ -1521,6 +1562,8 @@ mod tests {
         let state = RuntimeState {
             signals: vec![1],
             dispatcher: vec![2],
+            network: Vec::new(),
+            l2: Vec::new(),
             vfs: VfsSnapshot {
                 cwd: "/".into(),
                 descriptors: Vec::new(),

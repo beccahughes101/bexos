@@ -298,3 +298,18 @@ Replace `0` with the reported generation. The comma-separated language list
 accepts up to eight distinct canonical tags. English-only production catalogs
 fall back to English; regional data coverage is build-configured. See
 [localization](localization.md) for all fields and defaults.
+
+## Container networking
+
+`container create` and `container run` accept repeatable network options:
+
+```sh
+container run demo registry.example app/web latest \
+  --network public --network storage:back0 -- /bin/server
+```
+
+`--network PROFILE` assigns `eth0`, `eth1`, and so on in request order.
+`--network PROFILE:IFNAME` supplies an explicit Linux name. At most eight
+attachments are accepted, names must be unique, and the complete launch fails
+if any profile is unavailable or unauthorized. Omitting every `--network`
+option preserves the offline container default.

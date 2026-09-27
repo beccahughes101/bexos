@@ -140,6 +140,7 @@ async fn connect_inner(
         keep_alive_ms: Some(0),
         rx_buffer_size: Some(64 * 1024),
         tx_buffer_size: Some(64 * 1024),
+        bound_interface_id: None,
     };
     let reply = if scoped {
         call(

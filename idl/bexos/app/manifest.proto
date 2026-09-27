@@ -307,6 +307,9 @@ enum BusType {
 
 message ELFRunnerOptions {
   string path = 1;
+  // Optional main-thread stack allocation. Zero retains the platform default.
+  // Non-zero values must be page aligned and within the runner's bounded range.
+  uint64 stack_size_bytes = 2;
 }
 
 // All limits are finite. Absent fields use the platform defaults; zero is not
@@ -371,6 +374,12 @@ message NixRunnerOptions {
   }
   repeated ResourceLimit resource_limits = 9;
   string hostname = 10;
+  message NetworkAttachment {
+    string profile = 1;
+    string interface_name = 2;
+  }
+  // Ordered RFC 70 attachments. An empty list preserves the offline ABI.
+  repeated NetworkAttachment network_attachments = 11;
 }
 
 message ExposedService {

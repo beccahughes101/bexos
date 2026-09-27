@@ -1,7 +1,7 @@
 # RFC-0068: Multi-Instance Network Stacks, Virtual Routing Domains, and Capability-Routed Networking
 
 * **Author:** BexOS Networking & Security Working Group
-* **Status:** Proposed
+* **Status:** Core design and RFC 70 workload provisioning implemented; acceptance status is tracked in [CURRENT.md](CURRENT.md).
 * **Target Subsystems:** `networkd`, `driver_manager`, `appd`, `vswitchd`, `devhost`
 * **Applicability:** Cloud Routers, Multi-Homed Edge Gateways, Enterprise VPN Sandboxes, MicroVMs
 

@@ -28,6 +28,11 @@ services_exposed {
   method_ordinals: 6
  }
 }
+services_consumed {
+ name: "bexos.net.WorkloadNetworkController"
+ link_type: OPTIONAL
+ capabilities { capability: "Provision" methods { ordinal: 1 link_type: REQUIRED } }
+}
 services_exposed {
  name: "VersionManager"
  protocol: "bexos.app.version_manager.VersionManager"

@@ -25,7 +25,15 @@ pub(crate) const ROUTING_KEY: u64 = 1;
 pub(crate) const DNS_KEY: u64 = 2;
 pub(crate) const ESCROW_KEY: u64 = 3;
 pub(crate) const RECOVERY_KEY: u64 = 4;
-const VERSION: u64 = 7;
+const VERSION: u64 = 9;
+
+#[derive(Clone, Debug)]
+pub struct WorkloadLease {
+    pub lease: u64,
+    pub profile: alloc::string::String,
+    pub port_id: Option<u64>,
+    pub direct_provider: Option<u64>,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct EscrowedBackend {
@@ -70,6 +78,9 @@ pub struct Runtime {
     pub pending_extension: Option<PendingExtensionDeployment>,
     pub next_extension_generation: u64,
     pub queued_extensions: Vec<QueuedExtensionDeployment>,
+    pub workload_profiles: BTreeMap<alloc::string::String, crate::config::WorkloadProfileConfig>,
+    pub workload_leases: Vec<WorkloadLease>,
+    pub next_workload_port: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -148,6 +159,9 @@ impl Runtime {
             pending_extension: None,
             next_extension_generation: 2,
             queued_extensions: Vec::new(),
+            workload_profiles: BTreeMap::new(),
+            workload_leases: Vec::new(),
+            next_workload_port: 0x8000_0000_0000_0000,
         }
     }
 }
@@ -191,6 +205,14 @@ impl State for Runtime {
                     w.word(*channel);
                     w.text(domain);
                 }
+                w.word(self.workload_leases.len() as u64);
+                for lease in &self.workload_leases {
+                    w.word(lease.lease);
+                    w.text(&lease.profile);
+                    w.word(lease.port_id.unwrap_or(0));
+                    w.word(lease.direct_provider.unwrap_or(0));
+                }
+                w.word(self.next_workload_port);
             }
             ROUTING_KEY => encode_routing(&mut w, &self.routing),
             DNS_KEY => encode_dns(&mut w, &self.dns),
@@ -331,6 +353,26 @@ impl State for Runtime {
                 for _ in 0..r.count(256)? {
                     self.client_domains
                         .insert(r.word()?, r.text(64)?.to_string());
+                }
+                self.workload_leases.clear();
+                if version >= 8 {
+                    for _ in 0..r.count(1024)? {
+                        let lease = r.word()?;
+                        let profile = r.text(64)?.to_string();
+                        let port = r.word()?;
+                        self.workload_leases.push(WorkloadLease {
+                            lease,
+                            profile,
+                            port_id: (port != 0).then_some(port),
+                            direct_provider: if version >= 9 {
+                                let provider = r.word()?;
+                                (provider != 0).then_some(provider)
+                            } else {
+                                None
+                            },
+                        });
+                    }
+                    self.next_workload_port = r.word()?;
                 }
             }
             ROUTING_KEY => self.routing = decode_routing(&mut r)?,
@@ -523,6 +565,9 @@ impl State for Runtime {
         for client in &self.clients {
             out.push(Resource::Handle(client.channel.0));
         }
+        for lease in &self.workload_leases {
+            out.push(Resource::Handle(lease.lease));
+        }
         for channel in self.backend_channels.values().copied() {
             out.push(Resource::Handle(channel));
         }
@@ -616,6 +661,8 @@ fn read_version(r: &mut Decoder<'_>) -> Result<u64, Error> {
         4 => Ok(4),
         5 => Ok(5),
         6 => Ok(6),
+        7 => Ok(7),
+        8 => Ok(8),
         VERSION => Ok(VERSION),
         _ => Err(Error::UnsupportedVersion),
     }
@@ -964,6 +1011,12 @@ mod tests {
         source.instance_id = "private".into();
         source.domain_tables.insert("corp.example".into(), 7);
         source.client_domains.insert(12, "corp.example".into());
+        source.workload_leases.push(WorkloadLease {
+            lease: 13,
+            profile: "direct".into(),
+            port_id: None,
+            direct_provider: Some(12),
+        });
         source.backend_channels.insert("stack-a".into(), 20);
         source.stack_backend_channels.insert("stack-a".into(), 21);
         source
@@ -1024,6 +1077,9 @@ mod tests {
         assert_eq!(target.stack_backend_channels.get("stack-a"), Some(&21));
         assert_eq!(target.stack_controller_channels.get("stack-a"), Some(&22));
         assert_eq!(target.vswitch_controller, Some(23));
+        assert_eq!(target.workload_leases.len(), 1);
+        assert_eq!(target.workload_leases[0].lease, 13);
+        assert_eq!(target.workload_leases[0].direct_provider, Some(12));
         assert_eq!(
             target.escrowed_backends.get(&99),
             source.escrowed_backends.get(&99)
@@ -1044,8 +1100,14 @@ mod tests {
             .clients
             .push(BoundServiceEndpoint::new(Channel(3), Vec::new()));
         runtime.backend_channels.insert("stack".into(), 4);
+        runtime.workload_leases.push(WorkloadLease {
+            lease: 5,
+            profile: "l2".into(),
+            port_id: Some(9),
+            direct_provider: None,
+        });
         let resources = runtime.resources();
-        for expected in [1, 2, 3, 4] {
+        for expected in [1, 2, 3, 4, 5] {
             assert!(resources.iter().any(|resource| {
                 matches!(resource, Resource::Handle(handle) if *handle == expected)
             }));

@@ -358,6 +358,7 @@ pub enum ProcessRunnerOptions {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ElfRunnerOptions {
     pub path: String,
+    pub stack_size_bytes: u64,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -1285,6 +1286,7 @@ fn decode_elf_runner_options(bytes: &[u8]) -> Result<ElfRunnerOptions, ManifestE
     while let Some(field) = cursor.next_field()? {
         match field.number {
             1 => options.path = field.string()?,
+            2 => options.stack_size_bytes = field.varint()?,
             _ => {}
         }
     }

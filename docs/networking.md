@@ -7,6 +7,35 @@ and the per-table routes used to choose a local socket interface. Vswitchd owns
 the physical NIC, virtual descriptor rings, legacy L2 bridge isolation, and the
 separate switch FIB used only for forwarding.
 
+## Starnix workload networking
+
+Linux workloads are offline unless their manifest or durable container spec
+names one or more platform `workload_profiles`. Appd authenticates the package
+signer or verified OCI manifest digest, and networkd repeats that check before
+provisioning. A direct profile yields a provider permanently scoped to its RFC
+68 domain/table. A virtual-L2 profile yields a leased vswitch port, locally
+administered MAC, bounded rings, MTU, addresses, routes, and DNS configuration.
+All attachments for one launch succeed or fail together.
+
+The ordered attachments become `eth0`, `eth1`, and so on unless explicit Linux
+interface names are supplied. Linux can alter only its namespace-local links,
+addresses, routes, veth pairs, bridges, and firewall/NAT state. Physical
+selectors, VLANs, host routes, provider domains, and raw/promiscuous grants
+remain platform policy. Closing the lease removes a dynamic port; reboot
+recreates it from the durable workload spec rather than treating dynamic
+topology as authoritative configuration.
+
+Each Linux network namespace owns its FIB, connection tracking, and firewall
+generation. `NETLINK_NETFILTER` batches stage privately and publish only at the
+batch terminator. The supported nft expression subset covers interface,
+address, protocol, port, and connection-state matches; counters; terminal
+accept/drop/reject verdicts; and bounded SNAT, DNAT, and masquerade. Legacy
+IPv4 `IPT_SO_SET_REPLACE` rules using the corresponding standard matches and
+targets translate into the same engine. Unknown extensions return
+`EOPNOTSUPP` without changing the active ruleset. Direct-provider interfaces
+can filter flows but reject packet-level NAT because their traffic does not
+traverse the namespace packet plane.
+
 ## Routed packet path
 
 A port stays in its legacy isolated bridge mode unless platform prototxt names

@@ -4,10 +4,11 @@ use bexos_avb::{verify_partition, verify_vbmeta};
 use bexos_bootfs_parser::Bootfs;
 use sha2::{Digest, Sha256};
 
-// The x86 product BootFS includes both architecture-neutral platform services
-// and the larger x86_64 binaries. Keep a small fixed margin above the current
-// assembled image while retaining a hard authentication/snapshot bound.
-pub const BOOTFS_MAX_BYTES: usize = 168 * 1024 * 1024;
+// External payload snapshots have independent hard bounds. The product kernel
+// is currently below 5 MiB, while the x86 BootFS includes architecture-neutral
+// services, larger x86_64 binaries, and the Starnix networking stack.
+pub const KERNEL_MAX_BYTES: usize = 32 * 1024 * 1024;
+pub const BOOTFS_MAX_BYTES: usize = 180 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -36,7 +37,7 @@ pub fn verify(
         || metadata.len() > 64 * 1024
         || root.len() != 520
         || kernel.is_empty()
-        || kernel.len() > 64 * 1024 * 1024
+        || kernel.len() > KERNEL_MAX_BYTES
         || bootfs.is_empty()
         || bootfs.len() > BOOTFS_MAX_BYTES
     {

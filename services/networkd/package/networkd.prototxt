@@ -33,7 +33,7 @@ services_exposed {
   lifecycle: MULTIPLE_INSTANCE
   visibility: PUBLIC
   metadata { key: "network.domain" value: "system_default" }
-  capabilities { capability: "Public" method_ordinals: 1 method_ordinals: 2 method_ordinals: 3 method_ordinals: 4 method_ordinals: 5 method_ordinals: 6 }
+  capabilities { capability: "Public" method_ordinals: 1 method_ordinals: 2 method_ordinals: 3 method_ordinals: 4 method_ordinals: 5 method_ordinals: 6 method_ordinals: 7 }
 }
 services_exposed {
   name: "bexos.net.Netstack"
@@ -77,6 +77,9 @@ services_consumed {
     methods { ordinal: 7 link_type: REQUIRED }
     methods { ordinal: 8 link_type: REQUIRED }
     methods { ordinal: 9 link_type: REQUIRED }
+    methods { ordinal: 10 link_type: REQUIRED }
+    methods { ordinal: 11 link_type: REQUIRED }
+    methods { ordinal: 12 link_type: REQUIRED }
   }
 }
 services_consumed {
@@ -90,6 +93,9 @@ services_consumed {
     methods { ordinal: 4 link_type: REQUIRED }
     methods { ordinal: 5 link_type: REQUIRED }
     methods { ordinal: 6 link_type: REQUIRED }
+    methods { ordinal: 7 link_type: REQUIRED }
+    methods { ordinal: 8 link_type: REQUIRED }
+    methods { ordinal: 9 link_type: REQUIRED }
   }
 }
 services_consumed {
@@ -117,6 +123,14 @@ services_consumed {
   name: "bexos.pkg.PackageResolver"
   link_type: OPTIONAL
   capabilities { capability: "Resolve" methods { ordinal: 1 link_type: OPTIONAL } methods { ordinal: 2 link_type: OPTIONAL } }
+}
+services_exposed {
+  name: "bexos.net.WorkloadNetworkController"
+  protocol: "WorkloadNetworkController"
+  lifecycle: MULTIPLE_INSTANCE
+  visibility: PRIVATE
+  bind_permission: "BEXOS_SYSTEM_PRIVILEGED"
+  capabilities { capability: "Provision" method_ordinals: 1 }
 }
 services_exposed {
   name: "bexos.net.NetworkExtensionManager"
