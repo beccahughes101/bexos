@@ -12,8 +12,8 @@ use crate::transplant::{
 use bexos_migration::dirty::DirtySet;
 
 const RECORD_MAGIC: u64 = u64::from_le_bytes(*b"BEXREC02");
-const RECORD_VERSION: u64 = 3;
-const PREVIOUS_RECORD_VERSION: u64 = 2;
+const RECORD_VERSION: u64 = 4;
+const PREVIOUS_RECORD_VERSION: u64 = 3;
 
 pub const META: u8 = 0;
 pub const PROCESS: u8 = 1;
@@ -28,6 +28,7 @@ pub const PROFILE: u8 = 9;
 pub const IOMMU_DOMAIN: u8 = 10;
 pub const DMA_MAPPING: u8 = 11;
 pub const INTERRUPT: u8 = 12;
+pub const JOB: u8 = 13;
 pub const fn key(kind: u8, index: usize) -> u64 {
     ((kind as u64) << 56) | index as u64
 }
@@ -36,7 +37,7 @@ pub fn parts(key: u64) -> (u8, usize) {
 }
 
 pub struct BulkCursor {
-    counts: [usize; 13],
+    counts: [usize; 14],
     kind: usize,
     index: usize,
 }
@@ -75,6 +76,7 @@ impl<B: Backend> Runtime<B> {
                 self.iommu_domains.len(),
                 self.dma_mappings.len(),
                 self.interrupts.len(),
+                self.jobs.len(),
             ],
             kind: 0,
             index: 0,
@@ -144,6 +146,7 @@ impl<B: Backend> Runtime<B> {
                     p.hardware as u64,
                     p.resource_group_id as u64,
                     p.realtime_scheduling as u64,
+                    p.job.unwrap_or(usize::MAX) as u64,
                     p.authority as u64,
                     p.quarantined as u64,
                     p.root,
@@ -206,6 +209,7 @@ impl<B: Backend> Runtime<B> {
                         Object::IommuDomain(id) => (10, id, 0),
                         Object::Interrupt(id) => (11, id, 0),
                         Object::ResourceGroup(id) => (12, id as usize, 0),
+                        Object::Job(id) => (13, id, 0),
                     };
                     for v in [kind, id as u64, end as u64, c.rights as u64, c.owner as u64] {
                         w.word(v)?;
@@ -315,6 +319,19 @@ impl<B: Backend> Runtime<B> {
                     }
                 }
             }
+            JOB => {
+                let job = self.jobs.get(index).ok_or(bad)?;
+                w.text(&job.name)?;
+                w.text(&job.package)?;
+                for value in [
+                    job.hardware as u64,
+                    job.resource_group_id as u64,
+                    job.realtime_scheduling as u64,
+                    job.max_processes as u64,
+                ] {
+                    w.word(value)?;
+                }
+            }
             _ => return Err(bad),
         }
         Ok(())
@@ -381,6 +398,14 @@ impl<B: Backend> Runtime<B> {
                 let hardware = r.word()?;
                 let resource_group_id = u32::try_from(r.word()?).map_err(|_| bad)?;
                 let realtime_scheduling = r.flag()?;
+                let job = if record_version >= RECORD_VERSION {
+                    match r.word()? {
+                        value if value == usize::MAX as u64 => None,
+                        value => Some(usize::try_from(value).map_err(|_| bad)?),
+                    }
+                } else {
+                    None
+                };
                 let authority = r.word()?;
                 let quarantined = r.flag()?;
                 if hardware > 2
@@ -424,6 +449,7 @@ impl<B: Backend> Runtime<B> {
                         hardware: hardware as u32,
                         resource_group_id,
                         realtime_scheduling,
+                        job,
                         authority: authority as u32,
                         quarantined: false,
                         root,
@@ -473,6 +499,7 @@ impl<B: Backend> Runtime<B> {
                         (10, 0) => Object::IommuDomain(id),
                         (11, 0) => Object::Interrupt(id),
                         (12, 0) => Object::ResourceGroup(u32::try_from(id).map_err(|_| bad)?),
+                        (13, 0) => Object::Job(id),
                         _ => return Err(bad),
                     };
                     Some(Capability {
@@ -580,7 +607,7 @@ impl<B: Backend> Runtime<B> {
                     },
                     blocked_wait_many: r.flag().unwrap_or(false),
                     exit_code: r.word()? as i32,
-                    restricted: if record_version >= RECORD_VERSION {
+                    restricted: if record_version >= PREVIOUS_RECORD_VERSION {
                         read_restricted_binding(&mut r)?
                     } else {
                         None
@@ -647,6 +674,35 @@ impl<B: Backend> Runtime<B> {
                     None
                 };
                 put(&mut self.interrupts, index, interrupt, 65536)?;
+            }
+            JOB => {
+                let name = r.text(64)?.to_string();
+                let package = r.text(96)?.to_string();
+                let hardware = r.word()?;
+                let resource_group_id = u32::try_from(r.word()?).map_err(|_| bad)?;
+                let realtime_scheduling = r.flag()?;
+                let max_processes = u16::try_from(r.word()?).map_err(|_| bad)?;
+                if name.is_empty()
+                    || package.is_empty()
+                    || hardware > 2
+                    || resource_group_id == 0
+                    || max_processes == 0
+                {
+                    return Err(bad);
+                }
+                put(
+                    &mut self.jobs,
+                    index,
+                    Job {
+                        name,
+                        package,
+                        hardware: hardware as u32,
+                        resource_group_id,
+                        realtime_scheduling,
+                        max_processes,
+                    },
+                    MAX_JOBS,
+                )?;
             }
             _ => return Err(bad),
         }

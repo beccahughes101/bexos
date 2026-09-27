@@ -291,6 +291,42 @@ fn single_active_registry_keeps_multiple_versions_and_rollback_pin() {
 }
 
 #[test]
+fn committing_an_update_clears_only_the_rollback_target() {
+    let keys = trusted_keys();
+    let mut registry = MemoryAppRegistry::new();
+    let v1 = semver(1, 2, 0, 104);
+    let v2 = semver(1, 3, 0, 201);
+    registry
+        .install_bundle(InstallRequest {
+            archive_bytes: &signed_archive_with_version("com.example:provider", "Provider", &v1),
+            trusted_keys: &keys,
+            verified_signer: Some(test_signer()),
+            source: InstallSource::Bootfs,
+            protected: true,
+            archive_path: "boot/pkg/com.example:provider/1.2.0-b104/pkg.bex",
+        })
+        .unwrap();
+    registry
+        .install_bundle(InstallRequest {
+            archive_bytes: &signed_archive_with_version("com.example:provider", "Provider", &v2),
+            trusted_keys: &keys,
+            verified_signer: Some(test_signer()),
+            source: InstallSource::Bootfs,
+            protected: true,
+            archive_path: "boot/pkg/com.example:provider/1.3.0-b201/pkg.bex",
+        })
+        .unwrap();
+
+    registry
+        .clear_rollback_target("com.example:provider")
+        .unwrap();
+    let pin = registry.active_pin("com.example:provider").unwrap();
+    assert_eq!(pin.pinned_version, v2);
+    assert_eq!(pin.rollback_target_version, None);
+    assert_eq!(registry.record("com.example:provider").unwrap().version, v2);
+}
+
+#[test]
 fn active_pins_survive_checkpoint_reopen_exactly() {
     let keys = trusted_keys();
     let mut registry = MemoryAppRegistry::new();

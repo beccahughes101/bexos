@@ -38,8 +38,9 @@ are Bazel outputs and are not committed.
 - Tasks include process-owned thread records, saved EL0 context fields, CPU
   affinity masks, futex wait/wake state, `WaitMany` signal scanning, and
   scheduler state.
-- Privileged system records cover process containers, VM spaces, resource
-  groups, interrupt bindings, and checkpoint byte-count metadata.
+- Privileged system records cover immutable component jobs, process containers,
+  VM spaces, resource groups, interrupt bindings, and checkpoint byte-count
+  metadata.
 
 `VirtualMemory` exposes first-class VMAR calls:
 
@@ -62,9 +63,12 @@ space's root VMAR:
   requested_rights)`
 - `UnmapInVmSpace(vm_space, vaddr, size_bytes)`
 
-`SystemPrivileged` exposes `StartThreadInProcess(process_handle,
-address_space_handle, entry_vaddr, stack_top_vaddr, arg_handle)` so appd
-can start threads inside a specific process and VM space.
+`SystemPrivileged` exposes privileged `CreateComponentJob` and
+`CreateProcessInJob`. The job fixes package identity, resource group, hardware,
+realtime and process-count policy. Public `StartDelegatedProcess`,
+`GetDelegatedProcessStatus`, `GetJobStatus`, and `TerminateJob` then operate only
+through attenuated task/read/map handles; they do not grant policy or child
+creation authority. Current component jobs enforce one process.
 
 `SystemPrivileged` also owns resource-group management:
 
@@ -87,17 +91,18 @@ FIDL method with QEMU's SMC PSCI service: `SUSPEND_TO_RAM` enters PSCI
 `SYSTEM_RESET` and `SYSTEM_OFF`. `SYSTEM_SUSPEND` is not part of QEMU's fake
 PSCI implementation, so it is not used for the current product.
 
-The appd runner path uses these kernel calls for process launch:
+The RFC 72 appd/native-host path uses these kernel calls for process launch:
 
-- `SystemPrivileged.CreateProcess` creates the isolated process container and
-  VM-space handle in the resolved resource group.
+- `SystemPrivileged.CreateComponentJob` and `CreateProcessInJob` create the
+  isolated policy container and its single initial process.
 - `VirtualMemory.MapInVmSpace` maps package-provided executable file VMOs,
   page-aligned anonymous zero-fill VMOs, and stack VMOs into that address
   space.
 - `ChannelControl.CreateChannel` creates the initial service-manager channel;
   appd keeps one endpoint and passes the child endpoint to the process.
-- `SystemPrivileged.StartThreadInProcess` starts the main thread at the
-  validated runner entrypoint with the stack top and optional argument handle.
+- public `SystemPrivileged.StartDelegatedProcess` starts the main thread at the
+  validated runner entrypoint with the stack top, TLS pointer, and optional
+  argument handle.
 
 App-service creates package-declared resource groups before launching processes.
 Processes can name either a package-declared group or one of the built-ins

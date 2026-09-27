@@ -373,7 +373,7 @@ impl ReadinessGate for Gate {
             // policy before launch, and the signed manifest marks the process as
             // a service, so the ordinary ready handshake is their commit point.
             _ if p.process_ref.process.service => {}
-            _ if p.process_ref.process.runner == "wasm" => {}
+            _ if !p.result.controller_handle.is_none() => {}
             _ => return Err(ReadinessError::NotReady),
         }
         if matches!(

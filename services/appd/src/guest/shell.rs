@@ -307,13 +307,23 @@ fn close_processes(
         state
             .watchdogs
             .retain(|v| v.package_id != l.package || v.process_name != l.process || v.uid != l.uid);
-        let _ = crate::runner::KernelOps::terminate_process(
-            kernel,
-            KernelHandle {
-                raw: l.process_handle,
-            },
-            0,
-        );
+        if l.component_job_handle != 0 {
+            let _ = crate::runner::KernelOps::terminate_job(
+                kernel,
+                KernelHandle {
+                    raw: l.component_job_handle,
+                },
+                0,
+            );
+        } else {
+            let _ = crate::runner::KernelOps::terminate_process(
+                kernel,
+                KernelHandle {
+                    raw: l.process_handle,
+                },
+                0,
+            );
+        }
         cleanup_dead_launch(state, &l);
     }
 }

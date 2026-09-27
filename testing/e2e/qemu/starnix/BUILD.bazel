@@ -164,6 +164,16 @@ rust_binary(
     rustc_flags = LINUX_RUST_FLAGS,
 )
 
+rust_binary(
+    name = "crash_linux",
+    srcs = ["crash.rs"],
+    crate_name = "starnix_crash_linux",
+    edition = "2024",
+    platform = guest_platform("userspace_freestanding"),
+    linker_script = ":linux.ld",
+    rustc_flags = LINUX_RUST_FLAGS,
+)
+
 app_manifest(name = "manifest", src = "package.prototxt")
 
 app_archive(
@@ -177,6 +187,7 @@ app_archive(
         "bin/network_survivor": ":network_survivor",
         "lib/ld-musl.so.1": ":musl_loader",
         "lib/libc_musl.so": ":musl_libc",
+        "bin/crash": ":crash_linux",
     },
     compression = "zstd",
 )

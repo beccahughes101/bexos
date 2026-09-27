@@ -115,6 +115,10 @@ pub struct Process {
     pub depends_on: Vec<String>,
     pub link: Option<Link>,
     pub runner_options: Option<ProcessRunnerOptions>,
+    /// Original typed Any payload from the manifest. Runner dispatch forwards
+    /// this without interpreting or rewriting it; `runner_options` remains the
+    /// source-compatible decoded view used by policy and tooling.
+    pub runner_program: Option<AnyRunnerOptions>,
     pub wave: Option<u32>,
     pub lifecycle: ProcessLifecycle,
     pub resource_group: Option<String>,
@@ -345,7 +349,7 @@ pub struct BindProperty {
     pub value: u32,
 }
 
-pub const ELF_RUNNER_OPTIONS_TYPE_URL: &str = "type.googleapis.com/bexos.app.ELFRunnerOptions";
+pub const ELF_RUNNER_OPTIONS_TYPE_URL: &str = bexos_component_runner::ELF_PROGRAM_TYPE_URL;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProcessRunnerOptions {
@@ -365,6 +369,55 @@ pub struct ElfRunnerOptions {
 pub struct AnyRunnerOptions {
     pub type_url: String,
     pub value: Vec<u8>,
+}
+
+impl Process {
+    pub fn opaque_runner_program(&self) -> Result<AnyRunnerOptions, ManifestError> {
+        if let Some(program) = &self.runner_program {
+            return Ok(program.clone());
+        }
+        match self.runner_options.as_ref() {
+            Some(ProcessRunnerOptions::Elf(options)) => Ok(AnyRunnerOptions {
+                type_url: ELF_RUNNER_OPTIONS_TYPE_URL.into(),
+                value: encode_elf_runner_options(options),
+            }),
+            Some(ProcessRunnerOptions::Wasm(options)) => Ok(AnyRunnerOptions {
+                type_url: bexos_wasm_abi::OPTIONS_TYPE_URL.into(),
+                value: options
+                    .encode()
+                    .map_err(|_| ManifestError::InvalidWasmOptions)?,
+            }),
+            Some(ProcessRunnerOptions::Nix(options)) => Ok(AnyRunnerOptions {
+                type_url: bexos_starnix_abi::OPTIONS_TYPE_URL.into(),
+                value: options
+                    .encode()
+                    .map_err(|_| ManifestError::InvalidRunnerOptions)?,
+            }),
+            Some(ProcessRunnerOptions::Unknown(options)) => Ok(self
+                .runner_program
+                .clone()
+                .unwrap_or_else(|| options.clone())),
+            None => Err(ManifestError::InvalidRunnerOptions),
+        }
+    }
+}
+
+fn encode_elf_runner_options(options: &ElfRunnerOptions) -> Vec<u8> {
+    fn varint(mut value: usize, out: &mut Vec<u8>) {
+        loop {
+            let byte = (value & 0x7f) as u8;
+            value >>= 7;
+            out.push(byte | if value == 0 { 0 } else { 0x80 });
+            if value == 0 {
+                return;
+            }
+        }
+    }
+    let mut out = Vec::with_capacity(options.path.len() + 8);
+    out.push(0x0a);
+    varint(options.path.len(), &mut out);
+    out.extend_from_slice(options.path.as_bytes());
+    out
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -952,7 +1005,11 @@ fn decode_process(bytes: &[u8]) -> Result<Process, ManifestError> {
             4 => process.service = field.varint()? != 0,
             5 => process.depends_on.push(field.string()?),
             6 => process.link = Some(decode_link(field.bytes()?)?),
-            7 => process.runner_options = Some(decode_runner_options(field.bytes()?)?),
+            7 => {
+                let program = decode_any_runner_options(field.bytes()?)?;
+                process.runner_options = Some(decode_runner_options(program.clone())?);
+                process.runner_program = Some(program);
+            }
             8 => process.wave = Some(field.varint()? as u32),
             9 => process.lifecycle = decode_lifecycle(field.bytes()?)?,
             10 => {
@@ -1244,22 +1301,27 @@ fn decode_link(bytes: &[u8]) -> Result<Link, ManifestError> {
     Ok(link)
 }
 
-fn decode_runner_options(bytes: &[u8]) -> Result<ProcessRunnerOptions, ManifestError> {
-    let any = decode_any_runner_options(bytes)?;
+fn decode_runner_options(any: AnyRunnerOptions) -> Result<ProcessRunnerOptions, ManifestError> {
     if any.type_url == ELF_RUNNER_OPTIONS_TYPE_URL {
         return Ok(ProcessRunnerOptions::Elf(decode_elf_runner_options(
             &any.value,
         )?));
     }
     if any.type_url == bexos_wasm_abi::OPTIONS_TYPE_URL {
-        return bexos_wasm_abi::WasmRunnerOptions::decode(&any.value)
-            .map(ProcessRunnerOptions::Wasm)
-            .map_err(|_| ManifestError::InvalidWasmOptions);
+        return Ok(
+            match bexos_wasm_abi::WasmRunnerOptions::decode(&any.value) {
+                Ok(options) => ProcessRunnerOptions::Wasm(options),
+                Err(_) => ProcessRunnerOptions::Unknown(any),
+            },
+        );
     }
     if any.type_url == bexos_starnix_abi::OPTIONS_TYPE_URL {
-        return bexos_starnix_abi::NixRunnerOptions::decode(&any.value)
-            .map(ProcessRunnerOptions::Nix)
-            .map_err(|_| ManifestError::InvalidRunnerOptions);
+        return Ok(
+            match bexos_starnix_abi::NixRunnerOptions::decode(&any.value) {
+                Ok(options) => ProcessRunnerOptions::Nix(options),
+                Err(_) => ProcessRunnerOptions::Unknown(any),
+            },
+        );
     }
     Ok(ProcessRunnerOptions::Unknown(any))
 }

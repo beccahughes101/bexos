@@ -53,6 +53,7 @@ QEMU_PRODUCT_MANIFESTS = {
         "//services/localed:localed_archive": "//services/localed:manifest",
         "//lib/ui/theme:theme_archive": "//lib/ui/theme:manifest",
         "//services/appd:appd_elf": "//services/appd:package_manifest",
+        "//services/native_runner:native_runner_elf": "//services/native_runner:package_manifest",
         "//services/usbd:usbd": "//services/usbd:package_manifest",
         "//services/wasm_runner:wasm_runner_archive": "//services/wasm_runner:package_manifest",
         "//services/starnix_runner:starnix_runner_archive": "//services/starnix_runner:package_manifest",

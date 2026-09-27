@@ -19,6 +19,7 @@ rust_library(
         "//lib/bexos_libc",
         "//lib/boot",
         "//lib/compat/zircon",
+        "//lib/component_runner",
         "//lib/migration",
         "//lib/starnix_abi",
         "//lib/starnix_net",
@@ -36,7 +37,10 @@ std_service_binary(
     name = "binary",
     srcs = ["src/main.rs"],
     crate_name = "bexos_starnix_runner_elf",
-    deps = [":starnix_runner"],
+    deps = [
+        ":starnix_runner",
+        "//lib/component_runner",
+    ],
 )
 
 optimized_artifact(name = "starnix_runner_elf", src = ":binary")
@@ -46,26 +50,13 @@ std_service_binary(
     srcs = ["src/main.rs"],
     crate_name = "bexos_starnix_runner_replacement",
     rustc_flags = ["--cfg=starnix_runner_replacement"],
-    deps = [":starnix_runner"],
+    deps = [
+        ":starnix_runner",
+        "//lib/component_runner",
+    ],
 )
 
 optimized_artifact(name = "replacement_elf", src = ":replacement_binary")
-
-genrule(
-    name = "runtime_digest",
-    srcs = [":starnix_runner_elf"],
-    outs = ["runtime.sha256"],
-    cmd = "$(execpath //tools/wasm:digest) $(location :starnix_runner_elf) $@",
-    tools = ["//tools/wasm:digest"],
-)
-
-genrule(
-    name = "replacement_runtime_digest",
-    srcs = [":replacement_elf"],
-    outs = ["replacement_runtime.sha256"],
-    cmd = "$(execpath //tools/wasm:digest) $(location :replacement_elf) $@",
-    tools = ["//tools/wasm:digest"],
-)
 
 app_manifest(name = "package_manifest", src = "package/starnix_runner.prototxt")
 

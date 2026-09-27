@@ -40,7 +40,7 @@ active-command migration design; see [Brush implementation status](brush-shell.m
 
 ## Code and build layout
 
-- `lib/wasm_abi`: bounded manifest options and runner startup prelude.
+- `lib/wasm_abi`: bounded manifest runner options and migration records.
 - `lib/wasm_engine`: shared Pulley compiler configuration for host build tools and
   the device runtime.
 - `lib/wasm_runtime`: engine/platform integration, checked resources, aggregate
@@ -86,20 +86,23 @@ with exact record-change tracking. Ordinary idle dispatches do not encode the
 component and application checkpoint, and a busy dispatch cannot expose a stale
 checkpoint for cutover. Saved snapshots are released outside active migration.
 
-The native runner is an optimized platform executable even in fastbuild images.
-Appd embeds its SHA-256 digest and resolves the executable independently of the
-consumer payload. Consumers cannot name an alternative native executable or
-load manifest-declared native libraries into the runner. The launched process
-retains the consumer identity, resource group, namespace, and service grants.
-WASM drivers are rejected.
-
-A guest replacement archive may carry a separately platform-signed runner archive
-at `.bexos/wasm_runner.bex`. Appd verifies its signature, fixed
-`bexos.platform.wasm_runner` role, native ELF path, and absence of process/driver
-or native-library declarations. The guest cannot substitute an unsigned native
-executable. This nested archive remains in the accepted package for subsequent
-disk launches. Omitting it selects the platform default for both migration and
-later launches.
+The WASM provider is an independently signed system-image package selected by
+the platform `RunnerPolicy` prototxt registry. `appd` does not embed its ELF or
+digest. A per-component provider process receives
+`bexos.component.runner.ComponentRunner.Start`. The fixed BootFS
+`native_runner` maps the selected provider into the pre-created component
+process with delegated job/process/VMAR handles; appd does not contain the
+provider ELF mapper. Appd forwards the manifest's original typed
+`WasmRunnerOptions` bytes opaquely; a best-effort compatibility view used by
+shell tooling does not select the execution path or rewrite the payload. Appd
+also supplies read-only package/dependency directory capabilities. The provider
+validates the type URL, decodes and bounds the
+options, reads the selected module and component imports, and rejects invalid
+paths or formats. Consumers cannot name an alternate native executable or load
+manifest-declared native libraries into the provider. Component-owned
+`.bexos/wasm_runner.bex` archives are rejected. The launched component retains
+its consumer identity, resource group, namespace, and service grants. WASM
+drivers are rejected.
 
 ## Configuration
 

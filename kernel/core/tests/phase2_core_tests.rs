@@ -501,6 +501,187 @@ fn scheduler_enforces_resource_group_cpu_shares_for_fair_tasks() {
 }
 
 #[test]
+fn component_job_binds_identity_and_enforces_one_process() {
+    let mut plane = ControlPlane::new();
+    let job = plane
+        .create_component_job(
+            "isolated",
+            1,
+            "com.example.isolated",
+            HardwareAccess::None,
+            false,
+            1,
+        )
+        .expect("component job");
+    let (process, _, _) = plane
+        .create_process_in_job(job, "main")
+        .expect("initial process");
+    let record = plane.process_for_handle(process).expect("process record");
+    assert_eq!(
+        core::str::from_utf8(&record.package_id[..record.package_id_len]).unwrap(),
+        "com.example.isolated"
+    );
+    assert_eq!(record.resource_group_id, 1);
+    assert_eq!(record.hardware_access, HardwareAccess::None);
+    assert_eq!(plane.job_status(job), Ok((1, 1)));
+    assert_eq!(
+        plane.create_process_in_job(job, "unauthorized-second"),
+        Err(KernelServiceStatus::ResourceExhausted)
+    );
+}
+
+#[test]
+fn component_job_termination_is_recursive_without_a_retained_process_handle() {
+    let mut plane = ControlPlane::new();
+    let job = plane
+        .create_component_job(
+            "isolated",
+            1,
+            "com.example.isolated",
+            HardwareAccess::None,
+            false,
+            1,
+        )
+        .expect("component job");
+    let (process, space, root_vmar) = plane
+        .create_process_in_job(job, "main")
+        .expect("initial process");
+    plane.close_handle(process).expect("drop process handle");
+    assert_eq!(plane.terminate_job(job, -9), KernelServiceStatus::Ok);
+    assert_eq!(plane.job_status(job), Ok((1, 0)));
+    plane.close_handle(space).expect("close address space");
+    plane.close_handle(root_vmar).expect("close root vmar");
+}
+
+#[test]
+fn delegated_component_job_can_manage_but_cannot_create_processes_or_escalate_rights() {
+    let mut plane = ControlPlane::new();
+    let administrative_job = plane
+        .create_component_job(
+            "isolated",
+            1,
+            "com.example.isolated",
+            HardwareAccess::None,
+            false,
+            1,
+        )
+        .expect("component job");
+    let delegated_job = plane
+        .duplicate_handle(
+            administrative_job,
+            RIGHT_TRANSFER
+                | RIGHT_READ
+                | RIGHT_DUPLICATE
+                | bexos_kernel_core::kernel_services::RIGHT_MANAGE_TASK,
+        )
+        .expect("delegated job");
+
+    assert_eq!(plane.job_status(delegated_job), Ok((0, 0)));
+    assert_eq!(
+        plane.create_process_in_job(delegated_job, "unauthorized"),
+        Err(KernelServiceStatus::AccessDenied)
+    );
+    assert_eq!(
+        plane.duplicate_handle(
+            delegated_job,
+            RIGHT_TRANSFER
+                | RIGHT_READ
+                | RIGHT_DUPLICATE
+                | bexos_kernel_core::kernel_services::RIGHT_MANAGE_TASK
+                | bexos_kernel_core::kernel_services::RIGHT_ADMIN,
+        ),
+        Err(KernelServiceStatus::AccessDenied)
+    );
+
+    let (process, _, _) = plane
+        .create_process_in_job(administrative_job, "main")
+        .expect("administrative process creation");
+    assert_eq!(
+        plane.terminate_job(delegated_job, -9),
+        KernelServiceStatus::Ok
+    );
+    assert_eq!(
+        plane
+            .inspect_process_for_handle(process)
+            .expect("retained administrative process inspection")
+            .state,
+        bexos_kernel_core::kernel_services::system::ProcessState::Exited
+    );
+}
+
+#[test]
+fn delegated_process_and_address_space_rights_allow_start_and_mapping_without_admin() {
+    let mut plane = ControlPlane::new();
+    let job = plane
+        .create_component_job(
+            "isolated",
+            1,
+            "com.example.isolated",
+            HardwareAccess::None,
+            false,
+            1,
+        )
+        .expect("component job");
+    let (process, address_space, _) = plane
+        .create_process_in_job(job, "main")
+        .expect("initial process");
+    let delegated_process = plane
+        .duplicate_handle(
+            process,
+            RIGHT_TRANSFER
+                | RIGHT_READ
+                | RIGHT_DUPLICATE
+                | bexos_kernel_core::kernel_services::RIGHT_MANAGE_TASK,
+        )
+        .expect("delegated process");
+    let delegated_space = plane
+        .duplicate_handle(
+            address_space,
+            RIGHT_TRANSFER | RIGHT_READ | RIGHT_MAP | RIGHT_DUPLICATE,
+        )
+        .expect("delegated address space");
+
+    assert_eq!(
+        plane
+            .inspect_process_for_handle(delegated_process)
+            .expect("inspect delegated process")
+            .package_id_len,
+        "com.example.isolated".len()
+    );
+    assert!(plane.vm_space_for_handle(delegated_space).is_ok());
+    let image = plane
+        .create_vmo(PAGE_SIZE as u64, 0)
+        .expect("immutable image VMO");
+    let mapped = plane.map_vmo_in_vm_space(
+        delegated_space,
+        image,
+        0,
+        PAGE_SIZE as u64,
+        USER_VMAR_BASE + 0x2000_0000,
+        RIGHT_READ,
+    );
+    assert_eq!(mapped.status, KernelServiceStatus::Ok);
+    assert!(
+        plane
+            .start_thread_in_process(
+                delegated_process,
+                delegated_space,
+                mapped.mapped_vaddr,
+                USER_VMAR_BASE + 0x3000_0000,
+                None,
+            )
+            .is_ok()
+    );
+    assert_eq!(
+        plane.duplicate_handle(
+            delegated_space,
+            RIGHT_TRANSFER | RIGHT_READ | RIGHT_MAP | RIGHT_WRITE | RIGHT_DUPLICATE,
+        ),
+        Err(KernelServiceStatus::AccessDenied)
+    );
+}
+
+#[test]
 fn scheduler_starts_late_resource_groups_at_the_fair_runtime_baseline() {
     let mut scheduler = Scheduler::new();
     scheduler

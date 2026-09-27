@@ -17,7 +17,7 @@ use ipc::{ChannelTable, MessageScratch};
 use memory::{MappingTable, VmoTable};
 use power::PowerState;
 use scheduler::ProfileTable;
-use system::{InterruptTable, ProcessTable, ResourceGroupTable, VmSpaceTable};
+use system::{InterruptTable, JobTable, ProcessTable, ResourceGroupTable, VmSpaceTable};
 use task::{FutexTable, ThreadTable};
 use time::ClockState;
 use vmar::VmarTable;
@@ -117,6 +117,7 @@ pub struct ControlPlane {
     pub threads: ThreadTable,
     pub futexes: FutexTable,
     pub processes: ProcessTable,
+    pub jobs: JobTable,
     pub vm_spaces: VmSpaceTable,
     pub interrupts: InterruptTable,
     pub resource_groups: ResourceGroupTable,
@@ -139,6 +140,7 @@ impl ControlPlane {
             threads: ThreadTable::new(),
             futexes: FutexTable::new(),
             processes: ProcessTable::new(),
+            jobs: JobTable::new(),
             vm_spaces: VmSpaceTable::new(),
             interrupts: InterruptTable::new(),
             resource_groups: ResourceGroupTable::new(),

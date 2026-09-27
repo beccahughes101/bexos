@@ -1,17 +1,48 @@
 use super::*;
+use bexos_appd::PackageDirectories;
 
 struct NixImage {
     bytes: Vec<u8>,
 }
 
 impl PackageImageResolver for NixImage {
+    fn supports_directory_payloads(&self) -> bool {
+        true
+    }
+
+    fn component_directories(
+        &self,
+        package: &str,
+    ) -> Result<PackageDirectories, PackageImageError> {
+        if package == "bexos.platform.starnix_runner" {
+            Ok(PackageDirectories::default())
+        } else {
+            Ok(PackageDirectories {
+                package_dir: Some(KernelHandle { raw: 73 }),
+                dependencies: Vec::new(),
+            })
+        }
+    }
+
     fn resolve_executable<'a>(
         &'a self,
         package_name: &str,
         path: &str,
     ) -> Result<PackageImage<'a>, PackageImageError> {
-        assert_eq!(package_name, "bexos.platform.starnix_fixture");
-        assert_eq!(path, "/pkg/bin/hello");
+        assert!(
+            (package_name == "bexos.platform.starnix_fixture" && path == "/pkg/bin/hello")
+                || (package_name == "bexos.platform.starnix_runner"
+                    && path == "/pkg/bin/starnix_runner")
+                || (package_name == "bexos.platform.native_runner"
+                    && path == "/pkg/bin/native_runner")
+        );
+        if path == "/pkg/bin/native_runner" {
+            return Ok(PackageImage {
+                bytes: Box::leak(valid_elf().into_boxed_slice()),
+                vmo: KernelHandle { raw: 72 },
+                vmo_offset: 0,
+            });
+        }
         Ok(PackageImage {
             bytes: &self.bytes,
             vmo: KernelHandle { raw: 70 },
@@ -23,10 +54,6 @@ impl PackageImageResolver for NixImage {
 struct ForgedNixImage(NixImage);
 
 impl PackageImageResolver for ForgedNixImage {
-    fn starnix_runtime_digest(&self) -> [u8; 32] {
-        [0; 32]
-    }
-
     fn resolve_executable<'a>(
         &'a self,
         package_name: &str,
@@ -42,13 +69,22 @@ fn manifest() -> Manifest {
 
 fn launch(kernel: &mut FakeKernelOps) -> Result<bexos_appd::LaunchResult, LaunchError> {
     let manifest = manifest();
+    let mut runner_policy = bexos_appd::RunnerPolicy::default();
+    runner_policy.allow_starnix_runner = true;
+    runner_policy.component_runner_providers = vec![bexos_appd::ComponentRunnerProvider {
+        runner_name: "nix".into(),
+        kind: bexos_appd::ComponentRunnerProviderKind::ComponentRunner,
+        package_id: "bexos.platform.starnix_runner".into(),
+        executable_path: "/pkg/bin/starnix_runner".into(),
+        expected_signer: "bexos_official_platform_v1".into(),
+    }];
     RunnerRegistry::new().launch(
         &LaunchRequest {
             manifest: &manifest,
             process: &manifest.processes[0],
             trust_tier: PackageTrustTier::StandardConsumer,
             identity: package_identity(&manifest, PackageTrustTier::StandardConsumer, false),
-            runner_policy: None,
+            runner_policy: Some(&runner_policy),
             hardware_access: HardwareAccessTier::None,
             realtime_scheduling: false,
             resource_group_id: 9,
@@ -59,7 +95,7 @@ fn launch(kernel: &mut FakeKernelOps) -> Result<bexos_appd::LaunchResult, Launch
 }
 
 #[test]
-fn nix_launch_rejects_a_runtime_digest_mismatch_before_process_creation() {
+fn nix_launch_rejects_a_missing_provider_registry_before_process_creation() {
     let manifest = manifest();
     let mut kernel = FakeKernelOps::new();
     let result = RunnerRegistry::new().launch(
@@ -104,18 +140,20 @@ fn nix_launch_uses_authenticated_runtime_and_versioned_startup() {
         .operations
         .iter()
         .find_map(|operation| match operation {
-            KernelOperation::RunnerStartup { bytes, module, .. } => Some((bytes, module)),
+            KernelOperation::ComponentStart {
+                runner,
+                program_type_url,
+                program,
+                ..
+            } if runner == "nix" => Some((program_type_url, program)),
             _ => None,
         });
-    let Some((bytes, payload)) = startup else {
+    let Some((type_url, bytes)) = startup else {
         panic!("missing Nix startup record")
     };
-    let decoded = bexos_starnix_abi::Launch::decode(bytes).expect("startup ABI");
-    assert_eq!(decoded.options.path, "/pkg/bin/hello");
-    assert_eq!(decoded.image_len, valid_elf().len() as u64);
-    assert!(!decoded.service);
-    assert!(!decoded.migratable);
-    assert!(!kernel.is_handle_live(*payload));
+    assert_eq!(type_url, bexos_starnix_abi::OPTIONS_TYPE_URL);
+    let decoded = bexos_starnix_abi::NixRunnerOptions::decode(bytes).expect("runner options");
+    assert_eq!(decoded.path, "/pkg/bin/hello");
 }
 
 #[test]
@@ -131,7 +169,8 @@ fn nix_partial_launch_failures_release_every_owned_handle() {
         let result = launch(&mut kernel);
         assert!(
             result.is_err(),
-            "failure point {call} unexpectedly launched"
+            "failure point {call} unexpectedly launched: {:?}",
+            kernel.operations
         );
         assert_eq!(
             kernel.live_handle_count(),

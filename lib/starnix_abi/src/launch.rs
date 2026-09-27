@@ -12,7 +12,7 @@ pub struct Launch {
 impl Launch {
     pub fn validate(&self) -> Result<(), Error> {
         self.options.validate()?;
-        if self.image_len < 64
+        if (self.image_len != 0 && self.image_len < 64)
             || self.image_len > MAX_IMAGE_BYTES
             || (self.service && !self.migratable)
         {

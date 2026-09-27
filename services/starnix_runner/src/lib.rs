@@ -9,7 +9,7 @@ mod polling;
 mod signals;
 mod vfs;
 
-use bexos_starnix_abi::{Control, Launch, NixRootSource};
+use bexos_starnix_abi::{Launch, NixRootSource, NixRunnerOptions};
 use bexos_userspace::{Channel, Memory, Startup, live_migration::Source};
 use bexos_zircon::{AsHandleRef, RestrictedState, Vmar, VmarFlags, Vmo};
 use dispatch::{Dispatcher, FutexAtomicOperation, FutexComparison, Outcome};
@@ -56,42 +56,20 @@ pub enum Error {
     Restricted,
 }
 
-struct PayloadMapping {
-    handle: u64,
-    address: u64,
-    size: u64,
+struct DirectoryPayloads {
+    package_dir: Option<u64>,
+    dependencies: Vec<bexos_component_runner::ResolvedDependency>,
 }
 
-impl Drop for PayloadMapping {
+impl Drop for DirectoryPayloads {
     fn drop(&mut self) {
-        let _ = Memory::unmap(self.address, self.size);
-        let _ = Memory::close(self.handle);
-    }
-}
-
-fn copy_payload(handle: u64, len: u64) -> Result<Arc<[u8]>, Error> {
-    let rounded = bexos_boot::page_round(len).ok_or(Error::Image)?;
-    let address = match Memory::map(handle, rounded, 2) {
-        Ok(address) => address,
-        Err(_) => {
-            let _ = Memory::close(handle);
-            return Err(Error::Mapping);
+        if let Some(package_dir) = self.package_dir {
+            let _ = Memory::close(package_dir);
         }
-    };
-    let mapping = PayloadMapping {
-        handle,
-        address,
-        size: rounded,
-    };
-    let bytes = unsafe {
-        std::slice::from_raw_parts(
-            address as *const u8,
-            usize::try_from(len).map_err(|_| Error::Image)?,
-        )
-    };
-    let owned: Arc<[u8]> = bytes.into();
-    drop(mapping);
-    Ok(owned)
+        for dependency in &self.dependencies {
+            let _ = Memory::close(dependency.directory);
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -226,9 +204,9 @@ struct Runtime {
     next_pid: u32,
     network: bexos_starnix_net::NetworkState,
     l2: l2_backend::L2Runtime,
+    late_services: Vec<u64>,
     migration: migration::Snapshot,
     source: Option<Source>,
-    control: Channel,
 }
 
 fn architecture() -> Architecture {
@@ -934,25 +912,24 @@ fn process_snapshot(
 }
 
 fn poll_control(runtime: &mut Runtime) {
-    loop {
-        let message = match runtime.control.try_recv() {
-            Ok(message) => message,
-            Err(kernel_fidl::Status::ErrTimedOut) => return,
-            Err(_) => return,
-        };
-        for handle in message.handles {
-            let _ = Memory::close(handle);
-        }
-        if let Ok(Control::Signal(signal)) = Control::decode(&message.bytes) {
-            if runtime.current.pid == 1 {
-                let _ = queue_process_signal(&mut runtime.current, signal);
-            } else if let Some(process) = runtime
-                .processes
-                .iter_mut()
-                .find(|process| process.pid == 1)
-            {
-                let _ = queue_process_signal(process, signal);
+    while let Ok(Some(action)) = bexos_component_runner::poll_controller() {
+        let signal = match action {
+            bexos_component_runner::ControllerAction::Stop => 15,
+            bexos_component_runner::ControllerAction::Kill => 9,
+            bexos_component_runner::ControllerAction::Signal(signal) => signal,
+            bexos_component_runner::ControllerAction::Connect(connection) => {
+                runtime.late_services.push(connection.endpoint);
+                continue;
             }
+        };
+        if runtime.current.pid == 1 {
+            let _ = queue_process_signal(&mut runtime.current, signal);
+        } else if let Some(process) = runtime
+            .processes
+            .iter_mut()
+            .find(|process| process.pid == 1)
+        {
+            let _ = queue_process_signal(process, signal);
         }
     }
 }
@@ -3283,16 +3260,39 @@ fn restore_process(
 }
 
 pub fn run(channel: Channel) -> Result<u8, Error> {
-    let prelude = channel.recv_blocking().map_err(|_| Error::Prelude)?;
-    let launch = Launch::decode(&prelude.bytes).map_err(|_| Error::Prelude)?;
-    if prelude.handles.len() != 1 {
-        for handle in prelude.handles {
-            let _ = Memory::close(handle);
-        }
-        return Err(Error::Prelude);
+    let start = bexos_component_runner::receive_start(
+        channel,
+        "nix",
+        bexos_starnix_abi::OPTIONS_TYPE_URL,
+        true,
+    )
+    .map_err(|_| Error::Prelude)?;
+    let options = NixRunnerOptions::decode(&start.program).map_err(|_| Error::Prelude)?;
+    let startup_channel = start.startup;
+    let service = start.service;
+    let migratable = start.migratable;
+    let directories = DirectoryPayloads {
+        package_dir: start.package_dir,
+        dependencies: start.dependencies,
+    };
+    let package_dir = directories.package_dir.ok_or(Error::Prelude)?;
+    let image_bytes = bexos_component_runner::read_package_file(
+        package_dir,
+        &options.path,
+        bexos_starnix_abi::MAX_IMAGE_BYTES,
+    )
+    .map_err(|_| Error::Image)?;
+    if image_bytes.get(..4) != Some(b"\x7fELF") {
+        return Err(Error::Image);
     }
-    let image_bytes = copy_payload(prelude.handles[0], launch.image_len)?;
-    let startup = Startup::receive(channel).map_err(|_| Error::Startup)?;
+    let launch = Launch {
+        options,
+        image_len: image_bytes.len() as u64,
+        service,
+        migratable,
+    };
+    launch.validate().map_err(|_| Error::Prelude)?;
+    let startup = Startup::receive(startup_channel).map_err(|_| Error::Startup)?;
     let initial_network = initial_network(&startup, &launch.options)?;
     let command = bexos_userspace::command::from_startup(&startup).map_err(|_| Error::Startup)?;
     if launch.service != launch.migratable
@@ -3419,7 +3419,7 @@ pub fn run(channel: Channel) -> Result<u8, Error> {
 
     let (mappings, migration, candidate) = if startup.migration_target {
         let snapshot = bexos_userspace::live_migration::receive_with_state(
-            channel,
+            startup_channel,
             startup.migration_generation,
             migration::Snapshot::candidate(architecture_id(), &launch.options)
                 .map_err(|_| Error::Startup)?,
@@ -3528,7 +3528,8 @@ pub fn run(channel: Channel) -> Result<u8, Error> {
         .collect();
     restricted.bind().map_err(|_| Error::Restricted)?;
     if !candidate {
-        Startup::ready(channel).map_err(|_| Error::Startup)?;
+        Startup::ready(startup_channel).map_err(|_| Error::Startup)?;
+        let _ = bexos_component_runner::ready();
     }
     let source = Some(Source::new(migration.migration()));
     let initial_registers = capture_registers(&restricted).to_vec();
@@ -3577,9 +3578,9 @@ pub fn run(channel: Channel) -> Result<u8, Error> {
         next_pid: restored_next_pid.max(next_tid).max(2),
         network,
         l2,
+        late_services: Vec::new(),
         migration,
         source,
-        control: channel,
     });
     let context = Box::into_raw(runtime) as u64;
     let runtime = unsafe { &*(context as *const Runtime) };

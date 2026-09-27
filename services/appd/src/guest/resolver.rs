@@ -1,8 +1,8 @@
 use super::ResolvedLibraryDependency;
 use crate::{
-    KernelHandle, Manifest, PackageImage, PackageImageError, PackageImageResolver, PackageLibrary,
-    PackageLibraryDependency, PackageLibraryKind, ProcessRunnerOptions,
-    manifest::LibraryExportKind,
+    KernelHandle, Manifest, PackageDirectories, PackageDirectoryDependency, PackageImage,
+    PackageImageError, PackageImageResolver, PackageLibrary, PackageLibraryDependency,
+    PackageLibraryKind, ProcessRunnerOptions, manifest::LibraryExportKind,
 };
 use alloc::borrow::Cow;
 use alloc::format;
@@ -10,6 +10,19 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use bexos_kernel_core::bootfs::Bootfs;
 use bexos_userspace::{Channel, Memory, fs, log};
+use core::sync::atomic::{AtomicU64, Ordering};
+
+static FIXED_NATIVE_RUNNER_HANDLE: AtomicU64 = AtomicU64::new(0);
+static FIXED_NATIVE_RUNNER_LEN: AtomicU64 = AtomicU64::new(0);
+
+pub fn install_fixed_native_runner(handle: u64, len: u64) -> Result<(), fs_fidl::FsStatus> {
+    if handle == 0 || len == 0 || len > 64 * 1024 * 1024 {
+        return Err(fs_fidl::FsStatus::InvalidArgs);
+    }
+    FIXED_NATIVE_RUNNER_LEN.store(len, Ordering::Release);
+    FIXED_NATIVE_RUNNER_HANDLE.store(handle, Ordering::Release);
+    Ok(())
+}
 pub struct Image<'a> {
     package: String,
     path: String,
@@ -26,14 +39,40 @@ pub struct Image<'a> {
 }
 pub struct Resolver<'a> {
     images: Vec<Image<'a>>,
-    runtime: Option<RuntimeImage>,
+    providers: Vec<ProviderImage>,
+    component_package: String,
+    package_root: Option<u64>,
+    dependency_roots: Vec<PackageDirectoryDependency>,
+}
+struct ProviderImage {
+    package: String,
+    path: String,
+    image: RuntimeImage,
+    directory: Option<u64>,
+}
+impl Drop for ProviderImage {
+    fn drop(&mut self) {
+        if let Some(directory) = self.directory {
+            let _ = Memory::close(directory);
+        }
+    }
 }
 impl<'a> Resolver<'a> {
-    pub fn boot(boot: &Bootfs<'a>, boot_handle: u64, manifests: &[Manifest]) -> Self {
+    pub fn boot(
+        boot: &Bootfs<'a>,
+        boot_handle: u64,
+        manifests: &[Manifest],
+        policy: &crate::platform_config::RunnerPolicy,
+    ) -> Self {
         let mut images = Vec::new();
         for manifest in manifests {
             for p in &manifest.processes {
                 if p.wave.is_none() {
+                    continue;
+                }
+                if policy.provider_for(&p.runner).map(|provider| provider.kind)
+                    != Some(crate::platform_config::ComponentRunnerProviderKind::DirectElf)
+                {
                     continue;
                 }
                 let package_path = executable_path(p).expect("boot runner options");
@@ -63,12 +102,65 @@ impl<'a> Resolver<'a> {
                 push_boot_library(boot, boot_handle, manifests, dependency, &mut images);
             }
         }
-        let runtime = boot
-            .find("/boot/pkg/bexos.platform.wasm_runner/bin/wasm_runner")
-            .ok()
-            .flatten()
-            .and_then(|f| RuntimeImage::new(f.bytes.to_vec()).ok());
-        Self { images, runtime }
+        let native_path = "/boot/pkg/bexos.platform.native_runner/bin/native_runner";
+        let native = boot
+            .find(native_path)
+            .unwrap()
+            .expect("fixed BootFS native_runner");
+        images.push(Image {
+            package: crate::runner::bootstrap::PACKAGE.into(),
+            path: crate::runner::bootstrap::PATH.into(),
+            export_name: String::new(),
+            soname: String::new(),
+            symbol_prefix: String::new(),
+            abi_version: 0,
+            kind: PackageLibraryKind::Native,
+            direct_dependencies: Vec::new(),
+            bytes: Cow::Borrowed(native.bytes),
+            handle: boot_handle,
+            vmo_offset: native.payload_offset,
+            close_handle: false,
+        });
+        let mut providers = Vec::new();
+        for registration in &policy.component_runner_providers {
+            if registration.kind
+                != crate::platform_config::ComponentRunnerProviderKind::ComponentRunner
+                || !manifests
+                    .iter()
+                    .flat_map(|manifest| &manifest.processes)
+                    .any(|process| process.runner == registration.runner_name)
+            {
+                continue;
+            }
+            let boot_path = format!(
+                "/boot/pkg/{}/{}",
+                registration.package_id,
+                registration
+                    .executable_path
+                    .strip_prefix("/pkg/")
+                    .unwrap_or(&registration.executable_path)
+            );
+            if let Some(image) = boot
+                .find(&boot_path)
+                .ok()
+                .flatten()
+                .and_then(|file| RuntimeImage::new(file.bytes.to_vec()).ok())
+            {
+                providers.push(ProviderImage {
+                    package: registration.package_id.clone(),
+                    path: registration.executable_path.clone(),
+                    image,
+                    directory: None,
+                });
+            }
+        }
+        Self {
+            images,
+            providers,
+            component_package: String::new(),
+            package_root: None,
+            dependency_roots: Vec::new(),
+        }
     }
     pub fn disk_with_dependencies(
         root: Channel,
@@ -77,9 +169,15 @@ impl<'a> Resolver<'a> {
         vfsd: Channel,
         registry: &bexos_app_registry::MemoryAppRegistry,
         container: Option<(&str, Channel)>,
+        policy: &crate::platform_config::RunnerPolicy,
     ) -> Result<Self, fs_fidl::FsStatus> {
         let mut images = Vec::new();
         for p in &manifest.processes {
+            if policy.provider_for(&p.runner).map(|provider| provider.kind)
+                != Some(crate::platform_config::ComponentRunnerProviderKind::DirectElf)
+            {
+                continue;
+            }
             let package_path = executable_path(p).ok_or(fs_fidl::FsStatus::InvalidArgs)?;
             let (source, path) = if container.is_some_and(|(name, _)| name == p.name) {
                 let (_, source) = container.unwrap();
@@ -116,6 +214,9 @@ impl<'a> Resolver<'a> {
             });
         }
         for dependency in dependencies {
+            if dependency.kind != PackageLibraryKind::Native {
+                continue;
+            }
             let path = dependency
                 .export_path
                 .strip_prefix("/pkg/")
@@ -137,11 +238,92 @@ impl<'a> Resolver<'a> {
                 close_handle: false,
             });
         }
+        let mut providers = Vec::new();
+        for registration in &policy.component_runner_providers {
+            if registration.kind
+                != crate::platform_config::ComponentRunnerProviderKind::ComponentRunner
+                || !manifest
+                    .processes
+                    .iter()
+                    .any(|process| process.runner == registration.runner_name)
+            {
+                continue;
+            }
+            if let Some((image, directory)) = provider_runtime_image(
+                vfsd,
+                registry,
+                manifest,
+                &registration.runner_name,
+                &registration.package_id,
+                registration
+                    .executable_path
+                    .strip_prefix("/pkg/")
+                    .unwrap_or(&registration.executable_path),
+                &registration.expected_signer,
+            ) {
+                providers.push(ProviderImage {
+                    package: registration.package_id.clone(),
+                    path: registration.executable_path.clone(),
+                    image,
+                    directory: Some(directory),
+                });
+            }
+        }
+        images.push(fixed_native_runner_image()?);
         Ok(Self {
             images,
-            runtime: runtime_image(vfsd, registry, manifest),
+            providers,
+            component_package: manifest.package_name.clone(),
+            package_root: Some(root.0),
+            dependency_roots: dependencies
+                .iter()
+                .map(|dependency| PackageDirectoryDependency {
+                    package_name: dependency.package_name.clone(),
+                    mount_alias: dependency.mount_alias.clone().unwrap_or_default(),
+                    export_name: dependency.export_name.clone(),
+                    export_path: dependency.export_path.clone(),
+                    symbol_prefix: dependency.symbol_prefix.clone(),
+                    soname: dependency.soname.clone(),
+                    abi_version: dependency.abi_version,
+                    kind: dependency.kind,
+                    direct_dependencies: dependency.direct_dependencies.clone(),
+                    directory: KernelHandle {
+                        raw: dependency.directory.0,
+                    },
+                })
+                .collect(),
         })
     }
+}
+
+fn fixed_native_runner_image() -> Result<Image<'static>, fs_fidl::FsStatus> {
+    let handle = FIXED_NATIVE_RUNNER_HANDLE.load(Ordering::Acquire);
+    let len = FIXED_NATIVE_RUNNER_LEN.load(Ordering::Acquire);
+    if handle == 0 || len == 0 || len > 64 * 1024 * 1024 {
+        return Err(fs_fidl::FsStatus::NotFound);
+    }
+    let rounded = bexos_boot::page_round(len).ok_or(fs_fidl::FsStatus::InvalidArgs)?;
+    let address = Memory::map(handle, rounded, 2).map_err(|_| fs_fidl::FsStatus::NoSpace)?;
+    let mut bytes = Vec::with_capacity(len as usize);
+    unsafe {
+        core::ptr::copy_nonoverlapping(address as *const u8, bytes.as_mut_ptr(), len as usize);
+        bytes.set_len(len as usize);
+    }
+    Memory::unmap(address, rounded).map_err(|_| fs_fidl::FsStatus::Io)?;
+    Ok(Image {
+        package: crate::runner::bootstrap::PACKAGE.into(),
+        path: crate::runner::bootstrap::PATH.into(),
+        export_name: String::new(),
+        soname: String::new(),
+        symbol_prefix: String::new(),
+        abi_version: 0,
+        kind: PackageLibraryKind::Native,
+        direct_dependencies: Vec::new(),
+        bytes: Cow::Owned(bytes),
+        handle: 0,
+        vmo_offset: 0,
+        close_handle: false,
+    })
 }
 
 fn package_path(path: &str) -> String {
@@ -201,24 +383,78 @@ fn read_backing_image_bounded(
     Ok((bytes, source))
 }
 impl PackageImageResolver for Resolver<'_> {
-    fn wasm_runtime_digest(&self) -> [u8; 32] {
-        self.runtime
-            .as_ref()
-            .map_or(*include_bytes!(env!("BEXOS_WASM_RUNNER_DIGEST")), |r| {
-                r.digest
-            })
+    fn supports_directory_payloads(&self) -> bool {
+        self.package_root.is_some()
     }
-    fn resolve_wasm_runtime(&self) -> Result<PackageImage<'_>, PackageImageError> {
-        self.runtime
-            .as_ref()
-            .map(RuntimeImage::image)
-            .ok_or(PackageImageError::NotFound)
+
+    fn component_directories(
+        &self,
+        package: &str,
+    ) -> Result<PackageDirectories, PackageImageError> {
+        // This resolver owns the launched component's root. Registered runner
+        // providers have separately authenticated images and must never be
+        // resolved through the component's package directory.
+        if package != self.component_package {
+            let package_dir = self
+                .providers
+                .iter()
+                .find(|provider| provider.package == package)
+                .and_then(|provider| provider.directory)
+                .map(|directory| {
+                    Memory::duplicate(directory, 1 | 2 | 4 | 32)
+                        .map(|raw| KernelHandle { raw })
+                        .map_err(|_| PackageImageError::AccessDenied)
+                })
+                .transpose()?;
+            return Ok(PackageDirectories {
+                package_dir,
+                dependencies: Vec::new(),
+            });
+        }
+        let package_dir = match self.package_root {
+            Some(root) => Some(KernelHandle {
+                raw: Memory::duplicate(root, 1 | 2 | 4 | 32)
+                    .map_err(|_| PackageImageError::AccessDenied)?,
+            }),
+            None => None,
+        };
+        let mut dependencies: Vec<PackageDirectoryDependency> = Vec::new();
+        for dependency in &self.dependency_roots {
+            let mut duplicated = dependency.clone();
+            duplicated.directory = KernelHandle {
+                raw: match Memory::duplicate(dependency.directory.raw, 1 | 2 | 4 | 32) {
+                    Ok(handle) => handle,
+                    Err(_) => {
+                        if let Some(package_dir) = package_dir {
+                            let _ = Memory::close(package_dir.raw);
+                        }
+                        for prior in dependencies {
+                            let _ = Memory::close(prior.directory.raw);
+                        }
+                        return Err(PackageImageError::AccessDenied);
+                    }
+                },
+            };
+            dependencies.push(duplicated);
+        }
+        Ok(PackageDirectories {
+            package_dir,
+            dependencies,
+        })
     }
+
     fn resolve_executable<'a>(
         &'a self,
         package: &str,
         path: &str,
     ) -> Result<PackageImage<'a>, PackageImageError> {
+        if let Some(provider) = self
+            .providers
+            .iter()
+            .find(|provider| provider.package == package && provider.path == path)
+        {
+            return Ok(provider.image.image());
+        }
         let image = self
             .images
             .iter()
@@ -408,33 +644,18 @@ fn boot_library_dependency_metadata(
 fn executable_path(process: &crate::manifest::Process) -> Option<&str> {
     match &process.runner_options {
         Some(ProcessRunnerOptions::Elf(o)) => Some(&o.path),
-        Some(ProcessRunnerOptions::Wasm(o)) => Some(&o.path),
-        Some(ProcessRunnerOptions::Nix(o)) => Some(&o.path),
         _ => None,
     }
 }
 
 pub struct RuntimeImage {
-    pub digest: [u8; 32],
     bytes: Vec<u8>,
     handle: u64,
 }
 impl RuntimeImage {
-    pub fn from_archive(bytes: &[u8]) -> Result<Self, crate::PackageImageError> {
-        let verified = crate::runner::runtime_archive::verify(bytes)?;
-        let mut image =
-            Self::new(verified.bytes).map_err(|_| crate::PackageImageError::NotFound)?;
-        image.digest = verified.digest;
-        Ok(image)
-    }
-
     fn new(bytes: Vec<u8>) -> Result<Self, fs_fidl::FsStatus> {
         let handle = Memory::from_bytes(&bytes).map_err(|_| fs_fidl::FsStatus::NoSpace)?;
-        Ok(Self {
-            bytes,
-            handle,
-            digest: *include_bytes!(env!("BEXOS_WASM_RUNNER_DIGEST")),
-        })
+        Ok(Self { bytes, handle })
     }
     pub fn image(&self) -> PackageImage<'_> {
         PackageImage {
@@ -444,70 +665,42 @@ impl RuntimeImage {
         }
     }
 }
-impl Drop for RuntimeImage {
-    fn drop(&mut self) {
-        let _ = Memory::close(self.handle);
-    }
-}
-pub fn runtime_image(
+
+pub fn provider_runtime_image(
     vfsd: Channel,
     registry: &bexos_app_registry::MemoryAppRegistry,
     manifest: &Manifest,
-) -> Option<RuntimeImage> {
-    resolve_runtime_image(vfsd, registry, manifest, true)
-}
-/// A replacement without a nested runner selects the platform default, exactly
-/// as a later disk launch of that replacement archive will.
-pub fn default_runtime_image(
-    vfsd: Channel,
-    registry: &bexos_app_registry::MemoryAppRegistry,
-    manifest: &Manifest,
-) -> Option<RuntimeImage> {
-    resolve_runtime_image(vfsd, registry, manifest, false)
-}
-fn resolve_runtime_image(
-    vfsd: Channel,
-    registry: &bexos_app_registry::MemoryAppRegistry,
-    manifest: &Manifest,
-    allow_package_override: bool,
-) -> Option<RuntimeImage> {
+    runner: &str,
+    package: &str,
+    path: &str,
+    expected_signer: &str,
+) -> Option<(RuntimeImage, u64)> {
     if !manifest
         .processes
         .iter()
-        .any(|p| matches!(p.runner_options, Some(ProcessRunnerOptions::Wasm(_))))
+        .any(|process| process.runner == runner)
     {
         return None;
     }
-    let result = (|| {
-        if let Some(record) = allow_package_override
-            .then(|| registry.record(&manifest.package_name).ok())
-            .flatten()
-        {
-            let root = bexos_userspace::vfs::get_package_directory(vfsd, &record.archive_id())?;
-            let file = fs::open(root, crate::runner::runtime_archive::ARCHIVE_PATH, 1 | 4);
-            let _ = Memory::close(root.0);
-            match file {
-                Ok(file) => {
-                    let result = read_backing_image_bounded(
-                        file,
-                        crate::runner::runtime_archive::MAX_RUNTIME_ARCHIVE_BYTES as u64,
-                    );
-                    let _ = fs::close(file);
-                    let (bytes, source) = result?;
-                    let _ = Memory::close(source);
-                    return RuntimeImage::from_archive(&bytes)
-                        .map_err(|_| fs_fidl::FsStatus::AccessDenied);
-                }
-                Err(fs_fidl::FsStatus::NotFound) => {}
-                Err(error) => return Err(error),
-            }
+    let record = registry.record(package).ok()?;
+    if record
+        .verified_signer
+        .as_ref()
+        .is_none_or(|signer| signer.root_anchor_id != expected_signer)
+    {
+        return None;
+    }
+    let root = match bexos_userspace::vfs::get_package_directory(vfsd, &record.archive_id()) {
+        Ok(root) => root,
+        Err(error) => {
+            log(&format!(
+                "appd: registered component runner unavailable runner={runner} error={error:?}\n"
+            ));
+            return None;
         }
-        let record = registry
-            .record(bexos_wasm_abi::RUNNER_PACKAGE)
-            .map_err(|_| fs_fidl::FsStatus::NotFound)?;
-        let root = bexos_userspace::vfs::get_package_directory(vfsd, &record.archive_id())?;
-        let file = fs::open(root, "bin/wasm_runner", 1 | 4);
-        let _ = Memory::close(root.0);
+    };
+    let result = (|| {
+        let file = fs::open(root, path, 1 | 4);
         let file = file?;
         let result = read_backing_image(file);
         let _ = fs::close(file);
@@ -516,10 +709,18 @@ fn resolve_runtime_image(
         RuntimeImage::new(bytes)
     })();
     match result {
-        Ok(image) => Some(image),
-        Err(e) => {
-            log(&format!("appd: trusted WASM runtime unavailable: {e:?}\n"));
+        Ok(image) => Some((image, root.0)),
+        Err(error) => {
+            let _ = Memory::close(root.0);
+            log(&format!(
+                "appd: registered component runner unavailable runner={runner} error={error:?}\n"
+            ));
             None
         }
+    }
+}
+impl Drop for RuntimeImage {
+    fn drop(&mut self) {
+        let _ = Memory::close(self.handle);
     }
 }

@@ -13,10 +13,12 @@ base_packages: "//services/vswitchd:vswitchd_archive"
 base_packages: "//services/timed:timed_archive"
 base_packages: "//services/jobd:jobd_archive"
 base_packages: "//services/pkgd:pkgd_archive"
+base_packages: "//services/wasm_runner:wasm_runner_archive"
 
 autoinstall_packages {
   package: "//services/storage_verify:storage_verify"
 }
+autoinstall_packages { package: "//services/wasm_runner:wasm_runner_archive" }
 
 autoinstall_packages {
   package: "//lib/crypto:crypto_archive"

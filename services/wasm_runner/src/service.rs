@@ -36,6 +36,7 @@ pub fn fresh(
     let mut runtime = Runtime::source(instance, control, migration, host);
     runtime.refresh()?;
     Startup::ready(control).map_err(|e| wasmtime::format_err!("service ready: {e:?}"))?;
+    let _ = bexos_component_runner::ready();
     serve(runtime)
 }
 pub fn serve(mut runtime: Runtime) -> Result<u8> {
@@ -47,6 +48,46 @@ pub fn serve(mut runtime: Runtime) -> Result<u8> {
         activate(runtime.instance.as_mut().unwrap())?;
     }
     loop {
+        while let Ok(Some(action)) = bexos_component_runner::poll_controller() {
+            match action {
+                bexos_component_runner::ControllerAction::Stop
+                | bexos_component_runner::ControllerAction::Kill => return Ok(143),
+                bexos_component_runner::ControllerAction::Signal(_) => {}
+                bexos_component_runner::ControllerAction::Connect(connection) => {
+                    let binding = ServiceBinding {
+                        service: connection.service,
+                        protocol: connection.protocol.clone(),
+                        capability: connection.capability,
+                        method_ordinals: connection.method_ordinals,
+                        permission_values: connection.permission_values,
+                        caller_package: Some(connection.caller_package),
+                        caller_uid: Some(connection.caller_uid),
+                        caller_foreground: connection.caller_foreground,
+                        provider_instance_id: None,
+                    };
+                    let entry = Entry {
+                        name: format!("client:{}", connection.protocol),
+                        handle: Arc::new(NativeHandle {
+                            raw: connection.endpoint,
+                            kind: Kind::Channel,
+                            rights: READ | WRITE,
+                            companions: Vec::new(),
+                            allowed_methods: Some(binding.method_ordinals.clone()),
+                            grant: Some(crate::host::grant_metadata(&binding)),
+                            ownership: None,
+                        }),
+                    };
+                    let _ = runtime
+                        .instance
+                        .as_mut()
+                        .unwrap()
+                        .store_mut()
+                        .data_mut()
+                        .resources
+                        .insert(entry);
+                }
+            }
+        }
         // Checkpointing includes the component bytes and serialized application
         // state. Do it only for a migration request, never on every idle tick.
         let pending = source

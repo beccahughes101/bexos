@@ -1,8 +1,8 @@
 use super::handle::ObjectKind;
 use super::{
     CheckpointResult, ControlPlane, Handle, HardwareAccess, KernelServiceStatus, RIGHT_ADMIN,
-    RIGHT_EXECUTE, RIGHT_MANAGE_TASK, RIGHT_MAP, RIGHT_READ, RIGHT_SET_POLICY, RIGHT_SIGNAL,
-    RIGHT_TRANSFER, RIGHT_WRITE, SIGNAL_TERMINATED,
+    RIGHT_DUPLICATE, RIGHT_EXECUTE, RIGHT_MANAGE_TASK, RIGHT_MAP, RIGHT_READ, RIGHT_SET_POLICY,
+    RIGHT_SIGNAL, RIGHT_TRANSFER, RIGHT_WRITE, SIGNAL_TERMINATED,
 };
 
 pub const RESOURCE_GROUP_SYSTEM: u32 = 1;
@@ -27,6 +27,7 @@ pub struct ProcessRecord {
     pub package_id_len: usize,
     pub hardware_access: HardwareAccess,
     pub resource_group_id: u32,
+    pub job_id: u64,
     pub vm_space_id: u64,
     pub main_thread_id: u64,
     pub state: ProcessState,
@@ -126,6 +127,25 @@ impl ProcessTable {
         package_id: &str,
         hardware_access: HardwareAccess,
     ) -> Result<u64, KernelServiceStatus> {
+        self.insert_in_job(
+            name,
+            resource_group_id,
+            vm_space_id,
+            package_id,
+            hardware_access,
+            0,
+        )
+    }
+
+    pub fn insert_in_job(
+        &mut self,
+        name: &str,
+        resource_group_id: u32,
+        vm_space_id: u64,
+        package_id: &str,
+        hardware_access: HardwareAccess,
+        job_id: u64,
+    ) -> Result<u64, KernelServiceStatus> {
         if name.is_empty() || name.len() > 64 || package_id.len() > 96 || vm_space_id == 0 {
             return Err(KernelServiceStatus::InvalidArgs);
         }
@@ -146,6 +166,7 @@ impl ProcessTable {
             package_id_len: package_id.len(),
             hardware_access,
             resource_group_id,
+            job_id,
             vm_space_id,
             main_thread_id: 0,
             state: ProcessState::Created,
@@ -192,6 +213,85 @@ impl ProcessTable {
 
     pub fn iter(&self) -> core::slice::Iter<'_, ProcessRecord> {
         self.entries.iter()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct JobRecord {
+    pub id: u64,
+    pub name: [u8; 64],
+    pub name_len: usize,
+    pub package_id: [u8; 96],
+    pub package_id_len: usize,
+    pub resource_group_id: u32,
+    pub hardware_access: HardwareAccess,
+    pub realtime_scheduling: bool,
+    pub max_processes: u16,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct JobTable {
+    entries: Vec<JobRecord>,
+    next_job_id: u64,
+}
+
+impl JobTable {
+    pub const fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            next_job_id: 1,
+        }
+    }
+
+    pub fn create(
+        &mut self,
+        name: &str,
+        package_id: &str,
+        resource_group_id: u32,
+        hardware_access: HardwareAccess,
+        realtime_scheduling: bool,
+        max_processes: u16,
+    ) -> Result<u64, KernelServiceStatus> {
+        if name.is_empty()
+            || name.len() > 64
+            || package_id.is_empty()
+            || package_id.len() > 96
+            || resource_group_id == 0
+            || max_processes == 0
+        {
+            return Err(KernelServiceStatus::InvalidArgs);
+        }
+        self.entries
+            .try_reserve(1)
+            .map_err(|_| KernelServiceStatus::NoMemory)?;
+        let id = self.next_job_id;
+        self.next_job_id = self.next_job_id.saturating_add(1);
+        let mut stored_name = [0; 64];
+        stored_name[..name.len()].copy_from_slice(name.as_bytes());
+        let mut stored_package_id = [0; 96];
+        stored_package_id[..package_id.len()].copy_from_slice(package_id.as_bytes());
+        self.entries.push(JobRecord {
+            id,
+            name: stored_name,
+            name_len: name.len(),
+            package_id: stored_package_id,
+            package_id_len: package_id.len(),
+            resource_group_id,
+            hardware_access,
+            realtime_scheduling,
+            max_processes,
+        });
+        Ok(id)
+    }
+
+    pub fn get(&self, id: u64) -> Option<JobRecord> {
+        self.entries.iter().find(|job| job.id == id).copied()
+    }
+}
+
+impl Default for JobTable {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -978,6 +1078,31 @@ impl ControlPlane {
         Ok(())
     }
 
+    /// Produces an attenuated handle to the same kernel object. Rights can
+    /// only be removed, never added, and the source must itself be
+    /// duplicable. This mirrors the object protocol used by userspace and is
+    /// also used to validate delegated component-runner handles in core tests.
+    pub fn duplicate_handle(
+        &mut self,
+        handle: Handle,
+        rights: u32,
+    ) -> Result<Handle, KernelServiceStatus> {
+        let record = self
+            .handles
+            .get(handle.raw)
+            .ok_or(KernelServiceStatus::InvalidHandle)?;
+        if !record.has_rights(RIGHT_DUPLICATE) || rights & !record.rights != 0 {
+            return Err(KernelServiceStatus::AccessDenied);
+        }
+        self.handles.insert(
+            record.object_id,
+            record.kind,
+            rights,
+            record.owner_task_id,
+            record.endpoint,
+        )
+    }
+
     pub(super) fn close_handles_for_process(&mut self, process_id: u64) {
         while let Some(record) = self.handles.remove_for_owner(process_id) {
             if record.kind == ObjectKind::GpuReservation {
@@ -1028,6 +1153,25 @@ impl ControlPlane {
         hardware_access: HardwareAccess,
         realtime_scheduling: bool,
     ) -> Result<(Handle, Handle, Handle), KernelServiceStatus> {
+        self.create_process_with_policy_and_job(
+            name,
+            resource_group_id,
+            package_id,
+            hardware_access,
+            realtime_scheduling,
+            0,
+        )
+    }
+
+    fn create_process_with_policy_and_job(
+        &mut self,
+        name: &str,
+        resource_group_id: u32,
+        package_id: &str,
+        hardware_access: HardwareAccess,
+        realtime_scheduling: bool,
+        job_id: u64,
+    ) -> Result<(Handle, Handle, Handle), KernelServiceStatus> {
         if name.is_empty() || name.len() > 64 || package_id.len() > 96 {
             return Err(KernelServiceStatus::InvalidArgs);
         }
@@ -1050,12 +1194,13 @@ impl ControlPlane {
         let asid = self.asids.allocate().ok_or(KernelServiceStatus::NoMemory)?;
         let vm_space_id = self.vm_spaces.insert(1, 0, asid)?;
         let root_vmar_id = self.vmars.insert_root(vm_space_id)?;
-        let process_id = self.processes.insert(
+        let process_id = self.processes.insert_in_job(
             name,
             resource_group_id,
             vm_space_id,
             package_id,
             hardware_access,
+            job_id,
         )?;
         if let Some(vm_space) = self
             .vm_spaces
@@ -1068,25 +1213,202 @@ impl ControlPlane {
         let process_handle = self.handles.insert(
             process_id,
             ObjectKind::Process,
-            RIGHT_ADMIN | RIGHT_MANAGE_PROCESS,
+            RIGHT_ADMIN
+                | RIGHT_MANAGE_PROCESS
+                | RIGHT_MANAGE_TASK
+                | RIGHT_READ
+                | RIGHT_DUPLICATE
+                | RIGHT_TRANSFER,
             0,
             None,
         )?;
         let vm_space_handle = self.handles.insert(
             vm_space_id,
             ObjectKind::VmSpace,
-            RIGHT_READ | RIGHT_WRITE | RIGHT_MAP | RIGHT_ADMIN | RIGHT_TRANSFER,
+            RIGHT_READ | RIGHT_WRITE | RIGHT_MAP | RIGHT_ADMIN | RIGHT_TRANSFER | RIGHT_DUPLICATE,
             0,
             None,
         )?;
         let root_vmar_handle = self.handles.insert(
             root_vmar_id,
             ObjectKind::Vmar,
-            RIGHT_READ | RIGHT_WRITE | RIGHT_EXECUTE | RIGHT_MAP | RIGHT_ADMIN | RIGHT_TRANSFER,
+            RIGHT_READ
+                | RIGHT_WRITE
+                | RIGHT_EXECUTE
+                | RIGHT_MAP
+                | RIGHT_ADMIN
+                | RIGHT_TRANSFER
+                | RIGHT_DUPLICATE,
             0,
             None,
         )?;
         Ok((process_handle, vm_space_handle, root_vmar_handle))
+    }
+
+    pub fn create_component_job(
+        &mut self,
+        name: &str,
+        resource_group_id: u32,
+        package_id: &str,
+        hardware_access: HardwareAccess,
+        realtime_scheduling: bool,
+        max_processes: u16,
+    ) -> Result<Handle, KernelServiceStatus> {
+        if self.resource_groups.get(resource_group_id).is_none() {
+            return Err(KernelServiceStatus::InvalidArgs);
+        }
+        if realtime_scheduling
+            && !self
+                .resource_groups
+                .ancestor_ids(resource_group_id)
+                .iter()
+                .all(|id| {
+                    self.resource_groups
+                        .get(*id)
+                        .is_some_and(|group| group.allow_realtime)
+                })
+        {
+            return Err(KernelServiceStatus::AccessDenied);
+        }
+        let id = self.jobs.create(
+            name,
+            package_id,
+            resource_group_id,
+            hardware_access,
+            realtime_scheduling,
+            max_processes,
+        )?;
+        self.handles.insert(
+            id,
+            ObjectKind::Job,
+            RIGHT_ADMIN | RIGHT_MANAGE_TASK | RIGHT_READ | RIGHT_DUPLICATE | RIGHT_TRANSFER,
+            0,
+            None,
+        )
+    }
+
+    pub fn create_process_in_job(
+        &mut self,
+        job: Handle,
+        name: &str,
+    ) -> Result<(Handle, Handle, Handle), KernelServiceStatus> {
+        let handle = self
+            .handles
+            .get(job.raw)
+            .ok_or(KernelServiceStatus::InvalidHandle)?;
+        if handle.kind != ObjectKind::Job || !handle.has_rights(RIGHT_ADMIN) {
+            return Err(KernelServiceStatus::AccessDenied);
+        }
+        let job = self
+            .jobs
+            .get(handle.object_id)
+            .ok_or(KernelServiceStatus::InvalidHandle)?;
+        let count = self
+            .processes
+            .iter()
+            .filter(|process| process.job_id == job.id)
+            .count();
+        if count >= usize::from(job.max_processes) {
+            return Err(KernelServiceStatus::ResourceExhausted);
+        }
+        let mut owned_package_id = [0u8; 96];
+        owned_package_id[..job.package_id_len]
+            .copy_from_slice(&job.package_id[..job.package_id_len]);
+        let package_id = core::str::from_utf8(&owned_package_id[..job.package_id_len])
+            .map_err(|_| KernelServiceStatus::InvalidArgs)?;
+        self.create_process_with_policy_and_job(
+            name,
+            job.resource_group_id,
+            package_id,
+            job.hardware_access,
+            job.realtime_scheduling,
+            job.id,
+        )
+    }
+
+    pub fn job_status(&self, job: Handle) -> Result<(u16, u16), KernelServiceStatus> {
+        let handle = self
+            .handles
+            .get(job.raw)
+            .ok_or(KernelServiceStatus::InvalidHandle)?;
+        if handle.kind != ObjectKind::Job
+            || !handle.has_rights(RIGHT_READ) && !handle.has_rights(RIGHT_MANAGE_TASK)
+        {
+            return Err(KernelServiceStatus::AccessDenied);
+        }
+        self.jobs
+            .get(handle.object_id)
+            .ok_or(KernelServiceStatus::InvalidHandle)?;
+        let mut count = 0u16;
+        let mut running = 0u16;
+        for process in self
+            .processes
+            .iter()
+            .filter(|process| process.job_id == handle.object_id)
+        {
+            count = count.saturating_add(1);
+            if process.state != ProcessState::Exited {
+                running = running.saturating_add(1);
+            }
+        }
+        Ok((count, running))
+    }
+
+    pub fn terminate_job(&mut self, job: Handle, exit_code: i32) -> KernelServiceStatus {
+        let handle = match self.handles.get(job.raw) {
+            Some(handle)
+                if handle.kind == ObjectKind::Job
+                    && (handle.has_rights(RIGHT_MANAGE_TASK) || handle.has_rights(RIGHT_ADMIN)) =>
+            {
+                handle
+            }
+            Some(_) => return KernelServiceStatus::AccessDenied,
+            None => return KernelServiceStatus::InvalidHandle,
+        };
+        if self.jobs.get(handle.object_id).is_none() {
+            return KernelServiceStatus::InvalidHandle;
+        }
+        let process_ids: Vec<_> = self
+            .processes
+            .iter()
+            .filter(|process| process.job_id == handle.object_id)
+            .map(|process| process.id)
+            .collect();
+        for process_id in process_ids {
+            let existing = self
+                .handles
+                .entry_for_object(process_id, ObjectKind::Process)
+                .filter(|record| {
+                    record.has_rights(RIGHT_MANAGE_TASK) || record.has_rights(RIGHT_ADMIN)
+                })
+                .map(|record| Handle {
+                    raw: record.handle_id,
+                });
+            let (process_handle, temporary) = match existing {
+                Some(handle) => (handle, false),
+                None => match self.handles.insert(
+                    process_id,
+                    ObjectKind::Process,
+                    RIGHT_MANAGE_TASK,
+                    0,
+                    None,
+                ) {
+                    Ok(handle) => (handle, true),
+                    Err(status) => return status,
+                },
+            };
+            let status = self.terminate_process(process_handle, exit_code);
+            if temporary {
+                let _ = self.close_handle(process_handle);
+            }
+            if status != KernelServiceStatus::Ok {
+                return status;
+            }
+        }
+        self.handles
+            .add_signals_for_object(handle.object_id, ObjectKind::Job, SIGNAL_TERMINATED);
+        self.wake_handle_waiters_for_object(handle.object_id, ObjectKind::Job, SIGNAL_TERMINATED);
+        KernelServiceStatus::Ok
     }
 
     pub fn process_for_handle(
@@ -1099,6 +1421,21 @@ impl ControlPlane {
         if record.kind != ObjectKind::Process
             || !record.has_rights(RIGHT_ADMIN) && !record.has_rights(RIGHT_MANAGE_TASK)
         {
+            return Err(KernelServiceStatus::AccessDenied);
+        }
+        self.processes
+            .get(record.object_id)
+            .ok_or(KernelServiceStatus::InvalidHandle)
+    }
+
+    pub fn inspect_process_for_handle(
+        &self,
+        process: Handle,
+    ) -> Result<ProcessRecord, KernelServiceStatus> {
+        let Some(record) = self.handles.get(process.raw) else {
+            return Err(KernelServiceStatus::InvalidHandle);
+        };
+        if record.kind != ObjectKind::Process || !record.has_rights(RIGHT_READ) {
             return Err(KernelServiceStatus::AccessDenied);
         }
         self.processes

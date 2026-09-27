@@ -73,7 +73,7 @@ impl Launch {
 
     pub fn validate(&self) -> Result<(), Error> {
         self.options.validate()?;
-        if self.module_len < 8
+        if (self.module_len != 0 && self.module_len < 8)
             || self.module_len > self.options.limits.max_module_bytes
             || (self.service && !self.migratable)
             || self.component_dependencies.len() != self.options.component_imports.len()
@@ -88,7 +88,7 @@ impl Launch {
             .zip(self.component_dependencies.iter())
         {
             if expected != &dependency.import
-                || dependency.module_len < 8
+                || (dependency.module_len != 0 && dependency.module_len < 8)
                 || dependency.module_len > self.options.limits.max_module_bytes
             {
                 return Err(Error::InvalidOptions);

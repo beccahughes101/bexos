@@ -5,6 +5,12 @@ pub use bootstrap_fidl::HardwareResourceKind;
 use bootstrap_fidl::{FidlEncode, HandleRef};
 use kernel_fidl::Status;
 
+/// Versioned cooperative-stop message delivered on the startup control
+/// channel. Runtimes that understand it invoke their cancellation hook;
+/// older binaries safely ignore it and are terminated by the coordinator's
+/// bounded escalation timer.
+pub const GRACEFUL_STOP_MESSAGE_V1: &[u8] = b"bexos.bootstrap.stop.v1";
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StartupHardwareResource {
     pub kind: HardwareResourceKind,
@@ -89,6 +95,26 @@ impl Startup {
             6 | 7 | 8 | 9 | 10 | 11 => decode_v6_or_later_startup(&m.bytes, &hs),
             _ => Err(Status::ErrInvalidArgs),
         }
+    }
+
+    /// Poll a startup control channel for the versioned cooperative-stop
+    /// message and invoke the supplied cancellation hook exactly once for the
+    /// received request. Unknown messages are rejected so callers do not
+    /// accidentally treat another control protocol as cancellation.
+    pub fn poll_graceful_stop(channel: Channel, cancel: impl FnOnce()) -> Result<bool, Status> {
+        let message = match channel.try_recv() {
+            Ok(message) => message,
+            Err(Status::ErrTimedOut) => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        if !message.handles.is_empty() || message.bytes != GRACEFUL_STOP_MESSAGE_V1 {
+            for handle in message.handles {
+                let _ = Memory::close(handle);
+            }
+            return Err(Status::ErrInvalidArgs);
+        }
+        cancel();
+        Ok(true)
     }
     pub fn send(
         channel: Channel,

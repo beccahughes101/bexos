@@ -3,7 +3,7 @@ use crate::{
     host::{NativeHost, entry},
 };
 use bexos_userspace::{Channel, Memory, Startup};
-use bexos_wasm_abi::Launch;
+use bexos_wasm_abi::{ComponentDependency, Launch, WasmRunnerOptions};
 use bexos_wasm_runtime::{
     budget::Budget,
     context::Context,
@@ -11,70 +11,97 @@ use bexos_wasm_runtime::{
 };
 use std::sync::Arc;
 use wasmtime::{Result, bail};
-struct ModuleMapping {
-    handle: u64,
-    address: u64,
-    len: u64,
+struct DirectoryPayloads {
+    package_dir: Option<u64>,
+    dependencies: Vec<bexos_component_runner::ResolvedDependency>,
 }
-impl Drop for ModuleMapping {
+
+impl Drop for DirectoryPayloads {
     fn drop(&mut self) {
-        let _ = Memory::unmap(self.address, self.len);
-        let _ = Memory::close(self.handle);
+        if let Some(package_dir) = self.package_dir {
+            let _ = Memory::close(package_dir);
+        }
+        for dependency in &self.dependencies {
+            let _ = Memory::close(dependency.directory);
+        }
     }
 }
 
-fn map_payload(handle: u64, len: u64, label: &str) -> Result<Arc<[u8]>> {
-    let address = match Memory::map(handle, len, 2) {
-        Ok(v) => v,
-        Err(e) => {
-            let _ = Memory::close(handle);
-            bail!("{label} mapping: {e:?}");
-        }
-    };
-    let mapping = ModuleMapping {
-        handle,
-        address,
-        len,
-    };
-    let bytes: Arc<[u8]> =
-        unsafe { std::slice::from_raw_parts(mapping.address as *const u8, mapping.len as usize) }
-            .into();
-    drop(mapping);
-    Ok(bytes)
+fn validate_wasm(bytes: Vec<u8>, label: &str) -> Result<Arc<[u8]>> {
+    if bytes.get(..4) != Some(b"\0asm") {
+        bail!("{label} is not a WebAssembly module or component");
+    }
+    Ok(bytes.into())
 }
-
 pub fn run(channel: Channel) -> Result<u8> {
-    let message = channel
-        .recv_blocking()
-        .map_err(|e| wasmtime::format_err!("runner prelude: {e:?}"))?;
-    let launch = match Launch::decode(&message.bytes) {
-        Ok(v) => v,
-        Err(e) => {
-            for h in message.handles {
-                let _ = Memory::close(h);
-            }
-            bail!("invalid runner options: {e:?}");
-        }
+    let start = bexos_component_runner::receive_start(
+        channel,
+        "wasm",
+        bexos_wasm_abi::OPTIONS_TYPE_URL,
+        true,
+    )
+    .map_err(|error| wasmtime::format_err!("component runner start: {error:?}"))?;
+    let options = WasmRunnerOptions::decode(&start.program)
+        .map_err(|error| wasmtime::format_err!("invalid runner options: {error:?}"))?;
+    let startup_channel = start.startup;
+    let service = start.service;
+    let migratable = start.migratable;
+    let directories = DirectoryPayloads {
+        package_dir: start.package_dir,
+        dependencies: start.dependencies,
     };
-    if message.handles.len() != launch.component_dependencies.len() + 1 {
-        for h in message.handles {
-            let _ = Memory::close(h);
-        }
-        bail!("runner prelude payload count mismatch");
-    }
-    // The immutable, private copies are the exact inputs validated by appd and
-    // compiled below. Dependency VMOs carry only component bytes, never handles.
-    let bytes = map_payload(message.handles[0], launch.module_len, "payload")?;
-    let mut dependency_bytes = Vec::with_capacity(launch.component_dependencies.len());
-    for (index, dependency) in launch.component_dependencies.iter().enumerate() {
-        dependency_bytes.push(map_payload(
-            message.handles[index + 1],
-            dependency.module_len,
+    let package_dir = directories
+        .package_dir
+        .ok_or_else(|| wasmtime::format_err!("missing package directory"))?;
+    let bytes = validate_wasm(
+        bexos_component_runner::read_package_file(
+            package_dir,
+            &options.path,
+            options.limits.max_module_bytes,
+        )
+        .map_err(|error| wasmtime::format_err!("package payload: {error:?}"))?,
+        "payload",
+    )?;
+    let mut dependency_bytes = Vec::with_capacity(options.component_imports.len());
+    let mut component_dependencies = Vec::with_capacity(options.component_imports.len());
+    for import in &options.component_imports {
+        let resolved = directories
+            .dependencies
+            .iter()
+            .find(|resolved| {
+                resolved.kind == bexos_component_runner::DependencyKind::WasmComponent
+                    && resolved.package_name == import.package_name
+                    && resolved.export_name == import.export_name
+                    && resolved.abi_version == import.abi_version
+            })
+            .ok_or_else(|| wasmtime::format_err!("missing resolved component dependency"))?;
+        let dependency = validate_wasm(
+            bexos_component_runner::read_package_file(
+                resolved.directory,
+                &resolved.export_path,
+                options.limits.max_module_bytes,
+            )
+            .map_err(|error| wasmtime::format_err!("dependency payload: {error:?}"))?,
             "dependency payload",
-        )?);
+        )?;
+        component_dependencies.push(ComponentDependency {
+            import: import.clone(),
+            module_len: dependency.len() as u64,
+        });
+        dependency_bytes.push(dependency);
     }
+    let launch = Launch {
+        options,
+        module_len: bytes.len() as u64,
+        service,
+        migratable,
+        component_dependencies,
+    };
+    launch
+        .validate()
+        .map_err(|error| wasmtime::format_err!("invalid launch metadata: {error:?}"))?;
     let mut startup =
-        Startup::receive(channel).map_err(|e| wasmtime::format_err!("startup: {e:?}"))?;
+        Startup::receive(startup_channel).map_err(|e| wasmtime::format_err!("startup: {e:?}"))?;
     bexos_libc::install_startup(&startup);
     let engine = bexos_wasm_runtime::engine::configured_engine(&launch.options.limits)?;
     let component_payloads: Vec<_> = launch
@@ -101,7 +128,7 @@ pub fn run(channel: Channel) -> Result<u8> {
         if !launch.service {
             bail!("commands use restart lifecycle");
         }
-        let migration = channel;
+        let migration = startup_channel;
         let runtime = crate::migration::receive(
             engine,
             bytes,
@@ -163,20 +190,22 @@ pub fn run(channel: Channel) -> Result<u8> {
             bexos_wasm_runtime::service_guest::ServiceGuest::instantiate(&engine, bytes, context),
         )?;
         bexos_userspace::log("wasm_runner: service component instantiated\n");
-        return crate::service::fresh(instance, channel, startup.migration, host);
+        return crate::service::fresh(instance, startup_channel, startup.migration, host);
     }
     if bytes.get(4..8) == Some(&[1, 0, 0, 0]) {
         let mut instance = block_on(bexos_wasm_runtime::instance::CoreInstance::instantiate(
             &engine, bytes, context,
         ))?;
-        Startup::ready(channel).map_err(|e| wasmtime::format_err!("ready: {e:?}"))?;
+        Startup::ready(startup_channel).map_err(|e| wasmtime::format_err!("ready: {e:?}"))?;
+        let _ = bexos_component_runner::ready();
         block_on(instance.run())?;
         Ok(0)
     } else {
         let mut instance = block_on(bexos_wasm_runtime::component::CommandInstance::instantiate(
             &engine, bytes, context,
         ))?;
-        Startup::ready(channel).map_err(|e| wasmtime::format_err!("ready: {e:?}"))?;
+        Startup::ready(startup_channel).map_err(|e| wasmtime::format_err!("ready: {e:?}"))?;
+        let _ = bexos_component_runner::ready();
         block_on(instance.run())
     }
 }

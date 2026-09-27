@@ -73,3 +73,14 @@ processes {
     }
   }
 }
+processes {
+  name: "crash"
+  runner: "nix"
+  lifecycle { update_strategy: RESTART }
+  runner_options {
+    [type.googleapis.com/bexos.app.NixRunnerOptions] {
+      path: "/pkg/bin/crash"
+      arguments: "crash"
+    }
+  }
+}

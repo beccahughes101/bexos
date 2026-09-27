@@ -214,6 +214,7 @@ fn emit_runtime_hooks(out: &mut String) {
     out.push_str("    HandleTableTooSmall,\n");
     out.push_str("    InvalidUtf8,\n");
     out.push_str("    InvalidPresence,\n");
+    out.push_str("    LimitExceeded,\n");
     out.push_str("    UnsupportedType,\n");
     out.push_str("    UnknownOrdinal(u64),\n");
     out.push_str("    Transport,\n");
@@ -361,20 +362,31 @@ pub struct WireStringVector<'a> {
     values: Option<&'a [&'a str]>,
     bytes: &'a [u8],
     count: usize,
+    max_len: usize,
 }
 impl<'a> WireStringVector<'a> {
-    pub fn from_slice(values: &'a [&'a str]) -> Self { Self { values: Some(values), bytes: &[], count: values.len() } }
+    pub fn from_slice(values: &'a [&'a str]) -> Self { Self { values: Some(values), bytes: &[], count: values.len(), max_len: usize::MAX } }
     pub fn len(&self) -> usize { self.count }
     pub fn is_empty(&self) -> bool { self.count == 0 }
-    fn from_wire(bytes: &'a [u8], count: usize) -> Result<Self, FidlWireError> {
-        if count.checked_mul(16).is_none_or(|n| n > bytes.len()) { return Err(FidlWireError::BufferTooSmall); }
-        Ok(Self { values: None, bytes, count })
+    fn from_wire(bytes: &'a [u8], count: usize, max_len: usize) -> Result<Self, FidlWireError> {
+        let descriptors = count.checked_mul(16).ok_or(FidlWireError::BufferTooSmall)?;
+        if descriptors > bytes.len() { return Err(FidlWireError::BufferTooSmall); }
+        for index in 0..count {
+            let start = get_u64(bytes, index * 16)? as usize;
+            let len = get_u64(bytes, index * 16 + 8)? as usize;
+            if len > max_len { return Err(FidlWireError::LimitExceeded); }
+            let end = start.checked_add(len).ok_or(FidlWireError::BufferTooSmall)?;
+            if start < descriptors { return Err(FidlWireError::BufferTooSmall); }
+            core::str::from_utf8(bytes.get(start..end).ok_or(FidlWireError::BufferTooSmall)?).map_err(|_| FidlWireError::InvalidUtf8)?;
+        }
+        Ok(Self { values: None, bytes, count, max_len })
     }
     pub fn get(&self, index: usize) -> Result<&'a str, FidlWireError> {
         if index >= self.count { return Err(FidlWireError::BufferTooSmall); }
         if let Some(values) = self.values { return Ok(values[index]); }
         let start = get_u64(self.bytes, index * 16)? as usize;
         let len = get_u64(self.bytes, index * 16 + 8)? as usize;
+        if len > self.max_len { return Err(FidlWireError::LimitExceeded); }
         let end = start.checked_add(len).ok_or(FidlWireError::BufferTooSmall)?;
         if start < self.count * 16 { return Err(FidlWireError::BufferTooSmall); }
         core::str::from_utf8(self.bytes.get(start..end).ok_or(FidlWireError::BufferTooSmall)?).map_err(|_| FidlWireError::InvalidUtf8)
@@ -932,6 +944,21 @@ fn emit_encode_field(out: &mut String, field: &ast::Field, offset: usize, ctx: &
         }
     }
     match &field.ty.kind {
+        TypeKind::String(Some(bound)) | TypeKind::Vector(_, Some(bound)) => {
+            out.push_str(&format!(
+                "        if {access}.len() > {bound}usize {{ return Err(FidlWireError::LimitExceeded); }}\n"
+            ));
+        }
+        _ => {}
+    }
+    if let TypeKind::Vector(element, _) = &field.ty.kind {
+        if let TypeKind::String(Some(bound)) = &element.kind {
+            out.push_str(&format!(
+                "        for index in 0..{access}.len() {{ if {access}.get(index)?.len() > {bound}usize {{ return Err(FidlWireError::LimitExceeded); }} }}\n"
+            ));
+        }
+    }
+    match &field.ty.kind {
         TypeKind::Primitive(PrimitiveType::Bool) => {
             out.push_str(&format!(
                 "        put_u8(bytes, {offset}, if {access} {{ 1 }} else {{ 0 }})?;\n"
@@ -1127,32 +1154,51 @@ fn decode_expr_at(ty: &TypeRef, bytes_ident: &str, offset: usize, ctx: &RustCont
         TypeKind::Primitive(primitive) => {
             format!("get_{}({bytes_ident}, {offset})?", primitive_fn(*primitive))
         }
-        TypeKind::String(_) => format!(
-            "{{ let start = get_u64({bytes_ident}, {offset})? as usize; let len = get_u64({bytes_ident}, {})? as usize; if start + len > {bytes_ident}.len() {{ return Err(FidlWireError::BufferTooSmall); }} core::str::from_utf8(&{bytes_ident}[start..start + len]).map_err(|_| FidlWireError::InvalidUtf8)? }}",
-            offset + 8
-        ),
-        TypeKind::Vector(element, _)
+        TypeKind::String(bound) => {
+            let limit = bound.map_or(String::new(), |bound| {
+                format!(" if len > {bound}usize {{ return Err(FidlWireError::LimitExceeded); }}")
+            });
+            format!(
+                "{{ let start = get_u64({bytes_ident}, {offset})? as usize; let len = get_u64({bytes_ident}, {})? as usize;{limit} if start.checked_add(len).is_none_or(|end| end > {bytes_ident}.len()) {{ return Err(FidlWireError::BufferTooSmall); }} core::str::from_utf8(&{bytes_ident}[start..start + len]).map_err(|_| FidlWireError::InvalidUtf8)? }}",
+                offset + 8
+            )
+        }
+        TypeKind::Vector(element, bound)
             if matches!(element.kind, TypeKind::Primitive(PrimitiveType::Uint8)) =>
         {
+            let limit = bound.map_or(String::new(), |bound| {
+                format!(" if len > {bound}usize {{ return Err(FidlWireError::LimitExceeded); }}")
+            });
             format!(
-                "{{ let start = get_u64({bytes_ident}, {offset})? as usize; let len = get_u64({bytes_ident}, {})? as usize; if start + len > {bytes_ident}.len() {{ return Err(FidlWireError::BufferTooSmall); }} &{bytes_ident}[start..start + len] }}",
+                "{{ let start = get_u64({bytes_ident}, {offset})? as usize; let len = get_u64({bytes_ident}, {})? as usize;{limit} if start.checked_add(len).is_none_or(|end| end > {bytes_ident}.len()) {{ return Err(FidlWireError::BufferTooSmall); }} &{bytes_ident}[start..start + len] }}",
                 offset + 8
             )
         }
-        TypeKind::Vector(element, _) if matches!(element.kind, TypeKind::String(_)) => {
+        TypeKind::Vector(element, bound) if matches!(element.kind, TypeKind::String(_)) => {
+            let limit = bound.map_or(String::new(), |bound| {
+                format!(" if count > {bound}usize {{ return Err(FidlWireError::LimitExceeded); }}")
+            });
+            let element_limit = match element.kind {
+                TypeKind::String(Some(bound)) => format!("{bound}usize"),
+                TypeKind::String(None) => "usize::MAX".to_string(),
+                _ => unreachable!(),
+            };
             format!(
-                "{{ let start = get_u64({bytes_ident}, {offset})? as usize; let count = get_u64({bytes_ident}, {})? as usize; WireStringVector::from_wire({bytes_ident}.get(start..).ok_or(FidlWireError::BufferTooSmall)?, count)? }}",
+                "{{ let start = get_u64({bytes_ident}, {offset})? as usize; let count = get_u64({bytes_ident}, {})? as usize;{limit} WireStringVector::from_wire({bytes_ident}.get(start..).ok_or(FidlWireError::BufferTooSmall)?, count, {element_limit})? }}",
                 offset + 8
             )
         }
-        TypeKind::Vector(element, _)
+        TypeKind::Vector(element, bound)
             if matches!(
                 element.kind,
                 TypeKind::Handle(_) | TypeKind::ClientEnd(_) | TypeKind::ServerEnd(_)
             ) =>
         {
+            let limit = bound.map_or(String::new(), |bound| {
+                format!(" if len > {bound}usize {{ return Err(FidlWireError::LimitExceeded); }}")
+            });
             format!(
-                "{{ let start = get_u64({bytes_ident}, {offset})? as usize; let len = get_u64({bytes_ident}, {})? as usize; if start + len > handles.len() {{ return Err(FidlWireError::HandleTableTooSmall); }} &handles[start..start + len] }}",
+                "{{ let start = get_u64({bytes_ident}, {offset})? as usize; let len = get_u64({bytes_ident}, {})? as usize;{limit} if start.checked_add(len).is_none_or(|end| end > handles.len()) {{ return Err(FidlWireError::HandleTableTooSmall); }} &handles[start..start + len] }}",
                 offset + 8
             )
         }
@@ -1188,10 +1234,13 @@ fn decode_expr_at(ty: &TypeRef, bytes_ident: &str, offset: usize, ctx: &RustCont
                 ctx.type_name(name)
             )
         }
-        TypeKind::Vector(element, _) if matches!(&element.kind, TypeKind::Identifier(name) if ctx.is_struct_like(name) || ctx.is_union_like(name)) =>
+        TypeKind::Vector(element, bound) if matches!(&element.kind, TypeKind::Identifier(name) if ctx.is_struct_like(name) || ctx.is_union_like(name)) =>
         {
+            let limit = bound.map_or(String::new(), |bound| {
+                format!(" if count > {bound}usize {{ return Err(FidlWireError::LimitExceeded); }}")
+            });
             format!(
-                "{{ let start = get_u64({bytes_ident}, {offset})? as usize; let count = get_u64({bytes_ident}, {})? as usize; WireVector::from_wire({bytes_ident}.get(start..).ok_or(FidlWireError::BufferTooSmall)?, handles, count)? }}",
+                "{{ let start = get_u64({bytes_ident}, {offset})? as usize; let count = get_u64({bytes_ident}, {})? as usize;{limit} WireVector::from_wire({bytes_ident}.get(start..).ok_or(FidlWireError::BufferTooSmall)?, handles, count)? }}",
                 offset + 8
             )
         }

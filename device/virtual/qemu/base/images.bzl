@@ -26,7 +26,7 @@ QEMU_STORAGE_PREINSTALLS = [
     {"archive": "//testing/wasm:network_granted_archive", "path": "pkg/bexos.test.wasm.network_granted.bex"},
     {"archive": "//testing/wasm:children_archive", "path": "pkg/bexos.test.wasm.children.bex"},
     {"archive": "//testing/wasm:client_archive", "path": "pkg/bexos.test.wasm.client.bex"},
-    {"archive": "//testing/wasm:runner_replacement_archive", "path": "updates/bexos.test.wasm.service.runner_replacement.bex"},
+    {"archive": "//services/wasm_runner:replacement_archive", "path": "updates/bexos.platform.wasm_runner.replacement.bex"},
     {"archive": "//testing/wasm:replacement_archive", "path": "updates/bexos.test.wasm.service.replacement.bex"},
     {"archive": "//testing/wasm:rejected_restore_archive", "path": "updates/bexos.test.wasm.service.rejected.bex"},
 
@@ -162,7 +162,8 @@ def qemu_images(graphics = False, input_fixture = False, prebuilt_apps = [], pre
             ":bootfs_manifest_bin", ":platform_config_bin", ":product_assembly_index", "//device/virtual/qemu/base:qemu_bexfs_test.key",
             "//services/appd:appd_elf",
             "//services/appd:package_manifest",
-            "//services/wasm_runner:wasm_runner_elf",
+            "//services/native_runner:native_runner_elf",
+            "//services/native_runner:package_manifest",
             "//drivers/d1/bus/generic/pci:package_manifest",
             "//drivers/d1/storage/nvmexpress/nvme:package_manifest", "//drivers/d1/storage/bexos/bexfs:package_manifest",
             "//drivers/d1/storage/bexos/bexfs:user_package_manifest",
@@ -244,7 +245,8 @@ def qemu_images(graphics = False, input_fixture = False, prebuilt_apps = [], pre
               "--entry /system/certs/app_signing_roots.redb=$(location //ecosystem/bexos:app_signing_roots_redb) " +
               "--elf /boot/pkg/bexos.driver.serial.virtio_console/bin/virtio_console_driver=$(location //drivers/d1/serial/virtio/console:virtio_console_driver) " +
               "--elf /boot/pkg/bexos.platform.appd/bin/appd=$(location //services/appd:appd_elf) " +
-              "--entry /boot/pkg/bexos.platform.wasm_runner/bin/wasm_runner=$(location //services/wasm_runner:wasm_runner_elf) " +
+              "--entry /boot/pkg/bexos.platform.native_runner/package.bexmanifest=$(location //services/native_runner:package_manifest) " +
+              "--elf /boot/pkg/bexos.platform.native_runner/bin/native_runner=$(location //services/native_runner:native_runner_elf) " +
               boot_wasm_entries +
               "--elf /boot/pkg/bexos.driver.pci_root/bin/pci_root_bus=$(location //drivers/d1/bus/generic/pci:pci_root_bus) " +
               guest_select("--elf /boot/pkg/bexos.driver.uart.pl011/bin/pl011=$(location //drivers/d1/serial/arm/pl011:pl011) ", "") +
@@ -275,7 +277,8 @@ def qemu_images(graphics = False, input_fixture = False, prebuilt_apps = [], pre
             ":bootfs_manifest_bin", ":platform_config_emulated_bin", ":product_emulated_assembly_index", "//device/virtual/qemu/base:qemu_bexfs_test.key",
             "//services/appd:appd_elf",
             "//services/appd:package_manifest",
-            "//services/wasm_runner:wasm_runner_elf",
+            "//services/native_runner:native_runner_elf",
+            "//services/native_runner:package_manifest",
             "//drivers/d1/bus/generic/pci:package_manifest",
             "//drivers/d1/storage/nvmexpress/nvme:package_manifest", "//drivers/d1/storage/bexos/bexfs:package_manifest",
             "//drivers/d1/storage/bexos/bexfs:user_package_manifest",
@@ -356,7 +359,8 @@ def qemu_images(graphics = False, input_fixture = False, prebuilt_apps = [], pre
               "--entry /system/certs/tls_roots.redb=$(location //ecosystem/bexos:tls_roots_redb) " +
               "--entry /system/certs/app_signing_roots.redb=$(location //ecosystem/bexos:app_signing_roots_redb) " +
               "--elf /boot/pkg/bexos.platform.appd/bin/appd=$(location //services/appd:appd_elf) " +
-              "--entry /boot/pkg/bexos.platform.wasm_runner/bin/wasm_runner=$(location //services/wasm_runner:wasm_runner_elf) " +
+              "--entry /boot/pkg/bexos.platform.native_runner/package.bexmanifest=$(location //services/native_runner:package_manifest) " +
+              "--elf /boot/pkg/bexos.platform.native_runner/bin/native_runner=$(location //services/native_runner:native_runner_elf) " +
               boot_wasm_entries +
               "--elf /boot/pkg/bexos.driver.pci_root/bin/pci_root_bus=$(location //drivers/d1/bus/generic/pci:pci_root_bus) " +
               guest_select("--elf /boot/pkg/bexos.driver.uart.pl011/bin/pl011=$(location //drivers/d1/serial/arm/pl011:pl011) ", "") +

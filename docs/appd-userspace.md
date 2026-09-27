@@ -47,7 +47,9 @@ The appd library exports:
 - `recovery`: D1 crash/rebind recovery budget model.
 - `recovery_image`: cached D1 executable/library VMO metadata for driver restart.
 - `routing`: retained provider endpoint routing and replay helpers.
-- `runner`: ELF parsing, runner registry, package image resolution, kernel launch operations, and runner policy.
+- `runner`: fixed-native-host bootstrap validation, runner registry, package
+  resolution, kernel launch coordination, and runner policy. Full ELF mapping
+  lives outside appd in `lib/native_loader` and `services/native_runner`.
 - `waves`: startup wave planning, readiness gates, and orchestrated process launch.
 
 ## Service Broker
@@ -253,25 +255,27 @@ channel. When multiple handlers match and no default exists, appd returns
 
 ## Runners And Launch
 
-The runner subsystem currently includes:
+RFC 72 splits launch coordination from execution. The coordinator-side runner
+subsystem currently includes:
 
-- `ElfRunner`;
-- `ParsedElf` and `ElfMapping`;
 - `RunnerRegistry`;
 - `PackageImageResolver`;
 - launch request/result types;
 - fake and FIDL-backed kernel operations;
 - policy checks for native ELF trust tiers.
 
-The ELF runner builds each launched process below the restricted root VMAR
-returned by `CreateProcess`. The executable image receives an image arena with
+`appd` creates an immutable one-process component job and the initial process,
+then launches the fixed BootFS `native_runner` in a disposable host job. Appd's
+small bootstrap loader accepts only that retained static image; the host calls
+`NativeRunnerHost.Prepare` and maps the native target or registered provider
+into the pre-created component process. The executable image receives an image arena with
 per-`PT_LOAD` child VMARs carrying the exact final segment permissions. Native
 libraries receive per-library arenas and per-load-segment children. TLS, stack,
 and stack-guard regions are separate VMARs; the guard page is intentionally left
 unmapped. The legacy flat VM-space calls remain available for compatibility,
 but normal app loading uses VMAR-relative operations. If any partial load fails,
-appd destroys the constructed child VMARs and terminates the incomplete process
-before returning the launch error.
+the loader destroys the constructed child VMARs and `appd` terminates the
+incomplete component job before returning the launch error.
 
 The executable image and manifest-declared library graph use the hermetic BexOS
 architecture-selected shared-library ABI. Shared parsing and linking live in the
@@ -284,11 +288,21 @@ dependency-first library metadata.
 Library exports now carry an explicit kind. Omitted kind remains `NATIVE`, so
 existing ELF packages keep their behavior. `WASM_COMPONENT` exports are resolved
 only for WASM runner `component_imports`, are mounted through `/deps/<alias>`, and
-are passed to the trusted runner as component payload VMOs rather than native
-linker metadata. Appd rejects missing exports, ABI mismatches, dependency cycles,
-count/depth/aggregate-size limit violations, and attempts to satisfy a component
-import with a native library. Running WASM instances retain the resolved dependency
-identities until relaunch or application transplant.
+are passed through `ComponentRunner.Start` as read-only dependency-directory
+capabilities. The public start contract contains no payload VMOs; the private
+native-host preparation contract has a bounded immutable-VMO fallback only for
+BootFS before directory services exist. Appd resolves the declared dependency
+identities and enforces package access policy. The WASM provider independently
+validates the supplied export metadata, ABI, dependency graph, bounds, and
+bytes, including rejection of native payload substitution. Running WASM
+instances retain the resolved dependency identities until relaunch or
+application transplant.
+
+Appd forwards each process's typed runner-options bytes opaquely and selects a
+provider solely from the validated `RunnerPolicy` registry. All registered
+`COMPONENT_RUNNER` providers use the same launch path. Direct ELF,
+`wasm_runner`, and `starnix_runner` decode their own program metadata and own
+path, format, and size validation.
 
 The loader validates each `DT_SONAME` against the selected manifest export and
 requires every `DT_NEEDED` SONAME to match a directly declared dependency. It

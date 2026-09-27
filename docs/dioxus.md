@@ -7,7 +7,7 @@ package is version 0.2; dependency selectors use version prefixes such as
 
 BexOS now has a first-party path for Rust UI services that run as WASI 0.2 components and present native 2D frames through scened. Applications keep their own state, lifecycle hooks, callbacks, and component model in the application component. The separately packaged `com.bexos.lib.dioxus` component is mounted at `/deps/com.bexos.lib.dioxus` and exports the versioned WIT instance `bexos:wasm/dioxus@1.0.0`.
 
-The implementation uses an explicit BexOS scene/document ABI between WASM and the trusted native runner. Native GPU handles, shaders, VMOs, renderer caches, Stylo/Taffy state, and compositor resources stay in the runner and scened. Apps normally submit bounded Dioxus documents; the runner resolves CSS and layout natively, resolves CSS font stacks through `fontd`, shapes text with Parley, renders glyph IDs with the provider's mapped font data on the Vello/Venus path, and otherwise replays the same validated scene on the CPU. Direct scene submission remains available for compatibility and renderer-focused tests.
+The implementation uses an explicit BexOS scene/document ABI between WASM and its isolated, platform-registered WASM provider. Native GPU handles, shaders, VMOs, renderer caches, Stylo/Taffy state, and compositor resources stay in that component's provider process and scened. Apps normally submit bounded Dioxus documents; the provider resolves CSS and layout natively, resolves CSS font stacks through `fontd`, shapes text with Parley, renders glyph IDs with the provider's mapped font data on the Vello/Venus path, and otherwise replays the same validated scene on the CPU. Direct scene submission remains available for compatibility and renderer-focused tests.
 
 ## Source layout
 
@@ -19,7 +19,7 @@ The implementation uses an explicit BexOS scene/document ABI between WASM and th
 - `//lib/dioxus_render`: native conversion from validated scene batches into Vello layers for the GPU worker.
 - `//apps/dioxus_demo`: installable sample app with a signal-style counter, editable text, scrolling, simple flex/grid-style layout, an image asset command, backend status text, and explicit checkpoint/restore hooks.
 - `//services/wasm_runner`: component composition, UI hostcalls, Vello/Venus rendering, CPU fallback, Flatland presentation, and migration quiescence.
-- `//services/appd`: package dependency resolution and runner startup handle delivery for application plus component payloads.
+- `//services/appd`: package dependency resolution and opaque runner metadata plus read-only application/dependency directory delivery.
 
 ## Packaging and manifest contract
 
@@ -69,7 +69,7 @@ library_exports {
 }
 ```
 
-`library_exports.kind` defaults to `NATIVE`, preserving existing ELF behavior. WASM runner options carry explicit `component_imports`; appd resolves each through the existing package/version machinery, validates that the selected export is `WASM_COMPONENT`, maps the application and dependency payloads into runner startup handles, and rejects missing exports, incompatible ABI versions, dependency cycles, excessive graph depth/count/bytes, and native payload substitution.
+`library_exports.kind` defaults to `NATIVE`, preserving existing ELF behavior. WASM runner options carry explicit `component_imports`; appd resolves each declared identity through the existing package/version machinery and sends read-only application/dependency directory capabilities plus metadata through the standard component-runner contract. The public start contract has no payload-VMO escape hatch; the private native-host bootstrap contract alone has a bounded immutable-VMO fallback for BootFS before directory services exist. The runner independently validates the supplied dependency kind and bytes and rejects missing exports, incompatible ABI versions, dependency cycles, excessive graph depth/count/bytes, and native payload substitution.
 
 The runner composes application and shared components with pinned `wac-graph` before compiling the resulting component with Wasmtime/Pulley. Running instances retain the resolved dependency identities in launch and migration state. Compatible shared-library changes are observed on a new launch or a replacement that prepares a new component graph.
 
@@ -138,7 +138,7 @@ bazel test --test_tag_filters= //testing/e2e/qemu/graphics:dioxus_smoke_aarch64
 bazel test --test_tag_filters= //testing/e2e/qemu/graphics:dioxus_smoke_x86_64
 ```
 
-Local verification on this branch has passed Rust formatting, the focused host suite, and the userspace AArch64 build. Host tests cover document encoding/validation, selector/declaration parsing, WASM-side layout/text projection, scene validation/rejection, CPU replay, Vello conversion, WASM runner option bounds, dependency composition with the actual demo app and separately packaged shared component, appd legacy/native compatibility, native substitution rejection, and component payload delivery to the runner.
+Local verification on this branch has passed Rust formatting, the focused RFC 72 host suite, and both AArch64 and x86_64 product builds. Host tests cover document encoding/validation, selector/declaration parsing, WASM-side layout/text projection, scene validation/rejection, CPU replay, Vello conversion, WASM runner option bounds, dependency composition with the actual demo app and separately packaged shared component, appd legacy/native compatibility, native substitution rejection, and directory-capability delivery to the runner. The combined RFC 72 QEMU scenarios were built but intentionally not executed.
 
 The graphics QEMU smoke targets are checked in as `//testing/e2e/qemu/graphics:dioxus_smoke_aarch64` and `//testing/e2e/qemu/graphics:dioxus_smoke_x86_64`. They boot the graphical workstation image, launch `bexos.app.dioxus_demo`, and assert component graph composition, service instantiation, scened readiness, virtio GPU readiness, and the runner marker `wasm_runner: native UI first frame submitted backend=...`. Current local QEMU runs are blocked before Dioxus rendering is reached: the AArch64 run reaches scened and debugd but wedges in the debug app-launch proxy after probe connection, while the x86_64 run fails during graphics workstation pivot with `appd: boot failed: driver library cache VMO bexos.lib.crypto; pivot not completed`. Because both failures occur before the app can render, this branch does not claim QEMU Dioxus rendering as locally verified yet. Existing scened validation continues to distinguish software Vulkan functional evidence from physical-GPU acceleration; this change does not add new physical-GPU performance measurements.
 

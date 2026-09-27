@@ -21,6 +21,11 @@ pub fn syscall_method(protocol: u64, ordinal: u64) -> Option<&'static str> {
     methods
         .iter()
         .chain(if protocol == 4 {
+            SYSTEM_PRIVILEGED_PUBLIC_METHODS
+        } else {
+            &[]
+        })
+        .chain(if protocol == 4 {
             SYSTEM_PRIVILEGED_SET_TIME_METHODS
         } else {
             &[]

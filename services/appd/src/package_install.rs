@@ -58,11 +58,12 @@ pub fn begin(
     Ok(())
 }
 
-pub fn poll(state: &mut crate::guest::state::AppdState) -> (bool, bool, Vec<String>) {
+pub fn poll(state: &mut crate::guest::state::AppdState) -> (bool, bool, Vec<String>, Vec<String>) {
     let pending = core::mem::take(&mut state.package_installs);
     let mut changed = false;
     let mut installed = false;
     let mut drivers = Vec::new();
+    let mut runner_providers = Vec::new();
     for mut install in pending {
         let mut call =
             PendingResolution::adopt(Channel(install.resolver), install.query.expected_digest);
@@ -102,6 +103,22 @@ pub fn poll(state: &mut crate::guest::state::AppdState) -> (bool, bool, Vec<Stri
                 {
                     drivers.push(package.clone());
                 }
+                if result == AppManagerStatus::Ok {
+                    let package_id = state
+                        .registry
+                        .record(&package)
+                        .map(|record| record.package_id.clone())
+                        .unwrap_or_else(|_| package.clone());
+                    if state
+                        .config
+                        .runner_policy
+                        .component_runner_providers
+                        .iter()
+                        .any(|provider| provider.package_id == package_id)
+                    {
+                        runner_providers.push(package_id);
+                    }
+                }
                 (result, package)
             }
             Ok(Some(_)) => (AppManagerStatus::VerifyFailed, String::new()),
@@ -119,7 +136,7 @@ pub fn poll(state: &mut crate::guest::state::AppdState) -> (bool, bool, Vec<Stri
             }
         }
     }
-    (changed, installed, drivers)
+    (changed, installed, drivers, runner_providers)
 }
 fn status(error: bexos_pkg_client::PackageStatus) -> AppManagerStatus {
     match error {
@@ -254,6 +271,9 @@ pub fn decode(bytes: &[u8]) -> Result<(Vec<PendingInstall>, u64), Error> {
 fn validate_payload(bytes: &[u8], install: &PendingInstall) -> Result<(), AppManagerStatus> {
     use crate::manifest::{Manifest, PackageKind, UpdateStrategy};
     use bexos_pkg_client::ArtifactKind;
+    if crate::runner::runtime_archive::contains_component_override(bytes) {
+        return Err(AppManagerStatus::VerifyFailed);
+    }
     let archive =
         bexos_app_archive::OpenArchive::parse(bytes).map_err(|_| AppManagerStatus::VerifyFailed)?;
     let entry = archive

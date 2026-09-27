@@ -68,6 +68,7 @@ pub use manager::{
     AppBundleFetcher, AppManagerBinding, WebInstallError, WellKnownFetcher, install_app_from_url,
     reload_well_known_for_domain,
 };
+pub use manifest::Architecture as ComponentArchitecture;
 pub use manifest::{
     AnyRunnerOptions, BindBusType, BindCondition, BindProperty, BindRule, CapabilityMetadata,
     ComponentConfigField, ComponentConfigSchema, ComponentConfigType, ComponentConfigValue,
@@ -88,10 +89,11 @@ pub use namespace::{
 pub use opener::{OpenerBinding, OpenerRequest, OpenerRequestKind, register_manifest_openers};
 pub use permission_route::{PermissionRoute, PermissionRouteTable};
 pub use platform_config::{
-    AppLifecyclePolicy, Architecture, DriverPolicy, DriverPolicyDecision, DriverUnmatchedAction,
-    HardwareAccessTier, MicrovmConstraints, NativeRunnerGrant, NetworkDomain, NetworkPolicy,
-    PackageIdentity, PlatformConfig, PlatformMetadata, RunnerPolicy, RunnerPolicyDecision,
-    RunnerTier, TeePolicy, Tier2DriverRules, UpdateApplyPolicy, UpdatePolicy, UpdateRootKey,
+    AppLifecyclePolicy, Architecture, ComponentRunnerProvider, ComponentRunnerProviderKind,
+    DriverPolicy, DriverPolicyDecision, DriverUnmatchedAction, HardwareAccessTier,
+    MicrovmConstraints, NativeRunnerGrant, NetworkDomain, NetworkPolicy, PackageIdentity,
+    PlatformConfig, PlatformMetadata, RunnerPolicy, RunnerPolicyDecision, RunnerTier, TeePolicy,
+    Tier2DriverRules, UpdateApplyPolicy, UpdatePolicy, UpdateRootKey,
 };
 pub use policy::{
     ClientContext, FidlCapability, PermissionDecision, PermissionValueGrant, allowed_capabilities,
@@ -105,10 +107,12 @@ pub use recovery_image::{
 pub use registry::{PublishedInterface, RegistryError};
 pub use routing::{DriverRouteTable, RetainedProviderEndpoint};
 pub use runner::{
-    ElfError, ElfMapping, ElfRunner, FakeKernelOps, KernelError, KernelFidlOps, KernelHandle,
-    KernelOperation, KernelOps, LaunchError, LaunchRequest, LaunchResult, PackageImage,
-    PackageImageError, PackageImageResolver, PackageLibrary, PackageLibraryDependency,
-    PackageLibraryKind, PackageTrustTier, ParsedElf, RunnerKind, RunnerOptions, RunnerRegistry,
+    CreatedChannel, CreatedJob, CreatedProcess, CreatedResourceGroup, ElfError, ElfMapping,
+    FakeKernelOps, KernelError, KernelFidlOps, KernelHandle, KernelOperation, KernelOps,
+    LaunchError, LaunchRequest, LaunchResult, NATIVE_RUNNER_PACKAGE, PackageDirectories,
+    PackageDirectoryDependency, PackageImage, PackageImageError, PackageImageResolver,
+    PackageLibrary, PackageLibraryDependency, PackageLibraryKind, PackageTrustTier, ParsedElf,
+    PrecreatedKernel, RunnerOptions, RunnerRegistry,
 };
 pub use service_directory::ServiceDirectoryBinding;
 pub use waves::{

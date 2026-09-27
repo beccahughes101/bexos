@@ -2,8 +2,9 @@
 //! Object IDs never cross the ABI: callers hold process-owned capabilities.
 use crate::cpu_features::{AsidAllocator, AsidSupport};
 use crate::kernel_services::{
-    RIGHT_ADMIN as ADMIN, RIGHT_DUPLICATE as DUPLICATE, RIGHT_EXECUTE as EXECUTE, RIGHT_MAP as MAP,
-    RIGHT_READ as READ, RIGHT_TRANSFER as TRANSFER, RIGHT_WRITE as WRITE,
+    RIGHT_ADMIN as ADMIN, RIGHT_DUPLICATE as DUPLICATE, RIGHT_EXECUTE as EXECUTE,
+    RIGHT_MANAGE_TASK as MANAGE_TASK, RIGHT_MAP as MAP, RIGHT_READ as READ,
+    RIGHT_TRANSFER as TRANSFER, RIGHT_WRITE as WRITE,
 };
 use crate::sched::{
     BlockReason, DeadlineProfile, FairProfile, MAX_WAIT_MANY_ITEMS, Scheduler, SchedulerTask,
@@ -32,6 +33,7 @@ pub const ALL_MEMORY: u32 = READ | WRITE | EXECUTE | MAP | TRANSFER | DUPLICATE;
 pub const CHANNEL_RIGHTS: u32 = READ | WRITE | TRANSFER | DUPLICATE;
 pub const IN_TRANSIT: usize = usize::MAX;
 pub const MAX_PROCESSES: usize = 48;
+pub const MAX_JOBS: usize = 64;
 pub const MAX_THREADS: usize = 256;
 pub const DEFAULT_INTERRUPT_FLOOD_LIMIT_PER_SECOND: u32 = 100_000;
 
@@ -44,6 +46,7 @@ pub enum Object {
     Channel(usize, usize),
     Socket(usize, usize),
     Process(usize),
+    Job(usize),
     Space(usize),
     Thread(usize),
     Profile(usize),
@@ -115,6 +118,7 @@ pub struct Process {
     pub package: String,
     pub hardware: u32,
     pub resource_group_id: u32,
+    pub job: Option<usize>,
     pub realtime_scheduling: bool,
     pub root: u64,
     pub asid: u16,
@@ -126,6 +130,15 @@ pub struct Process {
     pub heap_vmar: usize,
     pub mappings: Vec<Mapping>,
     pub next_va: u64,
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Job {
+    pub name: String,
+    pub package: String,
+    pub hardware: u32,
+    pub resource_group_id: u32,
+    pub realtime_scheduling: bool,
+    pub max_processes: u16,
 }
 pub struct Thread {
     pub process: usize,
@@ -177,6 +190,7 @@ pub struct Runtime<B: Backend> {
     reclaim_cursor: usize,
     pub backend: B,
     pub processes: Vec<Process>,
+    pub jobs: Vec<Job>,
     pub current: usize,
     pub threads: Vec<Thread>,
     pub current_thread: usize,
@@ -209,6 +223,7 @@ impl<B: Backend> Runtime<B> {
             reclaim_cursor: 0,
             backend,
             processes: Vec::new(),
+            jobs: Vec::new(),
             current: 0,
             threads: Vec::new(),
             current_thread: 0,
@@ -307,6 +322,7 @@ impl<B: Backend> Runtime<B> {
             Object::ReplyToken(id, _, _) => self.changed(CHANNEL, id),
             Object::IommuDomain(_) => {}
             Object::Interrupt(id) => self.changed(incremental::INTERRUPT, id),
+            Object::Job(id) => self.changed(incremental::JOB, id),
             _ => {}
         }
         match object {
@@ -1029,6 +1045,18 @@ impl<B: Backend> Runtime<B> {
                     0
                 }
             }
+            Object::Job(id) => {
+                if self
+                    .processes
+                    .iter()
+                    .filter(|process| process.job == Some(id))
+                    .all(|process| process.exited)
+                {
+                    crate::kernel_services::SIGNAL_TERMINATED
+                } else {
+                    0
+                }
+            }
             Object::Vmo(_)
             | Object::Vmar(_)
             | Object::Space(_)
@@ -1097,6 +1125,25 @@ impl<B: Backend> Runtime<B> {
         if !self.processes.is_empty() && !self.has_authority(handover::AUTH_APP_MANAGER) {
             return Err(Status::ErrAccessDenied);
         }
+        self.create_process_with_fixed_policy(
+            name,
+            package,
+            hardware,
+            resource_group_id,
+            realtime_scheduling,
+            None,
+        )
+    }
+
+    fn create_process_with_fixed_policy(
+        &mut self,
+        name: &str,
+        package: &str,
+        hardware: u32,
+        resource_group_id: u32,
+        realtime_scheduling: bool,
+        job: Option<usize>,
+    ) -> Result<(u64, u64)> {
         if name.is_empty()
             || name.len() > 64
             || package.len() > 96
@@ -1127,6 +1174,7 @@ impl<B: Backend> Runtime<B> {
             package: package.to_string(),
             hardware,
             resource_group_id,
+            job,
             realtime_scheduling,
             root,
             asid,
@@ -1150,9 +1198,128 @@ impl<B: Backend> Runtime<B> {
         let _ = self.grant(id, Object::Vmar(heap_vmar), READ | WRITE | MAP | ADMIN);
         self.changed(PROCESS, id);
         Ok((
-            self.grant(self.current, Object::Process(id), ADMIN),
-            self.grant(self.current, Object::Space(id), ADMIN | MAP),
+            self.grant(
+                self.current,
+                Object::Process(id),
+                ADMIN | MANAGE_TASK | READ | TRANSFER | DUPLICATE,
+            ),
+            self.grant(
+                self.current,
+                Object::Space(id),
+                ADMIN | MAP | TRANSFER | DUPLICATE,
+            ),
         ))
+    }
+
+    pub fn create_component_job(
+        &mut self,
+        name: &str,
+        package: &str,
+        hardware: u32,
+        resource_group_id: u32,
+        realtime_scheduling: bool,
+        max_processes: u16,
+    ) -> Result<u64> {
+        if !self.processes.is_empty() && !self.has_authority(handover::AUTH_APP_MANAGER) {
+            return Err(Status::ErrAccessDenied);
+        }
+        if name.is_empty()
+            || name.len() > 64
+            || package.is_empty()
+            || package.len() > 96
+            || hardware > 2
+            || resource_group_id == 0
+            || max_processes == 0
+            || self.jobs.len() >= MAX_JOBS
+        {
+            return Err(Status::ErrInvalidArgs);
+        }
+        let id = self.jobs.len();
+        self.jobs.push(Job {
+            name: name.to_string(),
+            package: package.to_string(),
+            hardware,
+            resource_group_id,
+            realtime_scheduling,
+            max_processes,
+        });
+        self.changed(incremental::JOB, id);
+        Ok(self.grant(
+            self.current,
+            Object::Job(id),
+            ADMIN | MANAGE_TASK | READ | TRANSFER | DUPLICATE,
+        ))
+    }
+
+    pub fn create_process_in_job(&mut self, job: u64, name: &str) -> Result<(u64, u64)> {
+        if !self.has_authority(handover::AUTH_APP_MANAGER) {
+            return Err(Status::ErrAccessDenied);
+        }
+        let Object::Job(id) = self.capability(job, ADMIN)?.object else {
+            return Err(Status::ErrInvalidHandle);
+        };
+        let policy = self.jobs.get(id).cloned().ok_or(Status::ErrInvalidHandle)?;
+        if self
+            .processes
+            .iter()
+            .filter(|process| process.job == Some(id))
+            .count()
+            >= usize::from(policy.max_processes)
+        {
+            return Err(Status::ErrResourceExhausted);
+        }
+        self.create_process_with_fixed_policy(
+            name,
+            &policy.package,
+            policy.hardware,
+            policy.resource_group_id,
+            policy.realtime_scheduling,
+            Some(id),
+        )
+    }
+
+    pub fn job_status(&self, job: u64) -> Result<(u16, u16)> {
+        let Object::Job(id) = self.capability(job, READ)?.object else {
+            return Err(Status::ErrInvalidHandle);
+        };
+        self.jobs.get(id).ok_or(Status::ErrInvalidHandle)?;
+        let mut count = 0u16;
+        let mut running = 0u16;
+        for process in self
+            .processes
+            .iter()
+            .filter(|process| process.job == Some(id))
+        {
+            count = count.saturating_add(1);
+            if !process.exited {
+                running = running.saturating_add(1);
+            }
+        }
+        Ok((count, running))
+    }
+
+    pub fn terminate_job(&mut self, job: u64, exit_code: i32) -> Result<()> {
+        let Object::Job(id) = self.capability(job, MANAGE_TASK)?.object else {
+            return Err(Status::ErrInvalidHandle);
+        };
+        self.jobs.get(id).ok_or(Status::ErrInvalidHandle)?;
+        let process_ids = self
+            .processes
+            .iter()
+            .enumerate()
+            .filter_map(|(process_id, process)| (process.job == Some(id)).then_some(process_id))
+            .collect::<Vec<_>>();
+        for process_id in process_ids {
+            let handle = self.grant(
+                self.current,
+                Object::Process(process_id),
+                ADMIN | MANAGE_TASK,
+            );
+            self.terminate_process(handle, exit_code)?;
+            self.close(handle)?;
+        }
+        self.wake_waiters_for_object(Object::Job(id), crate::kernel_services::SIGNAL_TERMINATED);
+        Ok(())
     }
     pub fn start(
         &mut self,
@@ -1174,7 +1341,7 @@ impl<B: Backend> Runtime<B> {
         thread_pointer: u64,
         arg: u64,
     ) -> Result<u64> {
-        let Object::Process(id) = self.capability(process, ADMIN)?.object else {
+        let Object::Process(id) = self.capability(process, MANAGE_TASK)?.object else {
             return Err(Status::ErrInvalidHandle);
         };
         if self.capability(space, MAP)?.object != Object::Space(id) {
@@ -1204,11 +1371,15 @@ impl<B: Backend> Runtime<B> {
         p.context = context;
         p.running = true;
         self.changed(PROCESS, id);
-        Ok(self.grant(self.current, Object::Thread(thread), ADMIN))
+        Ok(self.grant(
+            self.current,
+            Object::Thread(thread),
+            ADMIN | MANAGE_TASK | TRANSFER | DUPLICATE,
+        ))
     }
 
     pub fn terminate_process(&mut self, process: u64, exit_code: i32) -> Result<()> {
-        let Object::Process(id) = self.capability(process, ADMIN)?.object else {
+        let Object::Process(id) = self.capability(process, MANAGE_TASK)?.object else {
             return Err(Status::ErrInvalidHandle);
         };
         if self.processes[id].exited {
@@ -1281,7 +1452,11 @@ impl<B: Backend> Runtime<B> {
         let context =
             Context::user(entry, stack, arg, thread_pointer).ok_or(Status::ErrInvalidArgs)?;
         let thread = self.add_thread_to_process(id, context)?;
-        Ok(self.grant(self.current, Object::Thread(thread), ADMIN))
+        Ok(self.grant(
+            self.current,
+            Object::Thread(thread),
+            ADMIN | MANAGE_TASK | TRANSFER | DUPLICATE,
+        ))
     }
 
     pub fn set_thread_profile(&mut self, thread_handle: u64, profile_handle: u64) -> Result<()> {

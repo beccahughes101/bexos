@@ -1,0 +1,20 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "native_loader",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "bexos_native_loader",
+    edition = "2024",
+    deps = [
+        "//lib/boot",
+        "//lib/elf",
+        "//lib/userspace",
+        "//kernel/core",
+        "//services/appd:appd",
+        "@crates//:blake3",
+    ],
+)
+
+rust_test(name = "tests", crate = ":native_loader")

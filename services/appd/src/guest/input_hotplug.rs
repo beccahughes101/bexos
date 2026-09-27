@@ -266,13 +266,27 @@ pub fn poll(
                         })
                         .collect();
                     for process in processes {
-                        if crate::runner::KernelOps::terminate_process(
-                            kernel,
-                            KernelHandle { raw: process },
-                            -1,
-                        )
-                        .is_err()
-                        {
+                        let launch = state
+                            .launches
+                            .iter()
+                            .find(|launch| launch.process_handle == process);
+                        let terminated = match launch {
+                            Some(launch) if launch.component_job_handle != 0 => {
+                                crate::runner::KernelOps::terminate_job(
+                                    kernel,
+                                    KernelHandle {
+                                        raw: launch.component_job_handle,
+                                    },
+                                    -1,
+                                )
+                            }
+                            _ => crate::runner::KernelOps::terminate_process(
+                                kernel,
+                                KernelHandle { raw: process },
+                                -1,
+                            ),
+                        };
+                        if terminated.is_err() {
                             reply(state.input_hotplug.registry, h::Status::ErrInvalidArgs);
                             return;
                         }

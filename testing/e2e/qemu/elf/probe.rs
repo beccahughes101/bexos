@@ -23,6 +23,10 @@ fn run(channel: u64) -> ! {
     // The host starts replacements after launch returns, while the workload
     // deliberately keeps a TCP request pending across those replacements.
     Startup::ready(control).unwrap();
+    if startup.arg0 >> 32 == 3 {
+        log("elf-probe: intentional isolated runner crash\n");
+        panic!("intentional RFC 72 crash injection");
+    }
     let read: extern "C" fn() -> u64 = unsafe {
         core::mem::transmute(dynamic_link::symbol_address(b"bexos_fixture_read").unwrap() as usize)
     };

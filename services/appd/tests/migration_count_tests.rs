@@ -28,6 +28,21 @@ fn graphical_session_checkpoint_accepts_the_full_runtime_record_capacity() {
             process: "main".into(),
             instance_id: format!("instance-{i}"),
             process_handle: 501 + i,
+            component_job_handle: 0,
+            controller_handle: 0,
+            events_handle: 0,
+            native_host_job_handle: 0,
+            native_host_process_handle: 0,
+            native_host_space_handle: 0,
+            native_host_thread_handle: 0,
+            runner_ready: true,
+            runner_stopped: false,
+            stop_deadline_ns: 0,
+            stop_exit_code: -1,
+            runner_provider: String::new(),
+            runner_provider_version: format!("1.0.{i}-b7"),
+            runner_provider_path: String::new(),
+            runner_provider_signer: String::new(),
             space_handle: 601 + i,
             thread_handle: 701 + i,
             manager: 801 + i,
@@ -49,6 +64,7 @@ fn graphical_session_checkpoint_accepts_the_full_runtime_record_capacity() {
     assert_eq!(target.launches.len(), 48);
     assert_eq!(target.launches[47].uid, 1000);
     assert_eq!(target.launches[47].manager, 848);
+    assert_eq!(target.launches[47].runner_provider_version, "1.0.47-b7");
 
     // The header must still reject snapshots above the supported capacity.
     source.services.push(source.services[0].clone());

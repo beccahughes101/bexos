@@ -8,7 +8,13 @@ fn main() {
 }
 fn run() -> Result<(), String> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
-    let (artifacts, _extra) = QemuArtifacts::from_env_or_args(&args)?;
+    let (artifacts, extra) = QemuArtifacts::from_env_or_args(&args)?;
+    let provider_replacement = std::fs::read(
+        extra
+            .first()
+            .ok_or("missing independently packaged WASM runner replacement")?,
+    )
+    .map_err(|error| format!("read WASM runner replacement: {error}"))?;
     let mut markers = BOOT_MARKERS.to_vec();
     markers.extend_from_slice(NVME_MARKERS);
     markers.extend_from_slice(BEXFS_MARKERS);
@@ -66,7 +72,6 @@ fn run() -> Result<(), String> {
         for (generation, archive, commit) in [
             (1, "bexos.test.wasm.service.rejected", false),
             (2, "bexos.test.wasm.service.replacement", true),
-            (3, "bexos.test.wasm.service.runner_replacement", true),
         ] {
             eprintln!(
                 "e2e: staging WASM migration generation={generation} expected_commit={commit}"
@@ -113,12 +118,6 @@ fn run() -> Result<(), String> {
                 }
                 std::thread::sleep(std::time::Duration::from_millis(1000));
             }
-            if generation == 3
-                && !String::from_utf8_lossy(session.client.received_trace())
-                    .contains("wasm_runner: replacement runtime started")
-            {
-                return Err("replacement did not execute the new trusted runner binary".into());
-            }
             eprintln!(
                 "{}",
                 String::from_utf8_lossy(session.client.received_trace())
@@ -148,6 +147,28 @@ fn run() -> Result<(), String> {
             eprintln!(
                 "e2e: WASM migration generation={generation} commit={commit} preserved the live client"
             );
+        }
+        eprintln!("e2e: installing independently signed WASM runner provider replacement");
+        session.client.clear_received_trace();
+        session
+            .client
+            .install_app_bundle(0x5255_4e52, &provider_replacement)
+            .map_err(|error| format!("install WASM runner provider: {error:?}"))?;
+        session.wait_for_serial_markers(
+            &[
+                b"wasm_runner: replacement runtime started",
+                b"runner provider rollout completed provider=bexos.platform.wasm_runner",
+            ],
+            std::time::Duration::from_secs(180),
+        )?;
+        session.client.clear_received_trace();
+        session.wait_for_serial_markers(
+            &[b"wasm-client: counter="],
+            std::time::Duration::from_secs(60),
+        )?;
+        if String::from_utf8_lossy(session.client.received_trace()).contains("wasm-client: failed:")
+        {
+            return Err("client state/connectivity did not survive provider rollout".into());
         }
         eprintln!("e2e: launching WASI file-stream service and client");
         session

@@ -3,7 +3,7 @@ use super::*;
 use crate::sched::TaskState;
 impl<B: Backend> Runtime<B> {
     pub fn process_status(&self, handle: u64) -> Result<(bool, bool, i32, u64)> {
-        let Object::Process(id) = self.capability(handle, ADMIN)?.object else {
+        let Object::Process(id) = self.capability(handle, READ)?.object else {
             return Err(Status::ErrInvalidHandle);
         };
         let process = &self.processes[id];
@@ -22,7 +22,7 @@ impl<B: Backend> Runtime<B> {
         Ok((process.exited, stopped, status, id as u64 + 1))
     }
     pub fn set_process_suspended(&mut self, handle: u64, suspended: bool) -> Result<()> {
-        let Object::Process(id) = self.capability(handle, ADMIN)?.object else {
+        let Object::Process(id) = self.capability(handle, MANAGE_TASK)?.object else {
             return Err(Status::ErrInvalidHandle);
         };
         if id == self.current

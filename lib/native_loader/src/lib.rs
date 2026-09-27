@@ -1,13 +1,14 @@
-use super::kernel::{CreatedProcess, CreatedVmar, KernelHandle, KernelOps};
-use super::{
-    LaunchError, LaunchRequest, LaunchResult, PackageImageResolver, PackageLibrary,
-    PackageLibraryKind,
-};
-use crate::manifest::{ElfRunnerOptions, ProcessRunnerOptions};
 use alloc::format;
 use alloc::rc::Rc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use bexos_appd::runner::kernel::CreatedVmar;
+use bexos_appd::{CreatedProcess, KernelHandle, KernelOps};
+use bexos_appd::{ElfRunnerOptions, ProcessRunnerOptions};
+use bexos_appd::{
+    LaunchError, LaunchRequest, LaunchResult, PackageImageResolver, PackageLibrary,
+    PackageLibraryKind,
+};
 pub use bexos_elf::{BssMapping, ElfError, ElfMapping, ParsedElf, TlsSegment};
 use bexos_elf::{
     DynamicLibrary, LibraryPolicy, LoadedLibrary, LoadedLibraryImage, LoadedLibrarySegment,
@@ -70,17 +71,7 @@ impl ElfRunner {
         kernel: &mut K,
         resolver: &R,
     ) -> Result<LaunchResult, LaunchError> {
-        self.launch_impl(request, kernel, resolver, false)
-    }
-
-    /// Only the WASM adapter can select the fixed, platform-authenticated image.
-    pub(super) fn launch_trusted_runtime<K: KernelOps, R: PackageImageResolver>(
-        &self,
-        request: &LaunchRequest<'_>,
-        kernel: &mut K,
-        resolver: &R,
-    ) -> Result<LaunchResult, LaunchError> {
-        self.launch_impl(request, kernel, resolver, true)
+        self.launch_impl(request, kernel, resolver)
     }
 
     fn launch_impl<K: KernelOps, R: PackageImageResolver>(
@@ -88,15 +79,14 @@ impl ElfRunner {
         request: &LaunchRequest<'_>,
         kernel: &mut K,
         resolver: &R,
-        trusted_runtime: bool,
     ) -> Result<LaunchResult, LaunchError> {
-        if !trusted_runtime && request.runner_policy.is_none() && !request.trust_tier.allows_elf() {
+        if request.runner_policy.is_none() && !request.trust_tier.allows_elf() {
             return Err(LaunchError::RunnerPolicyDenied);
         }
 
         let architecture = request.manifest.architecture;
-        if architecture == crate::manifest::Architecture::Multi
-            || !architecture.compatible_with(crate::manifest::Architecture::current_guest())
+        if architecture == bexos_appd::manifest::Architecture::Multi
+            || !architecture.compatible_with(bexos_appd::manifest::Architecture::current_guest())
         {
             return Err(LaunchError::Elf(ElfError::UnsupportedMachine));
         }
@@ -122,15 +112,24 @@ impl ElfRunner {
 
         let process_name =
             launch_process_name(&request.manifest.package_name, &request.process.name)?;
-        let created = kernel
-            .create_process(
+        let job = kernel
+            .create_component_job(
                 &process_name,
                 request.resource_group_id,
                 request.identity.package_id,
                 request.hardware_access,
                 request.realtime_scheduling,
+                1,
             )
-            .map_err(|source| kernel_error("create_process", source))?;
+            .map_err(|source| kernel_error("create_component_job", source))?;
+        let created = match kernel.create_process_in_job(job.job, &process_name) {
+            Ok(created) => created,
+            Err(source) => {
+                let _ = kernel.terminate_job(job.job, -1);
+                let _ = kernel.close_handle(job.job);
+                return Err(kernel_error("create_process_in_job", source));
+            }
+        };
         bexos_userspace::log(&format!(
             "appd: elf launch process created package={} process={}\n",
             request.manifest.package_name, request.process.name
@@ -712,11 +711,15 @@ impl ElfRunner {
             close_construction_handles(kernel, created, &constructed_vmars)?;
 
             Ok(LaunchResult {
+                job_handle: job.job,
                 process_handle: created.process,
                 address_space_handle: created.address_space,
                 main_thread_handle: main_thread,
                 service_manager_handle: service_manager.local,
+                controller_handle: KernelHandle::none(),
+                events_handle: KernelHandle::none(),
                 runtime_linker_data,
+                native_host: None,
             })
         })();
         if load_result.is_err() {
@@ -726,7 +729,8 @@ impl ElfRunner {
             for handle in owned_handles {
                 let _ = kernel.close_handle(handle);
             }
-            cleanup_failed_launch(kernel, created, &constructed_vmars);
+            cleanup_failed_launch(kernel, job.job, created, &constructed_vmars);
+            let _ = kernel.close_handle(job.job);
         }
         load_result
     }
@@ -836,6 +840,7 @@ fn close_construction_handles<K: KernelOps>(
 
 fn cleanup_failed_launch<K: KernelOps>(
     kernel: &mut K,
+    job: KernelHandle,
     created: CreatedProcess,
     constructed_vmars: &[KernelHandle],
 ) {
@@ -844,7 +849,7 @@ fn cleanup_failed_launch<K: KernelOps>(
         let _ = kernel.close_handle(handle);
     }
     let _ = kernel.close_handle(created.root_vmar);
-    let _ = kernel.terminate_process(created.process, -1);
+    let _ = kernel.terminate_job(job, -1);
     let _ = kernel.close_handle(created.address_space);
     let _ = kernel.close_handle(created.process);
 }
@@ -982,7 +987,7 @@ fn align_up_to(value: u64, align: u64) -> Option<u64> {
     value.checked_add(align - 1).map(|n| n & !(align - 1))
 }
 
-fn kernel_error(operation: &'static str, source: super::kernel::KernelError) -> LaunchError {
+fn kernel_error(operation: &'static str, source: bexos_appd::KernelError) -> LaunchError {
     bexos_userspace::log(&format!(
         "appd: ELF kernel operation failed operation={operation} error={source:?}\n"
     ));
@@ -1003,3 +1008,4 @@ fn launch_process_name(package_name: &str, process_name: &str) -> Result<String,
     }
     Ok(name)
 }
+extern crate alloc;

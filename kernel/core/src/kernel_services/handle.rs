@@ -12,6 +12,7 @@ pub enum ObjectKind {
     Profile,
     ResourceGroup,
     Process,
+    Job,
     VmSpace,
     Vmar,
     Interrupt,
@@ -180,6 +181,7 @@ const fn initial_signals(kind: ObjectKind) -> u32 {
         | ObjectKind::Profile
         | ObjectKind::ResourceGroup
         | ObjectKind::Process
+        | ObjectKind::Job
         | ObjectKind::VmSpace
         | ObjectKind::Vmar
         | ObjectKind::Interrupt => SIGNAL_SIGNALED_OR_WRITABLE,

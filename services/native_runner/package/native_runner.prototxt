@@ -1,0 +1,2 @@
+package_name: "bexos.platform.native_runner"
+name: "Isolated native component runner host"

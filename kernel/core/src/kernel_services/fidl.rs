@@ -585,6 +585,60 @@ impl TaskControlPublicServer for ControlPlane {
 }
 
 impl SystemPrivilegedBexosSystemPrivilegedServer for ControlPlane {
+    fn create_component_job<'a>(
+        &mut self,
+        request: kernel_fidl::SystemPrivilegedCreateComponentJobRequest<'a>,
+    ) -> Result<kernel_fidl::SystemPrivilegedCreateComponentJobResponse, FidlWireError> {
+        Ok(
+            match ControlPlane::create_component_job(
+                self,
+                request.name,
+                request.resource_group_id,
+                request.package_id,
+                from_fidl_hardware_access(request.hardware_access),
+                request.realtime_scheduling,
+                request.max_processes,
+            ) {
+                Ok(job_handle) => kernel_fidl::SystemPrivilegedCreateComponentJobResponse {
+                    status: Status::Ok,
+                    job_handle: to_ref(job_handle),
+                },
+                Err(status) => kernel_fidl::SystemPrivilegedCreateComponentJobResponse {
+                    status: to_fidl_status(status),
+                    job_handle: HandleRef { raw: 0 },
+                },
+            },
+        )
+    }
+
+    fn create_process_in_job<'a>(
+        &mut self,
+        request: kernel_fidl::SystemPrivilegedCreateProcessInJobRequest<'a>,
+    ) -> Result<kernel_fidl::SystemPrivilegedCreateProcessInJobResponse, FidlWireError> {
+        Ok(
+            match ControlPlane::create_process_in_job(
+                self,
+                from_ref(request.job_handle),
+                request.name,
+            ) {
+                Ok((process_handle, address_space_handle, root_vmar_handle)) => {
+                    kernel_fidl::SystemPrivilegedCreateProcessInJobResponse {
+                        status: Status::Ok,
+                        process_handle: to_ref(process_handle),
+                        address_space_handle: to_ref(address_space_handle),
+                        root_vmar_handle: to_ref(root_vmar_handle),
+                    }
+                }
+                Err(status) => kernel_fidl::SystemPrivilegedCreateProcessInJobResponse {
+                    status: to_fidl_status(status),
+                    process_handle: HandleRef { raw: 0 },
+                    address_space_handle: HandleRef { raw: 0 },
+                    root_vmar_handle: HandleRef { raw: 0 },
+                },
+            },
+        )
+    }
+
     fn create_process<'a>(
         &mut self,
         request: SystemPrivilegedCreateProcessRequest<'a>,
@@ -1018,6 +1072,100 @@ impl SystemPrivilegedBexosSystemPrivilegedServer for ControlPlane {
                 request.exit_code,
             )),
         })
+    }
+}
+
+impl kernel_fidl::SystemPrivilegedPublicServer for ControlPlane {
+    fn start_delegated_process<'a>(
+        &mut self,
+        request: kernel_fidl::SystemPrivilegedStartDelegatedProcessRequest,
+    ) -> Result<kernel_fidl::SystemPrivilegedStartDelegatedProcessResponse, FidlWireError> {
+        let arg_handle = (request.arg_handle.raw != 0).then_some(from_ref(request.arg_handle));
+        Ok(
+            match ControlPlane::start_thread_in_process_with_thread_pointer(
+                self,
+                from_ref(request.process_handle),
+                from_ref(request.address_space_handle),
+                request.entry_vaddr,
+                request.stack_top_vaddr,
+                request.thread_pointer_vaddr,
+                arg_handle,
+            ) {
+                Ok(thread_handle) => kernel_fidl::SystemPrivilegedStartDelegatedProcessResponse {
+                    status: Status::Ok,
+                    thread_handle: to_ref(thread_handle),
+                },
+                Err(status) => kernel_fidl::SystemPrivilegedStartDelegatedProcessResponse {
+                    status: to_fidl_status(status),
+                    thread_handle: HandleRef { raw: 0 },
+                },
+            },
+        )
+    }
+
+    fn get_delegated_process_status<'a>(
+        &mut self,
+        request: kernel_fidl::SystemPrivilegedGetDelegatedProcessStatusRequest,
+    ) -> Result<kernel_fidl::SystemPrivilegedGetDelegatedProcessStatusResponse, FidlWireError> {
+        Ok(
+            match self.inspect_process_for_handle(from_ref(request.process_handle)) {
+                Ok(process) => kernel_fidl::SystemPrivilegedGetDelegatedProcessStatusResponse {
+                    status: Status::Ok,
+                    process_id: process.id,
+                    exited: process.state == super::system::ProcessState::Exited,
+                    suspended: self
+                        .scheduler
+                        .task(process.main_thread_id)
+                        .is_some_and(|task| task.state == crate::sched::TaskState::Stopped),
+                    exit_code: self
+                        .threads
+                        .get(process.main_thread_id)
+                        .map_or(0, |thread| thread.exit_code),
+                },
+                Err(status) => kernel_fidl::SystemPrivilegedGetDelegatedProcessStatusResponse {
+                    status: to_fidl_status(status),
+                    process_id: 0,
+                    exited: false,
+                    suspended: false,
+                    exit_code: 0,
+                },
+            },
+        )
+    }
+
+    fn terminate_job<'a>(
+        &mut self,
+        request: kernel_fidl::SystemPrivilegedTerminateJobRequest,
+    ) -> Result<kernel_fidl::SystemPrivilegedTerminateJobResponse, FidlWireError> {
+        Ok(kernel_fidl::SystemPrivilegedTerminateJobResponse {
+            status: to_fidl_status(ControlPlane::terminate_job(
+                self,
+                from_ref(request.job_handle),
+                request.exit_code,
+            )),
+        })
+    }
+
+    fn get_job_status<'a>(
+        &mut self,
+        request: kernel_fidl::SystemPrivilegedGetJobStatusRequest,
+    ) -> Result<kernel_fidl::SystemPrivilegedGetJobStatusResponse, FidlWireError> {
+        Ok(
+            match ControlPlane::job_status(self, from_ref(request.job_handle)) {
+                Ok((process_count, running_process_count)) => {
+                    kernel_fidl::SystemPrivilegedGetJobStatusResponse {
+                        status: Status::Ok,
+                        process_count,
+                        running_process_count,
+                    }
+                }
+                Err(status) => kernel_fidl::SystemPrivilegedGetJobStatusResponse {
+                    status: to_fidl_status(status),
+                    process_count: 0,
+                    running_process_count: 0,
+                },
+            },
+        )
     }
 }
 

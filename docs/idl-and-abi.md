@@ -14,6 +14,7 @@ Generated Rust bindings are build artifacts and are not checked in.
 - `kernel_fidl_rust`
 - `migration_fidl_rust`
 - `bootstrap_fidl_rust`
+- `component_runner_fidl_rust`
 - `app_debug_fidl_rust`
 - `app_lifecycle_fidl_rust`
 - `app_manager_fidl_rust`
@@ -73,7 +74,7 @@ The kernel FIDL library is assembled from:
   and self-only scheduled CPU statistics.
 - `time.fidl`: monotonic/boot-time/realtime clocks and the read-only vDSO time
   page handle.
-- `system.fidl`: privileged process/resource-group/thread/interrupt/checkpoint/power operations. `CreateProcess` returns the process handle, address-space handle, and a restricted root-VMAR construction handle for hierarchical setup.
+- `system.fidl`: privileged process/resource-group/thread/interrupt/checkpoint/power operations. `CreateComponentJob` and `CreateProcessInJob` bind immutable component identity and a process limit; public delegated start/status and job termination accept attenuated handles. Legacy `CreateProcess` remains available.
 - `debug.fidl`: kernel process listing and platform update status/control.
 - `tracing.fidl`: privileged kernel trace producer attach/detach operations.
 - `migration.fidl`: kernel-authorized process migration and handover operations.
@@ -86,6 +87,16 @@ The kernel FIDL library is assembled from:
 
 Current app-facing FIDL includes:
 
+- `component/runner.fidl`: standard runner start, controller
+  stop/kill/signal/typed-service forwarding, ready/stop callbacks, and the
+  private fixed-native-host prepare callback. Start carries opaque typed
+  program metadata, read-only package/dependency directories, the versioned
+  bootstrap channel, and a delegated component job. The public start contract
+  is directory-only; bounded immutable VMO fallback is confined to the private
+  native-host preparation contract for BootFS before directory services exist.
+  The callback form is used because the current compiler does not implement
+  FIDL event syntax. Generated Rust bindings enforce declared string/vector
+  bounds on both encode and decode.
 - `app/bootstrap.fidl`: startup resources, structured D1 driver resources,
   internal driver lifecycle handles, namespace paths, migration handles, service
   grants, config handles, linker data, and trace producer descriptors.

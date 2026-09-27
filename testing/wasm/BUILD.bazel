@@ -14,6 +14,7 @@ package(default_visibility = ["//visibility:public"])
  for name in ["command", "trap", "service"]
 ]
 app_archive(name = "replacement_archive", manifest = ":service_manifest", entries = {"bin/service.wasm": ":service_wasm"}, compression = "zstd")
+app_archive(name = "nested_runner_override_archive", manifest = ":service_manifest", entries = {"bin/service.wasm": ":service_wasm", ".bexos/wasm_runner.bex": "//services/wasm_runner:replacement_archive"}, compression = "zstd")
 
 exports_files(["service_component.wat", "command.wat", "file_service.wat", "network.wat"])
 
@@ -31,8 +32,6 @@ app_archive(name = "children_archive", manifest = ":children_manifest", entries 
 
 genrule(name = "child_service_wasm", srcs = ["child_service.wat"], outs = ["child_service.wasm"], tools = ["//tools/wasm:wat"], cmd = "$(execpath //tools/wasm:wat) $(location child_service.wat) $@")
 genrule(name = "service_wasm", srcs = ["service.wat", ":child_service_wasm", ":child_options"], outs = ["service.wasm"], tools = ["//tools/wasm:service_fixture"], cmd = "$(execpath //tools/wasm:service_fixture) $(location service.wat) $(location :child_service_wasm) $(location :child_options) $@")
-
-app_archive(name = "runner_replacement_archive", manifest = ":service_manifest", entries = {"bin/service.wasm": ":service_wasm", ".bexos/wasm_runner.bex": "//services/wasm_runner:replacement_archive"}, compression = "zstd")
 
 app_manifest(name = "boot_manifest", src = "package/boot.prototxt")
 alias(name = "boot_wasm", actual = ":command_wasm")

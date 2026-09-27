@@ -104,6 +104,11 @@ async fn boot(initial: Channel) -> Result<(), String> {
             startup.migration_generation,
         )
         .map_err(|e| format!("appd adoption {e:?}"))?;
+        resolver::install_fixed_native_runner(
+            state.native_runner_image.0,
+            state.native_runner_image.1,
+        )
+        .map_err(|e| format!("native runner adoption {e:?}"))?;
         serve_lifecycle(state, None).await;
     }
     Memory::close(initial.0).unwrap();
@@ -114,6 +119,17 @@ async fn boot(initial: Channel) -> Result<(), String> {
     let boot =
         Bootfs::parse(unsafe { core::slice::from_raw_parts(va as *const u8, boot_len as usize) })
             .map_err(|e| format!("BootFS {e:?}"))?;
+    let native_runner_entry = boot
+        .find("/boot/pkg/bexos.platform.native_runner/bin/native_runner")
+        .map_err(|_| "native runner BootFS lookup")?
+        .ok_or("fixed native runner missing")?;
+    let native_runner_image = (
+        Memory::from_bytes(native_runner_entry.bytes)
+            .map_err(|e| format!("native runner retained image {e:?}"))?,
+        native_runner_entry.bytes.len() as u64,
+    );
+    resolver::install_fixed_native_runner(native_runner_image.0, native_runner_image.1)
+        .map_err(|e| format!("native runner retention {e:?}"))?;
     log("appd: boot parse config\n");
     let config_bytes = boot
         .find("/boot/platform.pcfg")
@@ -178,7 +194,7 @@ async fn boot(initial: Channel) -> Result<(), String> {
     log("appd: boot qemu key vmo ready\n");
     key.fill(0);
     log("appd: boot resolver build begin\n");
-    let resolver = resolver::Resolver::boot(&boot, boot_handle, &manifests);
+    let resolver = resolver::Resolver::boot(&boot, boot_handle, &manifests, &config.runner_policy);
     log("appd: boot resolver ready\n");
     let mut gate = readiness::Gate::new();
     if startup.resources.len() >= 4 {
@@ -507,6 +523,7 @@ async fn boot(initial: Channel) -> Result<(), String> {
             vfsd,
             &app_registry,
             None,
+            &config.runner_policy,
         ) {
             Ok(resolver) => resolver,
             Err(error) => {
@@ -681,6 +698,36 @@ async fn boot(initial: Channel) -> Result<(), String> {
             process: manifest.processes[0].name.clone(),
             instance_id: String::new(),
             process_handle: launched.process_handle.raw,
+            component_job_handle: launched.job_handle.raw,
+            controller_handle: launched.controller_handle.raw,
+            events_handle: launched.events_handle.raw,
+            native_host_job_handle: launched.native_host.map_or(0, |host| host.job.raw),
+            native_host_process_handle: launched.native_host.map_or(0, |host| host.process.raw),
+            native_host_space_handle: launched
+                .native_host
+                .map_or(0, |host| host.address_space.raw),
+            native_host_thread_handle: launched.native_host.map_or(0, |host| host.thread.raw),
+            runner_ready: launched.events_handle.is_none(),
+            runner_stopped: false,
+            stop_deadline_ns: 0,
+            stop_exit_code: -1,
+            runner_provider: config
+                .runner_policy
+                .provider_for(&manifest.processes[0].runner)
+                .map_or(String::new(), |provider| provider.package_id.clone()),
+            runner_provider_version: runner_provider_version(
+                &app_registry,
+                &config.runner_policy,
+                &manifest.processes[0].runner,
+            ),
+            runner_provider_path: config
+                .runner_policy
+                .provider_for(&manifest.processes[0].runner)
+                .map_or(String::new(), |provider| provider.executable_path.clone()),
+            runner_provider_signer: config
+                .runner_policy
+                .provider_for(&manifest.processes[0].runner)
+                .map_or(String::new(), |provider| provider.expected_signer.clone()),
             space_handle: launched.address_space_handle.raw,
             thread_handle: launched.main_thread_handle.raw,
             manager: control.0,
@@ -837,6 +884,7 @@ async fn boot(initial: Channel) -> Result<(), String> {
         self_server,
         gate.services,
     );
+    runtime.native_runner_image = native_runner_image;
     runtime.input_hotplug.registry = pci_registry.map_or(0, |c| c.0);
     runtime.input_hotplug.driver_packages = disk_package_ids;
     runtime.launches = launches;
@@ -1438,6 +1486,7 @@ fn bind_preinstalled_drivers(
             vfsd,
             registry,
             None,
+            &config.runner_policy,
         ) {
             Ok(resolver) => resolver,
             Err(error) => {
@@ -1683,6 +1732,8 @@ async fn serve_lifecycle(mut state: state::AppdState, teed: Option<Channel>) -> 
     #[cfg(bootui_transplant_validation)]
     let mut test_graphics_released = false;
     let mut pending: Option<update::Update> = None;
+    let mut provider_rollout: Option<update::ProviderRollout> = None;
+    let mut provider_rollout_queue: Vec<String> = Vec::new();
     let mut last_update = if state.generation != 0 {
         "migration completed".into()
     } else {
@@ -1721,14 +1772,64 @@ async fn serve_lifecycle(mut state: state::AppdState, teed: Option<Channel>) -> 
                             source.changed(4);
                         }
                         Ok(None) => {
-                            pending = None;
-                            activation_sync_pending = true;
-                            activation_completion_reported = false;
-                            activation_sync_after = bexos_userspace::syscall::ticks()
-                                .saturating_add(activation_sync_delay);
-                            log("appd: migration coordinator resources released\n");
+                            let next = provider_rollout
+                                .as_mut()
+                                .map(|rollout| rollout.begin_next(&state, &mut kernel))
+                                .transpose();
+                            match next {
+                                Ok(Some(Some(next))) => {
+                                    state.pending_archive = next.archive();
+                                    state.pending_replacement = next.replacement_descriptors();
+                                    state.pending_record = Some(next.candidate_record.clone());
+                                    pending = Some(next);
+                                    last_update =
+                                        "runner provider rollout continuing with next package"
+                                            .into();
+                                    source.changed(4);
+                                }
+                                Ok(Some(None)) => {
+                                    if let Some(rollout) = provider_rollout.take() {
+                                        let provider = rollout.provider().to_string();
+                                        if let Err(error) = rollout.commit(&mut state) {
+                                            last_update = error;
+                                        } else {
+                                            last_update = alloc::format!(
+                                                "runner provider rollout completed provider={provider}"
+                                            );
+                                        }
+                                    }
+                                    pending = None;
+                                    activation_sync_pending = true;
+                                    activation_completion_reported = false;
+                                    activation_sync_after = bexos_userspace::syscall::ticks()
+                                        .saturating_add(activation_sync_delay);
+                                    log("appd: migration coordinator resources released\n");
+                                }
+                                Ok(None) => {
+                                    pending = None;
+                                    activation_sync_pending = true;
+                                    activation_completion_reported = false;
+                                    activation_sync_after = bexos_userspace::syscall::ticks()
+                                        .saturating_add(activation_sync_delay);
+                                    log("appd: migration coordinator resources released\n");
+                                }
+                                Err(error) => {
+                                    if let Some(rollout) = provider_rollout.take() {
+                                        let _ = rollout.rollback(&mut state);
+                                    }
+                                    state.pending_record = None;
+                                    state.pending_archive = (0, 0);
+                                    state.pending_replacement = (0, 0, 0);
+                                    last_update = error;
+                                    pending = None;
+                                    source.changed(4);
+                                }
+                            }
                         }
                         Err(error) => {
+                            if let Some(rollout) = provider_rollout.take() {
+                                let _ = rollout.rollback(&mut state);
+                            }
                             state.pending_record = None;
                             state.pending_archive = (0, 0);
                             state.pending_replacement = (0, 0, 0);
@@ -1744,6 +1845,9 @@ async fn serve_lifecycle(mut state: state::AppdState, teed: Option<Channel>) -> 
                 Err(error) => {
                     log(&alloc::format!("appd: migration task failed: {error}\n"));
                     task.abort();
+                    if let Some(rollout) = provider_rollout.take() {
+                        let _ = rollout.rollback(&mut state);
+                    }
                     state.pending_record = None;
                     state.pending_archive = (0, 0);
                     state.pending_replacement = (0, 0, 0);
@@ -1857,14 +1961,25 @@ async fn serve_lifecycle(mut state: state::AppdState, teed: Option<Channel>) -> 
                             }) {
                                 None => lifecycle::AppLifecycleStatus::NotFound,
                                 Some(index) => {
-                                    let process = state.launches[index].process_handle;
-                                    if crate::runner::KernelOps::terminate_process(
-                                        &mut kernel,
-                                        crate::runner::KernelHandle { raw: process },
-                                        -9,
-                                    )
-                                    .is_err()
-                                    {
+                                    let launch = &state.launches[index];
+                                    let terminated = if launch.component_job_handle != 0 {
+                                        crate::runner::KernelOps::terminate_job(
+                                            &mut kernel,
+                                            crate::runner::KernelHandle {
+                                                raw: launch.component_job_handle,
+                                            },
+                                            -9,
+                                        )
+                                    } else {
+                                        crate::runner::KernelOps::terminate_process(
+                                            &mut kernel,
+                                            crate::runner::KernelHandle {
+                                                raw: launch.process_handle,
+                                            },
+                                            -9,
+                                        )
+                                    };
+                                    if terminated.is_err() {
                                         lifecycle::AppLifecycleStatus::LaunchFailed
                                     } else {
                                         // The debug operation owns this explicit crash
@@ -2625,7 +2740,53 @@ async fn serve_lifecycle(mut state: state::AppdState, teed: Option<Channel>) -> 
             }
 
             let configured = crate::package_install::acquire_configured(&mut state);
-            let (completed, installed, drivers) = crate::package_install::poll(&mut state);
+            let (completed, installed, drivers, updated_runner_providers) =
+                crate::package_install::poll(&mut state);
+            for provider in updated_runner_providers {
+                if provider_rollout
+                    .as_ref()
+                    .is_none_or(|rollout| rollout.provider() != provider)
+                    && !provider_rollout_queue.contains(&provider)
+                {
+                    provider_rollout_queue.push(provider);
+                }
+            }
+            if pending.is_none() && provider_rollout.is_none() && !provider_rollout_queue.is_empty()
+            {
+                let provider = provider_rollout_queue.remove(0);
+                match update::ProviderRollout::new(&state, &provider) {
+                    Ok(mut rollout) => match rollout.begin_next(&state, &mut kernel) {
+                        Ok(Some(task)) => {
+                            state.pending_archive = task.archive();
+                            state.pending_replacement = task.replacement_descriptors();
+                            state.pending_record = Some(task.candidate_record.clone());
+                            pending = Some(task);
+                            last_update = alloc::format!(
+                                "runner provider rollout preparing provider={provider}"
+                            );
+                            provider_rollout = Some(rollout);
+                            source.changed(4);
+                        }
+                        Ok(None) => {
+                            if let Err(error) = rollout.commit(&mut state) {
+                                last_update = error;
+                            } else {
+                                last_update = alloc::format!(
+                                    "runner provider update retained for restart-only consumers provider={provider}"
+                                );
+                            }
+                        }
+                        Err(error) => {
+                            let _ = rollout.rollback(&mut state);
+                            last_update = error;
+                        }
+                    },
+                    Err(error) => {
+                        let _ = state.registry.rollback_to_previous(&provider);
+                        last_update = error;
+                    }
+                }
+            }
             // Pending reads are volatile migration state. Only completed installs
             // change the durable registry; queuing or failing a download must
             // not force a filesystem checkpoint in the service broker.
@@ -2911,6 +3072,64 @@ fn poll_lifecycle_watchdog(
     let mut removed_indexes = Vec::new();
     let launch_snapshot = state.launches.clone();
     for (index, launch) in launch_snapshot.iter().enumerate() {
+        if launch.stop_deadline_ns != 0 && now_ns >= launch.stop_deadline_ns {
+            let _ = crate::runner::enforce_stop_deadline(
+                kernel,
+                now_ns,
+                launch.stop_deadline_ns,
+                KernelHandle {
+                    raw: launch.component_job_handle,
+                },
+                KernelHandle {
+                    raw: launch.native_host_job_handle,
+                },
+                launch.stop_exit_code,
+            );
+        }
+        poll_component_runner_events(state, index, kernel);
+        if launch.events_handle != 0
+            && handle_peer_closed(launch.events_handle)
+            && !state.launches[index].runner_stopped
+        {
+            let _ = crate::runner::terminate_runner_boundary(
+                kernel,
+                KernelHandle {
+                    raw: launch.component_job_handle,
+                },
+                KernelHandle {
+                    raw: launch.native_host_job_handle,
+                },
+                -1,
+            );
+        }
+        if launch.native_host_process_handle != 0
+            && process_terminated(launch.native_host_process_handle)
+            && !process_terminated(launch.process_handle)
+        {
+            let _ = crate::runner::terminate_runner_boundary(
+                kernel,
+                KernelHandle {
+                    raw: launch.component_job_handle,
+                },
+                KernelHandle {
+                    raw: launch.native_host_job_handle,
+                },
+                -1,
+            );
+        }
+        if process_terminated(launch.process_handle) {
+            if launch.native_host_job_handle != 0 {
+                let _ = crate::runner::KernelOps::terminate_job(
+                    kernel,
+                    KernelHandle {
+                        raw: launch.native_host_job_handle,
+                    },
+                    -1,
+                );
+            }
+            removed_indexes.push(index);
+            continue;
+        }
         if launch.job_token != 0 {
             continue;
         }
@@ -2918,9 +3137,6 @@ fn poll_lifecycle_watchdog(
             continue;
         }
         ensure_watchdog_record(state, launch, now_ns);
-        if process_terminated(launch.process_handle) {
-            removed_indexes.push(index);
-        }
     }
     for index in removed_indexes.into_iter().rev() {
         registry_changed = true;
@@ -3121,6 +3337,74 @@ fn poll_lifecycle_watchdog(
         }
         source.changed_keys((0..state.launches.len()).map(|i| state::LAUNCH_BASE + i as u64));
         source.changed_keys((0..state.watchdogs.len()).map(|i| state::WATCHDOG_BASE + i as u64));
+    }
+}
+
+fn request_component_stop(controller: u64) -> Result<(), ()> {
+    bexos_userspace::Channel(controller)
+        .send(&1u64.to_le_bytes(), &[])
+        .map_err(|_| ())
+}
+
+fn poll_component_runner_events(
+    state: &mut state::AppdState,
+    index: usize,
+    kernel: &mut KernelFidlOps<KernelTransport, KernelTransport, KernelTransport>,
+) {
+    let Some(launch) = state.launches.get_mut(index) else {
+        return;
+    };
+    if launch.events_handle == 0 {
+        return;
+    }
+    let mut event_state =
+        bexos_component_runner::EventState::new(launch.runner_ready, launch.runner_stopped);
+    let mut protocol_violation = false;
+    while let Ok(message) = Channel(launch.events_handle).try_recv() {
+        let (ordinal, body) = envelope(&message.bytes);
+        let handles = message
+            .handles
+            .iter()
+            .map(|raw| component_runner_fidl::HandleRef { raw: *raw })
+            .collect::<Vec<_>>();
+        match ordinal {
+            1 => {
+                use component_runner_fidl::FidlDecode as _;
+                match component_runner_fidl::ComponentRunnerEventsOnReadyRequest::decode(
+                    body, &handles,
+                ) {
+                    Ok(event) if event_state.on_ready(event.status).is_ok() => {}
+                    _ => protocol_violation = true,
+                }
+            }
+            2 => {
+                use component_runner_fidl::FidlDecode as _;
+                match component_runner_fidl::ComponentRunnerEventsOnStopRequest::decode(
+                    body, &handles,
+                ) {
+                    Ok(_) if event_state.on_stop().is_ok() => {
+                        launch.stop_deadline_ns = 0;
+                    }
+                    _ => protocol_violation = true,
+                }
+            }
+            _ => protocol_violation = true,
+        }
+        close_handles(&message.handles);
+    }
+    launch.runner_ready = event_state.ready;
+    launch.runner_stopped = event_state.stopped;
+    if protocol_violation && launch.component_job_handle != 0 {
+        let _ = crate::runner::terminate_runner_boundary(
+            kernel,
+            KernelHandle {
+                raw: launch.component_job_handle,
+            },
+            KernelHandle {
+                raw: launch.native_host_job_handle,
+            },
+            -1,
+        );
     }
 }
 
@@ -4642,10 +4926,20 @@ fn cache_boot_library_recursive(
 fn process_executable_path(process: &crate::manifest::Process) -> Option<&str> {
     match &process.runner_options {
         Some(crate::ProcessRunnerOptions::Elf(options)) => Some(&options.path),
-        Some(crate::ProcessRunnerOptions::Wasm(options)) => Some(&options.path),
-        Some(crate::ProcessRunnerOptions::Nix(options)) => Some(&options.path),
         _ => None,
     }
+}
+
+fn runner_provider_version(
+    registry: &MemoryAppRegistry,
+    policy: &crate::RunnerPolicy,
+    runner: &str,
+) -> String {
+    policy
+        .provider_for(runner)
+        .filter(|provider| !provider.package_id.is_empty())
+        .and_then(|provider| registry.record(&provider.package_id).ok())
+        .map_or(String::new(), |record| record.version.label())
 }
 
 fn boot_package_bytes<'a>(
@@ -5448,6 +5742,10 @@ fn launch_application(
                         value: value.clone(),
                     })
                     .collect();
+                // This is an explicit command-line overlay, so regenerate the
+                // outgoing opaque payload from the modified compatibility
+                // view rather than forwarding the archived bytes unchanged.
+                process.runner_program = None;
             }
         }
     }
@@ -5657,10 +5955,12 @@ fn launch_application(
             return lifecycle::AppLifecycleStatus::AccessDenied;
         }
     };
-    let sandboxed = matches!(
-        process.runner_options,
-        Some(crate::ProcessRunnerOptions::Wasm(_) | crate::ProcessRunnerOptions::Nix(_))
-    );
+    let sandboxed = config
+        .runner_policy
+        .provider_for(&process.runner)
+        .is_some_and(|provider| {
+            provider.kind == crate::platform_config::ComponentRunnerProviderKind::ComponentRunner
+        });
     let signer = if sandboxed {
         match &record.verified_signer {
             Some(signer) => signer.root_anchor_id.as_str(),
@@ -5727,6 +6027,7 @@ fn launch_application(
         vfsd,
         registry,
         container.map(|container| (process_name, Channel(container.rootfs))),
+        &config.runner_policy,
     ) {
         Ok(resolver) => resolver,
         Err(error) => {
@@ -5812,8 +6113,7 @@ fn launch_application(
     ) {
         Ok(migration) => migration,
         Err(_) => {
-            let _ =
-                crate::runner::KernelOps::terminate_process(kernel, launched.process_handle, -1);
+            let _ = crate::runner::KernelOps::terminate_job(kernel, launched.job_handle, -1);
             mark_launch_failed(registry, &record);
             close_bound_capabilities(&bound_capabilities);
             close_shared_vault_roots(shared_vault_roots);
@@ -6222,6 +6522,36 @@ fn launch_application(
         process: process_name.into(),
         instance_id: instance_id.unwrap_or_default().into(),
         process_handle: launched.process_handle.raw,
+        component_job_handle: launched.job_handle.raw,
+        controller_handle: launched.controller_handle.raw,
+        events_handle: launched.events_handle.raw,
+        native_host_job_handle: launched.native_host.map_or(0, |host| host.job.raw),
+        native_host_process_handle: launched.native_host.map_or(0, |host| host.process.raw),
+        native_host_space_handle: launched
+            .native_host
+            .map_or(0, |host| host.address_space.raw),
+        native_host_thread_handle: launched.native_host.map_or(0, |host| host.thread.raw),
+        runner_ready: launched.events_handle.is_none(),
+        runner_stopped: false,
+        stop_deadline_ns: 0,
+        stop_exit_code: -1,
+        runner_provider: config
+            .runner_policy
+            .provider_for(&process.runner)
+            .map_or(String::new(), |provider| provider.package_id.clone()),
+        runner_provider_version: runner_provider_version(
+            registry,
+            &config.runner_policy,
+            &process.runner,
+        ),
+        runner_provider_path: config
+            .runner_policy
+            .provider_for(&process.runner)
+            .map_or(String::new(), |provider| provider.executable_path.clone()),
+        runner_provider_signer: config
+            .runner_policy
+            .provider_for(&process.runner)
+            .map_or(String::new(), |provider| provider.expected_signer.clone()),
         space_handle: launched.address_space_handle.raw,
         thread_handle: launched.main_thread_handle.raw,
         manager: control.0,
@@ -7195,18 +7525,39 @@ fn stop_worker(
     }) else {
         return app_worker::WorkerLaunchStatus::NotFound;
     };
-    let launch = state.launches.remove(index);
-    let _ = crate::runner::KernelOps::terminate_process(
-        kernel,
-        KernelHandle {
-            raw: launch.process_handle,
-        },
-        exit_code,
-    );
-    for handle in launch.handles() {
-        if handle != 0 {
-            let _ = Memory::close(handle);
+    if state.launches[index].controller_handle != 0 {
+        if request_component_stop(state.launches[index].controller_handle).is_err() {
+            return app_worker::WorkerLaunchStatus::LaunchFailed;
         }
+        let now = monotonic_ns().unwrap_or_else(|| {
+            bexos_userspace::syscall::ticks().saturating_mul(1_000_000_000)
+                / bexos_userspace::syscall::frequency().max(1)
+        });
+        state.launches[index].stop_deadline_ns = crate::runner::component_stop_deadline(now);
+        state.launches[index].stop_exit_code = exit_code;
+    } else {
+        let launch = state.launches.remove(index);
+        let terminated = if launch.component_job_handle != 0 {
+            crate::runner::KernelOps::terminate_job(
+                kernel,
+                KernelHandle {
+                    raw: launch.component_job_handle,
+                },
+                exit_code,
+            )
+        } else {
+            crate::runner::KernelOps::terminate_process(
+                kernel,
+                KernelHandle {
+                    raw: launch.process_handle,
+                },
+                exit_code,
+            )
+        };
+        if terminated.is_err() {
+            return app_worker::WorkerLaunchStatus::LaunchFailed;
+        }
+        cleanup_dead_launch(state, &launch);
     }
     app_worker::WorkerLaunchStatus::Ok
 }

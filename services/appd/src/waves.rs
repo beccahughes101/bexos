@@ -551,6 +551,62 @@ impl AppdWaveOrchestrator {
         )
     }
 
+    pub fn launch_manual_with_policy<'a, K, R>(
+        &self,
+        manifests: &'a [Manifest],
+        package_name: &str,
+        process_name: &str,
+        runner_policy: &'a RunnerPolicy,
+        identity: PackageIdentity<'a>,
+        _resource_group_id: u32,
+        kernel: &mut K,
+        resolver: &R,
+    ) -> Result<LaunchedProcess<'a>, StartupError>
+    where
+        K: KernelOps,
+        R: PackageImageResolver,
+    {
+        let plan = self.plan(manifests);
+        let created_groups =
+            create_manifest_resource_groups(manifests, kernel).map_err(|source| {
+                StartupError::Launch {
+                    package_name: package_name.to_string(),
+                    process_name: process_name.to_string(),
+                    source,
+                }
+            })?;
+        let process_ref = plan
+            .find_manual(package_name, process_name)
+            .ok_or_else(|| StartupError::ManualProcessNotFound {
+                package_name: package_name.to_string(),
+                process_name: process_name.to_string(),
+            })?;
+        if identity.package_id != process_ref.manifest.package_name {
+            return Err(StartupError::Launch {
+                package_name: process_ref.manifest.package_name.clone(),
+                process_name: process_ref.process.name.clone(),
+                source: LaunchError::RunnerPolicyDenied,
+            });
+        }
+
+        self.launch_process(
+            process_ref,
+            identity.trust_tier,
+            identity,
+            Some(runner_policy),
+            HardwareAccessTier::None,
+            resolve_resource_group_id(
+                process_ref,
+                identity,
+                HardwareAccessTier::None,
+                None,
+                &created_groups,
+            )?,
+            kernel,
+            resolver,
+        )
+    }
+
     fn launch_process<'a, K, R>(
         &self,
         process_ref: ProcessRef<'a>,

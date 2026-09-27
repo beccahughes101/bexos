@@ -2,7 +2,6 @@
 use super::*;
 use crate::KernelOps;
 use crate::command_state::{ControlledProcess, LIMIT};
-use bexos_starnix_abi::Control;
 use bexos_userspace::command::CommandOptions;
 use opener_fidl::*;
 
@@ -75,25 +74,12 @@ fn signal(
     let launch = launches
         .iter()
         .find(|launch| launch.process_handle == process);
-    let is_nix = launch.is_some_and(|launch| {
-        registry
-            .record(&launch.package)
-            .ok()
-            .and_then(|record| Manifest::decode(&record.manifest_bytes).ok())
-            .and_then(|manifest| {
-                manifest
-                    .processes
-                    .into_iter()
-                    .find(|candidate| candidate.name == launch.process)
-            })
-            .is_some_and(|candidate| candidate.runner == "nix")
-    });
+    let _ = registry;
+    let controlled = launch.is_some_and(|launch| launch.controller_handle != 0);
     let deliver =
         |kernel: &mut KernelFidlOps<KernelTransport, KernelTransport, KernelTransport>| {
             let Some(launch) = launch else { return false };
-            Channel(launch.manager)
-                .send(&Control::Signal(signal).encode(), &[])
-                .is_ok()
+            bexos_component_runner::send_signal(launch.controller_handle, signal).is_ok()
                 && kernel
                     .kick_restricted_thread(KernelHandle {
                         raw: launch.thread_handle,
@@ -101,9 +87,9 @@ fn signal(
                     .is_ok()
         };
     match signal {
-        18 => set_suspended(process, false) && (!is_nix || deliver(kernel)),
+        18 => set_suspended(process, false) && (!controlled || deliver(kernel)),
         19 => set_suspended(process, true),
-        20 if !is_nix => set_suspended(process, true),
+        20 if !controlled => set_suspended(process, true),
         9 => bexos_userspace::ipc::kernel_call::<
             _,
             kernel_fidl::SystemPrivilegedTerminateProcessResponse,
@@ -118,7 +104,7 @@ fn signal(
         )
         .is_ok_and(|r| r.status == kernel_fidl::Status::Ok),
         1..=64 => {
-            if !is_nix {
+            if !controlled {
                 return matches!(signal, 2 | 15)
                     && bexos_userspace::ipc::kernel_call::<
                         _,

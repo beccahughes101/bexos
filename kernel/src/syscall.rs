@@ -801,6 +801,38 @@ fn route(
                 group_handle: h(group_handle)
             })
         }
+        (4, Some("CreateComponentJob")) => {
+            let q = decode!(SystemPrivilegedCreateComponentJobRequest);
+            let r = rt.create_component_job(
+                q.name,
+                q.package_id,
+                q.hardware_access as u32,
+                q.resource_group_id,
+                q.realtime_scheduling,
+                q.max_processes,
+            );
+            reply!(SystemPrivilegedCreateComponentJobResponse {
+                status: status(&r),
+                job_handle: h(r.unwrap_or(0))
+            })
+        }
+        (4, Some("CreateProcessInJob")) => {
+            let q = decode!(SystemPrivilegedCreateProcessInJobRequest);
+            let r = rt.create_process_in_job(q.job_handle.raw, q.name);
+            let st = status(&r);
+            let (process, space) = r.unwrap_or((0, 0));
+            let root_vmar = if st == Status::Ok {
+                rt.root_vmar_construction_handle(space).unwrap_or(0)
+            } else {
+                0
+            };
+            reply!(SystemPrivilegedCreateProcessInJobResponse {
+                status: st,
+                process_handle: h(process),
+                address_space_handle: h(space),
+                root_vmar_handle: h(root_vmar)
+            })
+        }
         (4, Some("StartThreadInProcess")) => {
             let q = decode!(SystemPrivilegedStartThreadInProcessRequest);
             let r = rt.start_with_thread_pointer(
@@ -812,6 +844,21 @@ fn route(
                 q.arg_handle.raw,
             );
             reply!(SystemPrivilegedStartThreadInProcessResponse {
+                status: status(&r),
+                thread_handle: h(r.unwrap_or(0))
+            })
+        }
+        (4, Some("StartDelegatedProcess")) => {
+            let q = decode!(SystemPrivilegedStartDelegatedProcessRequest);
+            let r = rt.start_with_thread_pointer(
+                q.process_handle.raw,
+                q.address_space_handle.raw,
+                q.entry_vaddr,
+                q.stack_top_vaddr,
+                q.thread_pointer_vaddr,
+                q.arg_handle.raw,
+            );
+            reply!(SystemPrivilegedStartDelegatedProcessResponse {
                 status: status(&r),
                 thread_handle: h(r.unwrap_or(0))
             })
@@ -886,6 +933,34 @@ fn route(
                 suspended,
                 exit_code,
                 process_id
+            })
+        }
+        (4, Some("GetDelegatedProcessStatus")) => {
+            let q = decode!(SystemPrivilegedGetDelegatedProcessStatusRequest);
+            let r = rt.process_status(q.process_handle.raw);
+            let (exited, suspended, exit_code, process_id) =
+                r.as_ref().copied().unwrap_or((false, false, 0, 0));
+            reply!(SystemPrivilegedGetDelegatedProcessStatusResponse {
+                status: status(&r),
+                exited,
+                suspended,
+                exit_code,
+                process_id
+            })
+        }
+        (4, Some("TerminateJob")) => {
+            let q = decode!(SystemPrivilegedTerminateJobRequest);
+            let r = rt.terminate_job(q.job_handle.raw, q.exit_code);
+            reply!(SystemPrivilegedTerminateJobResponse { status: status(&r) })
+        }
+        (4, Some("GetJobStatus")) => {
+            let q = decode!(SystemPrivilegedGetJobStatusRequest);
+            let r = rt.job_status(q.job_handle.raw);
+            let (process_count, running_process_count) = r.as_ref().copied().unwrap_or((0, 0));
+            reply!(SystemPrivilegedGetJobStatusResponse {
+                status: status(&r),
+                process_count,
+                running_process_count
             })
         }
         (4, Some("SuspendProcess")) => {
@@ -997,6 +1072,7 @@ fn route(
                         Object::Socket(..) => ObjectType::Socket,
                         Object::Vmo(..) => ObjectType::Vmo,
                         Object::Process(..) => ObjectType::Process,
+                        Object::Job(..) => ObjectType::Job,
                         _ => ObjectType::Other,
                     };
                     (kind, cap.rights)

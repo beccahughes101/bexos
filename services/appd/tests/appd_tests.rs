@@ -16,15 +16,15 @@ use app_lifecycle_fidl::{
 use bexos_appd::{
     AppdBroker, AppdSnapshot, AppdWaveOrchestrator, BindBusType, BindCondition, BindError,
     BindProperty, BindRule, BoundCapability, BusType, CapabilityMetadata, ClientContext,
-    ConsumedCapability, ConsumedService, DeviceNodeInfo, DeviceNodeState, DeviceProperty,
-    DeviceRegistry, DeviceRegistryError, DriverExclusions, DriverIndex, DriverInfo,
-    DriverRecoveryBudget, ElfError, ExposedService, FakeKernelOps, FidlCapability,
-    HardwareAccessTier, HardwareResourceKind, HardwareResourceLease, ImmediateReadiness,
-    InterfaceQuery, KernelHandle, KernelOperation, LaunchError, LaunchRequest, Lifecycle, LinkType,
-    Manifest, Metadata, MethodDependency, MultiVersionPolicy, NetworkDomain, NetworkPolicy,
-    PackageIdentity, PackageImage, PackageImageError, PackageImageResolver, PackageKind,
-    PackageLibrary, PackageLibraryDependency, PackageLibraryKind, PackageTrustTier, ParsedElf,
-    PermissionDecision, PermissionDeclaration, PermissionRequirement, PermissionRoute,
+    ComponentRunnerProvider, ComponentRunnerProviderKind, ConsumedCapability, ConsumedService,
+    DeviceNodeInfo, DeviceNodeState, DeviceProperty, DeviceRegistry, DeviceRegistryError,
+    DriverExclusions, DriverIndex, DriverInfo, DriverRecoveryBudget, ElfError, ExposedService,
+    FakeKernelOps, FidlCapability, HardwareAccessTier, HardwareResourceKind, HardwareResourceLease,
+    ImmediateReadiness, InterfaceQuery, KernelHandle, KernelOperation, LaunchError, LaunchRequest,
+    Lifecycle, LinkType, Manifest, Metadata, MethodDependency, MultiVersionPolicy, NetworkDomain,
+    NetworkPolicy, PackageIdentity, PackageImage, PackageImageError, PackageImageResolver,
+    PackageKind, PackageLibrary, PackageLibraryDependency, PackageLibraryKind, PackageTrustTier,
+    ParsedElf, PermissionDecision, PermissionDeclaration, PermissionRequirement, PermissionRoute,
     PermissionRouteTable, PermissionValueGrant, PlatformConfig, ProcessRunnerOptions,
     ReadinessError, ReadinessGate, RecoveryDecision, RegisteredDeviceNode, RegistryError,
     ResourceGroup, RunnerPolicyDecision, RunnerRegistry, SYSTEM_PRIVILEGED_PERMISSION, SemVer,
@@ -159,6 +159,118 @@ fn platform_config_decodes_lifecycle_policy_defaults_and_explicit_values() {
     assert_eq!(config.app_lifecycle_policy.crash_window_seconds, 12);
     assert_eq!(config.app_lifecycle_policy.crash_threshold, 4);
     assert_eq!(config.app_lifecycle_policy.restart_delay_seconds, 2);
+}
+
+#[test]
+fn component_runner_registry_rejects_duplicates_traversal_and_invalid_combinations() {
+    let mut policy = configured_runner_policy();
+    policy
+        .component_runner_providers
+        .push(policy.component_runner_providers[1].clone());
+    assert!(policy.validate().is_err());
+
+    let mut policy = configured_runner_policy();
+    policy.component_runner_providers[1].executable_path = "/pkg/bin/../runner".into();
+    assert!(policy.validate().is_err());
+
+    let mut policy = configured_runner_policy();
+    policy.component_runner_providers[0].package_id = "unexpected.package".into();
+    assert!(policy.validate().is_err());
+
+    let mut policy = configured_runner_policy();
+    policy
+        .component_runner_providers
+        .push(ComponentRunnerProvider {
+            runner_name: "bad-name".into(),
+            kind: ComponentRunnerProviderKind::ComponentRunner,
+            package_id: "bexos.platform.bad".into(),
+            executable_path: "/pkg/bin/bad".into(),
+            expected_signer: "bexos_official_platform_v1".into(),
+        });
+    assert!(policy.validate().is_err());
+}
+
+#[test]
+fn registered_component_runner_names_are_data_driven() {
+    let mut policy = configured_runner_policy();
+    policy
+        .component_runner_providers
+        .push(ComponentRunnerProvider {
+            runner_name: "python".into(),
+            kind: ComponentRunnerProviderKind::ComponentRunner,
+            package_id: "bexos.platform.python_runner".into(),
+            executable_path: "/pkg/bin/python_runner".into(),
+            expected_signer: "bexos_official_platform_v1".into(),
+        });
+    assert_eq!(policy.validate(), Ok(()));
+    assert_eq!(
+        policy.evaluate_runner(
+            "PYTHON",
+            PackageIdentity {
+                package_id: "com.example.script",
+                signer: "example",
+                trust_tier: PackageTrustTier::StandardConsumer,
+                is_driver: false,
+            }
+        ),
+        RunnerPolicyDecision::Allow
+    );
+    assert_eq!(
+        policy.evaluate_runner(
+            "unknown",
+            PackageIdentity {
+                package_id: "com.example.script",
+                signer: "example",
+                trust_tier: PackageTrustTier::StandardConsumer,
+                is_driver: false,
+            }
+        ),
+        RunnerPolicyDecision::Deny
+    );
+}
+
+#[test]
+fn an_unconfigured_runner_registry_fails_closed() {
+    let policy = PlatformConfig::default().runner_policy;
+    assert!(policy.component_runner_providers.is_empty());
+    assert_eq!(
+        policy.evaluate_runner(
+            "wasm",
+            PackageIdentity {
+                package_id: "com.example.script",
+                signer: "example",
+                trust_tier: PackageTrustTier::StandardConsumer,
+                is_driver: false,
+            }
+        ),
+        RunnerPolicyDecision::Deny
+    );
+}
+
+fn configured_runner_policy() -> bexos_appd::RunnerPolicy {
+    let mut policy = bexos_appd::RunnerPolicy::default();
+    policy.component_runner_providers = vec![
+        ComponentRunnerProvider {
+            runner_name: "elf".into(),
+            kind: ComponentRunnerProviderKind::DirectElf,
+            ..ComponentRunnerProvider::default()
+        },
+        ComponentRunnerProvider {
+            runner_name: "wasm".into(),
+            kind: ComponentRunnerProviderKind::ComponentRunner,
+            package_id: "bexos.platform.wasm_runner".into(),
+            executable_path: "/pkg/bin/wasm_runner".into(),
+            expected_signer: "bexos_official_platform_v1".into(),
+        },
+        ComponentRunnerProvider {
+            runner_name: "nix".into(),
+            kind: ComponentRunnerProviderKind::ComponentRunner,
+            package_id: "bexos.platform.starnix_runner".into(),
+            executable_path: "/pkg/bin/starnix_runner".into(),
+            expected_signer: "bexos_official_platform_v1".into(),
+        },
+    ];
+    policy
 }
 
 #[test]
@@ -2213,11 +2325,15 @@ fn wave_orchestrator_waits_for_wave_readiness_before_next_wave() {
     let resolver = StaticPackageImageResolver::new(valid_elf(), 70);
     let mut kernel = FakeKernelOps::new();
     let mut readiness = RecordingReadiness::default();
+    let runner_policy = configured_runner_policy();
+    let driver_policy = bexos_appd::DriverPolicy::default();
 
     let launched = AppdWaveOrchestrator::new()
-        .launch_automatic(
+        .launch_automatic_with_policy(
             &manifests,
-            PackageTrustTier::SystemHardware,
+            &runner_policy,
+            &driver_policy,
+            |manifest| package_identity(manifest, PackageTrustTier::SystemHardware, false),
             1,
             &mut kernel,
             &resolver,
@@ -2244,7 +2360,11 @@ fn wave_orchestrator_waits_for_wave_readiness_before_next_wave() {
         .operations
         .iter()
         .filter_map(|operation| match operation {
-            KernelOperation::CreateProcess { name, .. } => Some(name.as_str()),
+            KernelOperation::CreateComponentJob { name, .. }
+                if name != bexos_appd::NATIVE_RUNNER_PACKAGE =>
+            {
+                Some(name.as_str())
+            }
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -2267,11 +2387,15 @@ fn wave_orchestrator_stops_on_launch_failure() {
     let resolver = StaticPackageImageResolver::new(valid_elf(), 70);
     let mut kernel = FakeKernelOps::new();
     let mut readiness = ImmediateReadiness;
+    let runner_policy = configured_runner_policy();
+    let driver_policy = bexos_appd::DriverPolicy::default();
 
     let error = AppdWaveOrchestrator::new()
-        .launch_automatic(
+        .launch_automatic_with_policy(
             &manifests,
-            PackageTrustTier::StandardConsumer,
+            &runner_policy,
+            &driver_policy,
+            |manifest| package_identity(manifest, PackageTrustTier::StandardConsumer, false),
             1,
             &mut kernel,
             &resolver,
@@ -2302,11 +2426,15 @@ fn wave_orchestrator_stops_before_next_wave_on_readiness_failure() {
         fail_on: Some("root_bus"),
         ..RecordingReadiness::default()
     };
+    let runner_policy = configured_runner_policy();
+    let driver_policy = bexos_appd::DriverPolicy::default();
 
     let error = AppdWaveOrchestrator::new()
-        .launch_automatic(
+        .launch_automatic_with_policy(
             &manifests,
-            PackageTrustTier::SystemHardware,
+            &runner_policy,
+            &driver_policy,
+            |manifest| package_identity(manifest, PackageTrustTier::SystemHardware, false),
             1,
             &mut kernel,
             &resolver,
@@ -2326,7 +2454,11 @@ fn wave_orchestrator_stops_before_next_wave_on_readiness_failure() {
         .operations
         .iter()
         .filter_map(|operation| match operation {
-            KernelOperation::CreateProcess { name, .. } => Some(name.as_str()),
+            KernelOperation::CreateComponentJob { name, .. }
+                if name != bexos_appd::NATIVE_RUNNER_PACKAGE =>
+            {
+                Some(name.as_str())
+            }
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -2341,13 +2473,15 @@ fn wave_orchestrator_launches_manual_processes_through_runner_policy() {
     )];
     let resolver = StaticPackageImageResolver::new(valid_elf(), 70);
     let mut kernel = FakeKernelOps::new();
+    let runner_policy = configured_runner_policy();
 
     let launched = AppdWaveOrchestrator::new()
-        .launch_manual(
+        .launch_manual_with_policy(
             &manifests,
             "bexos.hardware:camera",
             "manual_tool",
-            PackageTrustTier::SystemHardware,
+            &runner_policy,
+            package_identity(&manifests[0], PackageTrustTier::SystemHardware, false),
             1,
             &mut kernel,
             &resolver,
@@ -2358,11 +2492,12 @@ fn wave_orchestrator_launches_manual_processes_through_runner_policy() {
 
     let mut denied_kernel = FakeKernelOps::new();
     assert_eq!(
-        AppdWaveOrchestrator::new().launch_manual(
+        AppdWaveOrchestrator::new().launch_manual_with_policy(
             &manifests,
             "bexos.hardware:camera",
             "manual_tool",
-            PackageTrustTier::StandardConsumer,
+            &runner_policy,
+            package_identity(&manifests[0], PackageTrustTier::StandardConsumer, false,),
             1,
             &mut denied_kernel,
             &resolver,
@@ -2376,11 +2511,12 @@ fn wave_orchestrator_launches_manual_processes_through_runner_policy() {
     assert!(denied_kernel.operations.is_empty());
 
     assert_eq!(
-        AppdWaveOrchestrator::new().launch_manual(
+        AppdWaveOrchestrator::new().launch_manual_with_policy(
             &manifests,
             "bexos.hardware:camera",
             "missing",
-            PackageTrustTier::SystemHardware,
+            &runner_policy,
+            package_identity(&manifests[0], PackageTrustTier::SystemHardware, false,),
             1,
             &mut kernel,
             &resolver,
@@ -2406,11 +2542,15 @@ fn wave_orchestrator_creates_manifest_resource_groups_before_process_launch() {
     let resolver = StaticPackageImageResolver::new(valid_elf(), 70);
     let mut kernel = FakeKernelOps::new();
     let mut readiness = ImmediateReadiness;
+    let runner_policy = configured_runner_policy();
+    let driver_policy = bexos_appd::DriverPolicy::default();
 
     AppdWaveOrchestrator::new()
-        .launch_automatic(
+        .launch_automatic_with_policy(
             &manifests,
-            PackageTrustTier::SystemHardware,
+            &runner_policy,
+            &driver_policy,
+            |manifest| package_identity(manifest, PackageTrustTier::SystemHardware, false),
             1,
             &mut kernel,
             &resolver,
@@ -2429,7 +2569,7 @@ fn wave_orchestrator_creates_manifest_resource_groups_before_process_launch() {
     assert!(kernel.operations.iter().any(|operation| {
         matches!(
             operation,
-            KernelOperation::CreateProcess {
+            KernelOperation::CreateComponentJob {
                 resource_group_id: 1001,
                 ..
             }
@@ -2445,11 +2585,15 @@ fn wave_orchestrator_resolves_builtin_resource_group_names() {
     let resolver = StaticPackageImageResolver::new(valid_elf(), 70);
     let mut kernel = FakeKernelOps::new();
     let mut readiness = ImmediateReadiness;
+    let runner_policy = configured_runner_policy();
+    let driver_policy = bexos_appd::DriverPolicy::default();
 
     AppdWaveOrchestrator::new()
-        .launch_automatic(
+        .launch_automatic_with_policy(
             &manifests,
-            PackageTrustTier::SystemHardware,
+            &runner_policy,
+            &driver_policy,
+            |manifest| package_identity(manifest, PackageTrustTier::SystemHardware, false),
             1,
             &mut kernel,
             &resolver,
@@ -2460,7 +2604,7 @@ fn wave_orchestrator_resolves_builtin_resource_group_names() {
     assert!(kernel.operations.iter().any(|operation| {
         matches!(
             operation,
-            KernelOperation::CreateProcess {
+            KernelOperation::CreateComponentJob {
                 resource_group_id: 3,
                 ..
             }
@@ -3218,11 +3362,13 @@ fn generated_kernel_fidl_metadata_can_be_passed_through_policy_filter() {
             .iter()
             .any(|capability| capability.protocol == "ChannelControl")
     );
-    assert!(
-        !allowed
-            .iter()
-            .any(|capability| capability.protocol == "SystemPrivileged")
-    );
+    assert!(allowed.iter().any(|capability| {
+        capability.protocol == "SystemPrivileged" && capability.capability == "Public"
+    }));
+    assert!(!allowed.iter().any(|capability| {
+        capability.protocol == "SystemPrivileged"
+            && capability.capability == "BexosSystemPrivileged"
+    }));
 
     let privileged = allowed_capabilities(
         &capabilities,
@@ -3240,7 +3386,7 @@ fn generated_kernel_fidl_metadata_can_be_passed_through_policy_filter() {
 fn elf_runner_policy_allows_only_system_tiers() {
     let manifest = launch_manifest();
     let process = &manifest.processes[0];
-    let registry = RunnerRegistry::new();
+    let registry = bexos_native_loader::ElfRunner::default();
     let resolver = StaticPackageImageResolver::new(valid_elf(), 70);
 
     let mut consumer_kernel = FakeKernelOps::new();
@@ -3440,7 +3586,14 @@ fn platform_runner_policy_denies_consumer_elf_and_routes_microvm() {
 
 #[test]
 fn platform_runner_policy_decodes_starnix_opt_in() {
-    let runner_policy = message(&[varint_field(7, 1)]);
+    let nix_provider = message(&[
+        string_field(1, "nix"),
+        varint_field(2, 2),
+        string_field(3, "bexos.platform.starnix_runner"),
+        string_field(4, "/pkg/bin/starnix_runner"),
+        string_field(5, "bexos_official_platform_v1"),
+    ]);
+    let runner_policy = message(&[varint_field(7, 1), message_field(8, &nix_provider)]);
     let config =
         PlatformConfig::decode(&message(&[message_field(2, &runner_policy)])).expect("config");
     let consumer = PackageIdentity {
@@ -3485,7 +3638,7 @@ fn policy_launches_tier_one_driver_with_direct_hardware_access() {
     assert!(kernel.operations.iter().any(|operation| {
         matches!(
             operation,
-            KernelOperation::CreateProcess {
+            KernelOperation::CreateComponentJob {
                 package_id,
                 hardware_access: HardwareAccessTier::Direct,
                 resource_group_id: 4,
@@ -3527,7 +3680,7 @@ fn policy_launches_platform_service_without_driver_hardware_grant() {
     assert!(kernel.operations.iter().any(|operation| {
         matches!(
             operation,
-            KernelOperation::CreateProcess {
+            KernelOperation::CreateComponentJob {
                 package_id,
                 hardware_access: HardwareAccessTier::None,
                 ..
@@ -3582,7 +3735,7 @@ fn policy_launches_bound_driver_after_wave_zero_device_registration() {
     ));
     assert!(kernel.operations.iter().any(|operation| matches!(
         operation,
-        KernelOperation::CreateProcess {
+        KernelOperation::CreateComponentJob {
             package_id,
             hardware_access: HardwareAccessTier::Direct,
             ..
@@ -3621,7 +3774,7 @@ fn policy_does_not_launch_bound_driver_without_registered_device() {
     assert_eq!(launched.len(), 1);
     assert!(!kernel.operations.iter().any(|operation| matches!(
         operation,
-        KernelOperation::CreateProcess { package_id, .. }
+        KernelOperation::CreateComponentJob { package_id, .. }
             if package_id == "bexos.driver.storage.nvme"
     )));
 }
@@ -3714,7 +3867,7 @@ fn elf_runner_maps_segments_stack_channel_and_starts_thread() {
     let resolver = StaticPackageImageResolver::new(valid_elf(), 70);
     let mut kernel = FakeKernelOps::new();
 
-    let result = RunnerRegistry::new()
+    let result = bexos_native_loader::ElfRunner::default()
         .launch(
             &LaunchRequest {
                 manifest: &manifest,
@@ -3731,9 +3884,10 @@ fn elf_runner_maps_segments_stack_channel_and_starts_thread() {
         )
         .expect("elf should launch");
 
-    assert_eq!(result.process_handle, KernelHandle { raw: 1 });
-    assert_eq!(result.address_space_handle, KernelHandle { raw: 2 });
-    assert_eq!(result.service_manager_handle, KernelHandle { raw: 9 });
+    assert_eq!(result.job_handle, KernelHandle { raw: 1 });
+    assert_eq!(result.process_handle, KernelHandle { raw: 2 });
+    assert_eq!(result.address_space_handle, KernelHandle { raw: 3 });
+    assert_eq!(result.service_manager_handle, KernelHandle { raw: 10 });
     assert!(
         !kernel
             .operations
@@ -3742,18 +3896,19 @@ fn elf_runner_maps_segments_stack_channel_and_starts_thread() {
     );
     assert!(matches!(
         kernel.operations.first(),
-        Some(KernelOperation::CreateProcess {
+        Some(KernelOperation::CreateComponentJob {
             name,
             resource_group_id: 1,
             package_id,
             hardware_access: HardwareAccessTier::None,
             realtime_scheduling: false,
+            max_processes: 1,
         }) if name == "bexos.hardware:camera:camera_service"
             && package_id == "bexos.hardware:camera"
     ));
     assert!(kernel.operations.iter().any(
         |operation| matches!(operation, KernelOperation::CreateSubVmar {
-            parent_vmar: KernelHandle { raw: 3 },
+            parent_vmar: KernelHandle { raw: 4 },
             offset,
             size_bytes: 0x2000,
             flags,
@@ -3783,18 +3938,18 @@ fn elf_runner_maps_segments_stack_channel_and_starts_thread() {
     ));
     assert!(kernel.operations.iter().any(
         |operation| matches!(operation, KernelOperation::StartThreadInProcess {
-            process: KernelHandle { raw: 1 },
-            vm_space: KernelHandle { raw: 2 },
+            process: KernelHandle { raw: 2 },
+            vm_space: KernelHandle { raw: 3 },
             entry_vaddr: TEST_IMAGE_ENTRY,
             stack_top_vaddr,
             thread_pointer_vaddr: 0,
-            arg_handle: Some(KernelHandle { raw: 10 }),
+            arg_handle: Some(KernelHandle { raw: 11 }),
         } if *stack_top_vaddr == bexos_appd::runner::DEFAULT_STACK_TOP)
     ));
     assert!(kernel.operations.iter().any(|operation| matches!(
         operation,
         KernelOperation::CloseHandle {
-            handle: KernelHandle { raw: 3 }
+            handle: KernelHandle { raw: 4 }
         }
     )));
 }
@@ -3810,7 +3965,7 @@ fn elf_runner_honors_bounded_process_stack_size() {
     }
     let resolver = StaticPackageImageResolver::new(valid_elf(), 70);
     let mut kernel = FakeKernelOps::new();
-    RunnerRegistry::new()
+    bexos_native_loader::ElfRunner::default()
         .launch(
             &LaunchRequest {
                 process: &manifest.processes[0],
@@ -3840,7 +3995,7 @@ fn elf_runner_honors_bounded_process_stack_size() {
     }
     let mut kernel = FakeKernelOps::new();
     assert_eq!(
-        RunnerRegistry::new().launch(
+        bexos_native_loader::ElfRunner::default().launch(
             &LaunchRequest {
                 process: &manifest.processes[0],
                 manifest: &manifest,
@@ -3875,7 +4030,7 @@ fn repeated_driver_launches_borrow_code_and_keep_writable_pages_private() {
     let borrowed = 0x100000;
     let resolver = StaticPackageImageResolver::new(image, borrowed);
     let mut kernel = FakeKernelOps::new();
-    let runner = RunnerRegistry::new();
+    let runner = bexos_native_loader::ElfRunner::default();
     let request = LaunchRequest {
         manifest: &manifest,
         process: &manifest.processes[0],
@@ -3924,7 +4079,7 @@ fn elf_runner_maps_tls_and_starts_thread_with_thread_pointer() {
     let resolver = StaticPackageImageResolver::new(valid_elf_with_tls(), 70);
     let mut kernel = FakeKernelOps::new();
 
-    RunnerRegistry::new()
+    bexos_native_loader::ElfRunner::default()
         .launch(
             &LaunchRequest {
                 manifest: &manifest,
@@ -3991,7 +4146,7 @@ fn elf_runner_loads_declared_crypto_library_and_returns_link_map() {
     );
     let mut kernel = FakeKernelOps::new();
 
-    let result = RunnerRegistry::new()
+    let result = bexos_native_loader::ElfRunner::default()
         .launch(
             &LaunchRequest {
                 manifest: &manifest,
@@ -4051,7 +4206,7 @@ fn elf_runner_exports_declared_net_library_symbols() {
     );
     let mut kernel = FakeKernelOps::new();
 
-    let result = RunnerRegistry::new()
+    let result = bexos_native_loader::ElfRunner::default()
         .launch(
             &LaunchRequest {
                 manifest: &manifest,
@@ -4095,7 +4250,7 @@ fn elf_runner_rejects_soname_mismatch() {
     );
     let mut kernel = FakeKernelOps::new();
 
-    let err = RunnerRegistry::new()
+    let err = bexos_native_loader::ElfRunner::default()
         .launch(
             &LaunchRequest {
                 manifest: &manifest,
@@ -4157,7 +4312,7 @@ fn elf_runner_rejects_library_dependency_cycle() {
         );
     let mut kernel = FakeKernelOps::new();
 
-    let err = RunnerRegistry::new()
+    let err = bexos_native_loader::ElfRunner::default()
         .launch(
             &LaunchRequest {
                 manifest: &manifest,
@@ -4199,7 +4354,7 @@ fn elf_runner_rejects_text_relocation_dynamic_flags() {
     );
     let mut kernel = FakeKernelOps::new();
 
-    let err = RunnerRegistry::new()
+    let err = bexos_native_loader::ElfRunner::default()
         .launch(
             &LaunchRequest {
                 manifest: &manifest,
@@ -4234,7 +4389,7 @@ fn elf_runner_rejects_missing_declared_library() {
     let resolver = StaticPackageImageResolver::new(valid_elf(), 70);
     let mut kernel = FakeKernelOps::new();
 
-    let err = RunnerRegistry::new()
+    let err = bexos_native_loader::ElfRunner::default()
         .launch(
             &LaunchRequest {
                 manifest: &manifest,
@@ -4391,7 +4546,10 @@ impl PackageImageResolver for StaticPackageImageResolver {
         _package_name: &str,
         path: &str,
     ) -> Result<PackageImage<'a>, PackageImageError> {
-        assert_eq!(path, "/pkg/bin/camera_service");
+        assert!(matches!(
+            path,
+            "/pkg/bin/camera_service" | "/pkg/bin/native_runner"
+        ));
         Ok(PackageImage {
             bytes: &self.bytes,
             vmo: self.vmo,
@@ -4445,6 +4603,7 @@ fn launch_manifest() -> Manifest {
                 path: "/pkg/bin/camera_service".to_string(),
                 stack_size_bytes: 0,
             })),
+            runner_program: None,
             wave: Some(1),
             lifecycle: bexos_appd::ProcessLifecycle {
                 update_strategy: bexos_appd::UpdateStrategy::HeartTransplant,
@@ -4504,12 +4663,30 @@ fn platform_config_bytes() -> Vec<u8> {
         string_field(1, "bexos.platform.appd"),
         string_field(2, "bexos_official_platform_v1"),
     ]);
+    let elf_provider = message(&[string_field(1, "elf"), varint_field(2, 1)]);
+    let wasm_provider = message(&[
+        string_field(1, "wasm"),
+        varint_field(2, 2),
+        string_field(3, "bexos.platform.wasm_runner"),
+        string_field(4, "/pkg/bin/wasm_runner"),
+        string_field(5, "bexos_official_platform_v1"),
+    ]);
+    let nix_provider = message(&[
+        string_field(1, "nix"),
+        varint_field(2, 2),
+        string_field(3, "bexos.platform.starnix_runner"),
+        string_field(4, "/pkg/bin/starnix_runner"),
+        string_field(5, "bexos_official_platform_v1"),
+    ]);
     let runner_policy = message(&[
         varint_field(1, 1),
         varint_field(2, 1),
         message_field(3, &microvm),
         varint_field(4, 0),
         message_field(5, &native_grant),
+        message_field(8, &elf_provider),
+        message_field(8, &wasm_provider),
+        message_field(8, &nix_provider),
     ]);
     let tee_policy = message(&[
         varint_field(1, 1),
@@ -4582,6 +4759,7 @@ fn wave_manifest(package_name: &str, processes: &[(&str, Option<u32>)]) -> Manif
                     path: "/pkg/bin/camera_service".to_string(),
                     stack_size_bytes: 0,
                 })),
+                runner_program: None,
                 wave: *wave,
                 lifecycle: Default::default(),
                 resource_group: None,
@@ -4651,6 +4829,7 @@ fn nvme_driver_manifest(package_name: &str, wave: u32, vendor_specific: bool) ->
                 path: "/pkg/bin/camera_service".to_string(),
                 stack_size_bytes: 0,
             })),
+            runner_program: None,
             wave: Some(wave),
             lifecycle: Default::default(),
             resource_group: None,
@@ -4710,6 +4889,7 @@ fn peripheral_driver_manifest(
                 path: "/pkg/bin/peripheral_driver".to_string(),
                 stack_size_bytes: 0,
             })),
+            runner_program: None,
             wave: Some(3),
             lifecycle: bexos_appd::ProcessLifecycle {
                 update_strategy: bexos_appd::UpdateStrategy::HeartTransplant,
@@ -5160,14 +5340,14 @@ fn elf_partial_load_failure_closes_handles_and_terminates_the_process() {
         resource_group_id: 1,
     };
     let mut successful = FakeKernelOps::new();
-    RunnerRegistry::new()
+    bexos_native_loader::ElfRunner::default()
         .launch(&request, &mut successful, &resolver)
         .unwrap();
     for call in 1..=successful.call_count() {
         let mut kernel = FakeKernelOps::new();
         kernel.fail_call(call);
         assert!(
-            RunnerRegistry::new()
+            bexos_native_loader::ElfRunner::default()
                 .launch(&request, &mut kernel, &resolver)
                 .is_err(),
             "failure point {call}"
@@ -5183,7 +5363,7 @@ fn elf_partial_load_failure_closes_handles_and_terminates_the_process() {
                 kernel
                     .operations
                     .iter()
-                    .any(|operation| matches!(operation, KernelOperation::TerminateProcess { .. })),
+                    .any(|operation| matches!(operation, KernelOperation::TerminateJob { .. })),
                 "failure point {call}"
             );
         }
@@ -5233,7 +5413,7 @@ fn elf_launches_borrow_cached_executable_for_multiple_device_instances() {
     let executable = kernel.create_vmo_from_bytes(&valid_elf()).unwrap();
     let resolver = StaticPackageImageResolver::new(valid_elf(), executable.raw);
     for _ in 0..4 {
-        RunnerRegistry::new()
+        bexos_native_loader::ElfRunner::default()
             .launch(
                 &LaunchRequest {
                     manifest: &manifest,

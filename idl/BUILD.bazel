@@ -98,6 +98,24 @@ rust_library(
     edition = "2024",
 )
 
+bexos_fidl_rust(
+    name = "component_runner_fidl_rust_src",
+    src = "bexos/component/runner.fidl",
+    out = "component_runner_fidl.rs",
+    fidl_deps = [
+        "bexos/kernel/types.fidl",
+    ],
+)
+rust_library(
+    name = "component_runner_fidl_rust",
+    srcs = [":component_runner_fidl_rust_src"],
+    crate_name = "component_runner_fidl",
+    edition = "2024",
+    deps = [
+        "//idl:kernel_fidl_rust",
+    ],
+)
+
 bexos_fidl_rust(name = "app_debug_fidl_rust_src", src = "bexos/app/debug.fidl", out = "app_debug_fidl.rs")
 rust_library(
     name = "app_debug_fidl_rust",

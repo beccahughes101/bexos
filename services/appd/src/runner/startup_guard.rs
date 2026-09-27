@@ -20,7 +20,7 @@ impl<'a, K: KernelOps> PendingWasmLaunch<'a, K> {
 impl<K: KernelOps> Drop for PendingWasmLaunch<'_, K> {
     fn drop(&mut self) {
         if let Some(launch) = self.launch.take() {
-            let _ = self.kernel.terminate_process(launch.process_handle, -1);
+            let _ = self.kernel.terminate_job(launch.job_handle, -1);
             if let Some((handle, _)) = launch.runtime_linker_data {
                 let _ = self.kernel.release_vmo(handle);
             }
@@ -29,6 +29,9 @@ impl<K: KernelOps> Drop for PendingWasmLaunch<'_, K> {
                 launch.main_thread_handle,
                 launch.address_space_handle,
                 launch.process_handle,
+                launch.job_handle,
+                launch.controller_handle,
+                launch.events_handle,
             ] {
                 let _ = self.kernel.close_handle(handle);
             }

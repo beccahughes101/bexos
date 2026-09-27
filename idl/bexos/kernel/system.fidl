@@ -209,4 +209,65 @@ protocol SystemPrivileged {
     SuspendProcess(resource struct { process_handle handle:PROCESS; }) -> (struct { status Status; });
     @permission("BEXOS_SYSTEM_PRIVILEGED")
     ResumeProcess(resource struct { process_handle handle:PROCESS; }) -> (struct { status Status; });
+
+    /// Create an immutable component job. The returned capability owns the
+    /// policy; delegated copies may manage members but cannot change identity,
+    /// resource-group, hardware, realtime, or process-count constraints.
+    @permission("BEXOS_SYSTEM_PRIVILEGED")
+    CreateComponentJob(struct {
+        name string:64;
+        resource_group_id uint32;
+        package_id string:96;
+        hardware_access HardwareAccess;
+        realtime_scheduling bool;
+        max_processes uint16;
+    }) -> (resource struct {
+        status Status;
+        job_handle handle:JOB;
+    });
+
+    /// Create a process using only the immutable policy captured by a job.
+    @permission("BEXOS_SYSTEM_PRIVILEGED")
+    CreateProcessInJob(resource struct {
+        job_handle handle:JOB;
+        name string:64;
+    }) -> (resource struct {
+        status Status;
+        process_handle handle:PROCESS;
+        address_space_handle handle:VM_SPACE;
+        root_vmar_handle handle:VMAR;
+    });
+
+    /// Terminate every process in the component job. Idempotent after exit.
+    TerminateJob(resource struct {
+        job_handle handle:JOB;
+        exit_code int32;
+    }) -> (struct { status Status; });
+
+    GetJobStatus(resource struct { job_handle handle:JOB; }) -> (struct {
+        status Status;
+        process_count uint16;
+        running_process_count uint16;
+    });
+
+    /// Start a pre-created process using attenuated task/map capabilities.
+    StartDelegatedProcess(resource struct {
+        process_handle handle:PROCESS;
+        address_space_handle handle:VM_SPACE;
+        entry_vaddr uint64;
+        stack_top_vaddr uint64;
+        thread_pointer_vaddr uint64;
+        arg_handle handle:OPTIONAL;
+    }) -> (resource struct {
+        status Status;
+        thread_handle handle:THREAD;
+    });
+
+    GetDelegatedProcessStatus(resource struct { process_handle handle:PROCESS; }) -> (struct {
+        status Status;
+        exited bool;
+        suspended bool;
+        exit_code int32;
+        process_id uint64;
+    });
 };

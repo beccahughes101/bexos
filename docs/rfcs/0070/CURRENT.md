@@ -64,18 +64,25 @@ network attachments at field 11. The launch record is version 3 and still
 decodes the version-2 offline record. The rootfs selects either the package or
 data startup directory and an optional root-bounded subpath; omission remains
 backward-compatible and selects the package root. A manifest selects it with
-`runner: "nix"`. Options, appd-to-runner launch records, and signal-control
-messages are bounded and versioned by `//lib/starnix_abi`.
+`runner: "nix"`. Options and migration records are bounded and versioned by
+`//lib/starnix_abi`; launch and signal control use the standard RFC 72 FIDL
+protocols.
 
 `RunnerPolicy.allow_starnix_runner = 7` defaults to false. Maintained QEMU
 product prototxts enable it. Other products, including Android policy, keep
 their existing microVM fallback or denial behavior.
 
-Appd resolves the package payload, validates the Linux ELF, authenticates the
-embedded platform runner by SHA-256, launches only that trusted native image,
-and transfers a payload VMO plus the versioned startup record. Partial launch
-failures terminate the process and release mappings, VMOs, channels, threads,
-and process handles.
+Appd resolves the package and dependency directories without interpreting the
+Linux payload. The platform prototxt registry selects an independently signed
+Starnix provider package; one provider instance is mapped into the component
+job and receives `ComponentRunner.Start` with opaque `NixRunnerOptions`, the
+directory capabilities, and the versioned startup record. Starnix validates
+the option type, path, bounds, and ELF format itself. The
+fixed BootFS native host performs this mapping with delegated
+job/process/VMAR handles.
+`ComponentController.SendSignal` replaces the former private signal
+transport. Partial launch failures terminate the complete component job and
+release mappings, VMOs, channels, threads, and process/job handles.
 
 ## Linux execution scope
 
@@ -241,8 +248,10 @@ attachments in the durable container record; there is no ambient network
 capability. Daemon, CLI, pkgd, and the runner archive are included in both
 product graphs.
 
-The normal and replacement runner ELFs, signed archives, runtime digest, and
-AArch64/x86_64 Linux fixtures are all Bazel-built. In addition to the static
+The normal and replacement runner ELFs, independently signed provider
+archives, and AArch64/x86_64 Linux fixtures are all Bazel-built. Appd does not
+embed a Starnix ELF or runtime digest; provider identity, path, and expected
+signer come from the RFC 72 platform registry. In addition to the static
 hello and looping fixtures, the archive contains a real dynamic musl PIE with
 `PT_INTERP=/lib/ld-musl.so.1` and `DT_NEEDED=libc_musl.so`, plus those runtime
 files inside the fixture root. It creates a pipe, forks, transfers data from

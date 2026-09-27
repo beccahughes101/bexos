@@ -1,0 +1,39 @@
+load("//build/rules:optimized_artifact.bzl", "optimized_artifact")
+load("//build/rules:app_archive.bzl", "app_archive")
+load("//build/rules:userspace.bzl", "app_manifest", "std_service_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "native_runner",
+    srcs = ["src/lib.rs"],
+    crate_name = "bexos_native_runner",
+    edition = "2024",
+    deps = [
+        "//idl:component_runner_fidl_rust",
+        "//idl:fs_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//lib/userspace",
+        "//lib/boot",
+        "//lib/component_runner",
+        "//lib/native_loader",
+        "//services/appd:appd",
+    ],
+)
+
+std_service_binary(
+    name = "binary",
+    srcs = ["src/main.rs"],
+    crate_name = "bexos_native_runner_elf",
+    deps = [
+        ":native_runner",
+        "//lib/component_runner",
+    ],
+)
+
+optimized_artifact(name = "native_runner_elf", src = ":binary")
+app_manifest(name = "package_manifest", src = "package/native_runner.prototxt")
+app_archive(name = "native_runner_archive", manifest = ":package_manifest", entries = {"bin/native_runner": ":native_runner_elf"}, compression = "zstd")
+
+rust_test(name = "tests", crate = ":native_runner")

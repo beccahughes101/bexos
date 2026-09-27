@@ -127,6 +127,17 @@ connection-authorization role, not as a token broker.
 
 ## Updates and heart transplant
 
+WASM and Starnix execution providers are independently signed package-registry
+entries selected by platform `RunnerPolicy` prototxt. They are system-image
+packages rather than appd-linked or component-owned runner blobs. Installing a
+new provider version causes appd to stage each running heart-transplant consumer
+against that provider through the ordinary migration transaction. Successful
+instances cut over independently while retaining service connections and
+checkpointed state; any failed candidate rolls the provider pin back to its
+previous version. Restart-only consumers retain the provider already mapped in
+their current component process and adopt the new version on their next launch.
+Nested `.bexos/wasm_runner.bex` overrides are rejected.
+
 The orchestrator retains the Trusty core/update lifecycle state model,
 last-known-good metadata, A/B decisions, and heart-transplant coordination.
 The Rust slot coordinator now keeps generation floors unchanged through switch

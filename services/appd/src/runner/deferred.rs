@@ -1,7 +1,7 @@
 //! Use the normal runner's policy and mapping path, but start only after the
 //! kernel has quarantined the candidate.
 use super::{
-    kernel::{CreatedChannel, CreatedProcess, CreatedResourceGroup, CreatedVmar},
+    kernel::{CreatedChannel, CreatedJob, CreatedProcess, CreatedResourceGroup, CreatedVmar},
     *,
 };
 
@@ -122,6 +122,38 @@ impl<K: KernelOps> KernelOps for Deferred<'_, K> {
         self.handles.extend([p.process.raw, p.address_space.raw]);
         self.construction_handles.push(p.root_vmar);
         Ok(p)
+    }
+    fn create_component_job(
+        &mut self,
+        name: &str,
+        resource_group_id: u32,
+        package_id: &str,
+        hardware_access: HardwareAccessTier,
+        realtime_scheduling: bool,
+        max_processes: u16,
+    ) -> Result<CreatedJob, KernelError> {
+        let job = self.kernel.create_component_job(
+            name,
+            resource_group_id,
+            package_id,
+            hardware_access,
+            realtime_scheduling,
+            max_processes,
+        )?;
+        self.handles.push(job.job.raw);
+        Ok(job)
+    }
+    fn create_process_in_job(
+        &mut self,
+        job: KernelHandle,
+        name: &str,
+    ) -> Result<CreatedProcess, KernelError> {
+        let process = self.kernel.create_process_in_job(job, name)?;
+        self.process = process.process.raw;
+        self.handles
+            .extend([process.process.raw, process.address_space.raw]);
+        self.construction_handles.push(process.root_vmar);
+        Ok(process)
     }
     fn create_vmo(&mut self, size: u64, flags: u32) -> Result<KernelHandle, KernelError> {
         let h = self.kernel.create_vmo(size, flags)?;

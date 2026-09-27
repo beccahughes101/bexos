@@ -54,4 +54,5 @@ type ObjectType = strict enum : uint32 {
     SOCKET = 2;
     VMO = 3;
     PROCESS = 4;
+    JOB = 5;
 };

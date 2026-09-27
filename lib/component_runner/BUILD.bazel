@@ -1,0 +1,20 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "component_runner",
+    srcs = ["src/lib.rs"],
+    crate_name = "bexos_component_runner",
+    edition = "2024",
+    deps = [
+        "//idl:component_runner_fidl_rust",
+        "//idl:kernel_fidl_rust",
+        "//lib/userspace",
+    ],
+)
+
+rust_test(
+    name = "tests",
+    crate = ":component_runner",
+)

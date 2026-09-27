@@ -51,14 +51,159 @@ pub struct Update {
     restricted_kick_thread: Option<u64>,
 }
 
+/// A provider package rollout reuses the ordinary component heart-transplant
+/// transaction. Each package is cut over independently; restart-only users are
+/// deliberately absent and continue running their already-loaded provider.
+pub struct ProviderRollout {
+    provider: String,
+    targets: Vec<String>,
+}
+
+fn supports_provider_hot_swap(manifest: &Manifest, process_name: &str) -> bool {
+    manifest.processes.iter().any(|process| {
+        process.name == process_name
+            && process.lifecycle.update_strategy == UpdateStrategy::HeartTransplant
+    })
+}
+
+impl ProviderRollout {
+    pub fn new(state: &AppdState, provider: &str) -> Result<Self, String> {
+        if !state
+            .config
+            .runner_policy
+            .component_runner_providers
+            .iter()
+            .any(|registration| registration.package_id == provider)
+        {
+            return Err("package is not a registered runner provider".into());
+        }
+        let mut targets = Vec::new();
+        for launch in &state.launches {
+            if launch.runner_provider != provider || targets.contains(&launch.package) {
+                continue;
+            }
+            let Ok(record) = state.registry.record(&launch.package) else {
+                continue;
+            };
+            let Ok(manifest) = Manifest::decode(&record.manifest_bytes) else {
+                continue;
+            };
+            if supports_provider_hot_swap(&manifest, &launch.process) {
+                targets.push(launch.package.clone());
+            }
+        }
+        targets.sort();
+        Ok(Self {
+            provider: provider.into(),
+            targets,
+        })
+    }
+
+    pub fn provider(&self) -> &str {
+        &self.provider
+    }
+
+    pub fn begin_next(
+        &mut self,
+        state: &AppdState,
+        kernel: &mut Kernel,
+    ) -> Result<Option<Update>, String> {
+        let Some(target) = self.targets.first().cloned() else {
+            return Ok(None);
+        };
+        self.targets.remove(0);
+        let record = state
+            .registry
+            .record(&target)
+            .map_err(|_| "provider consumer record unavailable")?;
+        let archive = bexos_userspace::vfs::read_package_archive(state.vfsd, &record.archive_id())
+            .map_err(|_| "provider consumer archive unavailable")?;
+        let generation = state
+            .services
+            .iter()
+            .filter(|service| service.package == target)
+            .map(|service| service.generation)
+            .chain(core::iter::once(record.accepted_generation))
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+        let len = archive.len() as u64;
+        let handle = Memory::from_bytes(&archive).map_err(|_| "provider consumer archive VMO")?;
+        begin(state, kernel, handle, len, generation, &target).map(Some)
+    }
+
+    pub fn commit(self, state: &mut AppdState) -> Result<(), String> {
+        state
+            .registry
+            .clear_rollback_target(&self.provider)
+            .map_err(|_| "runner provider commit pin".into())
+    }
+
+    pub fn rollback(self, state: &mut AppdState) -> Result<(), String> {
+        state
+            .registry
+            .rollback_to_previous(&self.provider)
+            .map(|_| ())
+            .map_err(|_| "runner provider rollback pin".into())
+    }
+}
+
+#[cfg(test)]
+mod provider_rollout_tests {
+    use super::*;
+
+    fn manifest_with_strategy(strategy: UpdateStrategy) -> Manifest {
+        Manifest {
+            processes: vec![Process {
+                name: "main".into(),
+                lifecycle: ProcessLifecycle {
+                    update_strategy: strategy,
+                    ..ProcessLifecycle::default()
+                },
+                ..Process::default()
+            }],
+            ..Manifest::default()
+        }
+    }
+
+    #[test]
+    fn provider_rollout_only_selects_heart_transplant_consumers() {
+        assert!(supports_provider_hot_swap(
+            &manifest_with_strategy(UpdateStrategy::HeartTransplant),
+            "main"
+        ));
+        assert!(!supports_provider_hot_swap(
+            &manifest_with_strategy(UpdateStrategy::Restart),
+            "main"
+        ));
+        assert!(!supports_provider_hot_swap(
+            &manifest_with_strategy(UpdateStrategy::HeartTransplant),
+            "other"
+        ));
+    }
+}
+
 struct BundleImage {
-    runtime: Option<super::resolver::RuntimeImage>,
-    starnix_runtime: Option<&'static [u8]>,
+    provider: Option<BundleProvider>,
     package: String,
     path: String,
+    package_dir: u64,
+    directory_dependencies: Vec<PackageDirectoryDependency>,
     bytes: Vec<u8>,
     handle: u64,
     libraries: Vec<BundleLibrary>,
+}
+
+struct BundleProvider {
+    package: String,
+    path: String,
+    image: super::resolver::RuntimeImage,
+    directory: u64,
+}
+impl Drop for BundleProvider {
+    fn drop(&mut self) {
+        let _ = Memory::close(self.directory);
+    }
 }
 
 struct BundleLibrary {
@@ -72,50 +217,77 @@ struct BundleLibrary {
     bytes: Vec<u8>,
     handle: u64,
 }
+impl Drop for BundleLibrary {
+    fn drop(&mut self) {
+        let _ = Memory::close(self.handle);
+    }
+}
 impl PackageImageResolver for BundleImage {
-    fn wasm_runtime_digest(&self) -> [u8; 32] {
-        self.runtime
-            .as_ref()
-            .map_or(*include_bytes!(env!("BEXOS_WASM_RUNNER_DIGEST")), |r| {
-                r.digest
-            })
+    fn supports_directory_payloads(&self) -> bool {
+        true
     }
-    fn resolve_wasm_runtime(&self) -> Result<PackageImage<'_>, PackageImageError> {
-        self.runtime
+
+    fn component_directories(
+        &self,
+        package: &str,
+    ) -> Result<PackageDirectories, PackageImageError> {
+        if let Some(provider) = self
+            .provider
             .as_ref()
-            .map(super::resolver::RuntimeImage::image)
-            .ok_or(PackageImageError::NotFound)
-    }
-    fn starnix_runtime_digest(&self) -> [u8; 32] {
-        if self.starnix_runtime.is_some() {
-            *include_bytes!(env!("BEXOS_STARNIX_REPLACEMENT_DIGEST"))
-        } else {
-            *include_bytes!(env!("BEXOS_STARNIX_RUNNER_DIGEST"))
+            .filter(|provider| provider.package == package)
+        {
+            let package_dir = Memory::duplicate(provider.directory, 1 | 2 | 4 | 32)
+                .map_err(|_| PackageImageError::AccessDenied)?;
+            return Ok(PackageDirectories {
+                package_dir: Some(KernelHandle { raw: package_dir }),
+                dependencies: Vec::new(),
+            });
         }
-    }
-    fn resolve_starnix_runtime(&self) -> Result<PackageImage<'_>, PackageImageError> {
-        let bytes = self
-            .starnix_runtime
-            .unwrap_or(include_bytes!(env!("BEXOS_STARNIX_RUNNER")));
-        Ok(PackageImage {
-            bytes,
-            vmo: KernelHandle::none(),
-            vmo_offset: 0,
+        if package != self.package {
+            return Ok(PackageDirectories::default());
+        }
+        let package_dir = Memory::duplicate(self.package_dir, 1 | 2 | 4 | 32)
+            .map_err(|_| PackageImageError::AccessDenied)?;
+        let mut dependencies: Vec<PackageDirectoryDependency> =
+            Vec::with_capacity(self.directory_dependencies.len());
+        for dependency in &self.directory_dependencies {
+            let directory = match Memory::duplicate(dependency.directory.raw, 1 | 2 | 4 | 32) {
+                Ok(directory) => directory,
+                Err(_) => {
+                    let _ = Memory::close(package_dir);
+                    for dependency in dependencies {
+                        let _ = Memory::close(dependency.directory.raw);
+                    }
+                    return Err(PackageImageError::AccessDenied);
+                }
+            };
+            let mut duplicated = dependency.clone();
+            duplicated.directory = KernelHandle { raw: directory };
+            dependencies.push(duplicated);
+        }
+        Ok(PackageDirectories {
+            package_dir: Some(KernelHandle { raw: package_dir }),
+            dependencies,
         })
     }
+
     fn resolve_executable<'a>(
         &'a self,
         package: &str,
         path: &str,
     ) -> Result<PackageImage<'a>, PackageImageError> {
-        if package != self.package || path != self.path {
-            return Err(PackageImageError::InvalidPath);
+        if package == self.package && path == self.path {
+            return Ok(PackageImage {
+                bytes: &self.bytes,
+                vmo: KernelHandle { raw: self.handle },
+                vmo_offset: 0,
+            });
         }
-        Ok(PackageImage {
-            bytes: &self.bytes,
-            vmo: KernelHandle { raw: self.handle },
-            vmo_offset: 0,
-        })
+        self.provider
+            .as_ref()
+            .filter(|provider| provider.package == package && provider.path == path)
+            .map(|provider| provider.image.image())
+            .ok_or(PackageImageError::InvalidPath)
     }
 
     fn resolve_library<'a>(
@@ -182,9 +354,12 @@ impl PackageImageResolver for BundleImage {
 }
 impl Drop for BundleImage {
     fn drop(&mut self) {
-        let _ = Memory::close(self.handle);
-        for library in &self.libraries {
-            let _ = Memory::close(library.handle);
+        if self.handle != 0 {
+            let _ = Memory::close(self.handle);
+        }
+        let _ = Memory::close(self.package_dir);
+        for dependency in &self.directory_dependencies {
+            let _ = Memory::close(dependency.directory.raw);
         }
     }
 }
@@ -410,51 +585,38 @@ pub fn begin(
     {
         return Err("replacement must preserve the selected shell role and entrypoint".into());
     }
-    let adapter = super::migration_adapter::prepare(process)?;
-    let restricted_kick_thread = matches!(
-        adapter.kind,
-        super::migration_adapter::MigrationAdapterKind::Nix
-    )
-    .then_some(old.thread_handle);
-    let entry = archive
-        .find(
-            adapter
-                .executable_path
-                .strip_prefix("/pkg/")
-                .ok_or("package executable path")?,
-        )
-        .ok_or("replacement executable missing")?;
-    log(&alloc::format!(
-        "appd: migration executable decompressing target={target} stored_bytes={} output_bytes={}\n",
-        entry.stored_len,
-        entry.uncompressed_size
-    ));
-    let elf = archive.read_file(entry).map_err(|_| "executable read")?;
-    log(&alloc::format!(
-        "appd: migration executable staged target={target} bytes={}\n",
-        elf.len()
-    ));
-    let replacement_runtime = if process.runner == "wasm" {
-        match archive.find(crate::runner::runtime_archive::ARCHIVE_PATH) {
-            Some(entry) => {
-                if entry.uncompressed_size
-                    > crate::runner::runtime_archive::MAX_RUNTIME_ARCHIVE_BYTES as u64
-                {
-                    return Err("runtime archive size".into());
-                }
-                let bytes = archive
-                    .read_file(entry)
-                    .map_err(|_| "runtime archive read")?;
-                Some(
-                    super::resolver::RuntimeImage::from_archive(&bytes)
-                        .map_err(|_| "runtime platform signature or role rejected")?,
-                )
-            }
-            None => None,
-        }
+    let provider_registration = state
+        .config
+        .runner_policy
+        .provider_for(&process.runner)
+        .ok_or("migration runner provider missing")?;
+    let adapter = super::migration_adapter::prepare(process, provider_registration.kind)?;
+    let restricted_kick_thread = adapter.restricted_kick.then_some(old.thread_handle);
+    let elf = if let Some(executable_path) = adapter.executable_path {
+        let entry = archive
+            .find(
+                executable_path
+                    .strip_prefix("/pkg/")
+                    .ok_or("package executable path")?,
+            )
+            .ok_or("replacement executable missing")?;
+        log(&alloc::format!(
+            "appd: migration executable decompressing target={target} stored_bytes={} output_bytes={}\n",
+            entry.stored_len,
+            entry.uncompressed_size
+        ));
+        let elf = archive.read_file(entry).map_err(|_| "executable read")?;
+        log(&alloc::format!(
+            "appd: migration executable staged target={target} bytes={}\n",
+            elf.len()
+        ));
+        elf
     } else {
-        None
+        Vec::new()
     };
+    if crate::runner::runtime_archive::contains_component_override(bytes) {
+        return Err("component-owned runner archives are not permitted".into());
+    }
     bexos_userspace::vfs::write_package_archive(state.vfsd, &staged_package, bytes)
         .map_err(|error| alloc::format!("migration archive persistence {error:?}"))?;
     log(&alloc::format!(
@@ -465,67 +627,127 @@ pub fn begin(
     let dependency_roots =
         super::resolve_library_dependencies_for_migration(&state.registry, &manifest)
             .map_err(|error| alloc::format!("library deps: {error:?}"))?;
-    let libraries = match state
-        .driver_images
-        .get(target, &old.process)
-        .filter(|_| old.hardware != 0)
+    let libraries = if provider_registration.kind
+        != crate::platform_config::ComponentRunnerProviderKind::DirectElf
     {
-        Some(cached) => {
-            let libraries = stage_cached_libraries(cached, &dependency_roots)
-                .map_err(|error| alloc::format!("cached library deps: {error}"))?;
-            log(&alloc::format!(
-                "appd: migration libraries staged target={target} count={} source=driver-cache\n",
-                libraries.len()
-            ));
-            libraries
-        }
-        None => {
-            let mut libraries = Vec::new();
-            for dependency in &dependency_roots {
-                let archive_bytes =
-                    bexos_userspace::vfs::read_package_archive(state.vfsd, &dependency.archive_id)
-                        .map_err(|_| "library archive read")?;
-                let archive = bexos_app_archive::OpenArchive::parse(&archive_bytes)
-                    .map_err(|_| "library archive parse")?;
-                let path = dependency
-                    .export_path
-                    .strip_prefix("/pkg/")
-                    .unwrap_or(&dependency.export_path);
-                let entry = archive.find(path).ok_or("library missing")?;
-                let bytes = archive.read_file(entry).map_err(|_| "library read")?;
-                let handle = Memory::from_bytes(&bytes).map_err(|_| "library VMO")?;
-                libraries.push(BundleLibrary {
-                    package: dependency.package_name.clone(),
-                    export_name: dependency.export_name.clone(),
-                    soname: dependency.soname.clone(),
-                    symbol_prefix: dependency.symbol_prefix.clone(),
-                    abi_version: dependency.abi_version,
-                    kind: dependency.kind,
-                    direct_dependencies: dependency.direct_dependencies.clone(),
-                    bytes,
-                    handle,
-                });
+        Vec::new()
+    } else {
+        match state
+            .driver_images
+            .get(target, &old.process)
+            .filter(|_| old.hardware != 0)
+        {
+            Some(cached) => {
+                let libraries = stage_cached_libraries(cached, &dependency_roots)
+                    .map_err(|error| alloc::format!("cached library deps: {error}"))?;
+                log(&alloc::format!(
+                    "appd: migration libraries staged target={target} count={} source=driver-cache\n",
+                    libraries.len()
+                ));
+                libraries
             }
-            log(&alloc::format!(
-                "appd: migration libraries staged target={target} count={} source=package-store\n",
-                libraries.len()
-            ));
-            libraries
+            None => {
+                let mut libraries = Vec::new();
+                for dependency in &dependency_roots {
+                    let archive_bytes = bexos_userspace::vfs::read_package_archive(
+                        state.vfsd,
+                        &dependency.archive_id,
+                    )
+                    .map_err(|_| "library archive read")?;
+                    let archive = bexos_app_archive::OpenArchive::parse(&archive_bytes)
+                        .map_err(|_| "library archive parse")?;
+                    let path = dependency
+                        .export_path
+                        .strip_prefix("/pkg/")
+                        .unwrap_or(&dependency.export_path);
+                    let entry = archive.find(path).ok_or("library missing")?;
+                    let bytes = archive.read_file(entry).map_err(|_| "library read")?;
+                    let handle = Memory::from_bytes(&bytes).map_err(|_| "library VMO")?;
+                    libraries.push(BundleLibrary {
+                        package: dependency.package_name.clone(),
+                        export_name: dependency.export_name.clone(),
+                        soname: dependency.soname.clone(),
+                        symbol_prefix: dependency.symbol_prefix.clone(),
+                        abi_version: dependency.abi_version,
+                        kind: dependency.kind,
+                        direct_dependencies: dependency.direct_dependencies.clone(),
+                        bytes,
+                        handle,
+                    });
+                }
+                log(&alloc::format!(
+                    "appd: migration libraries staged target={target} count={} source=package-store\n",
+                    libraries.len()
+                ));
+                libraries
+            }
         }
     };
-    super::close_dependency_roots(dependency_roots);
+    let image_handle = if elf.is_empty() {
+        None
+    } else {
+        Some(Memory::from_bytes(&elf).map_err(|_| "executable VMO")?)
+    };
+    let image_guard = ArchiveGuard(image_handle);
+    let provider = state
+        .config
+        .runner_policy
+        .provider_for(&process.runner)
+        .filter(|provider| {
+            provider.kind == crate::platform_config::ComponentRunnerProviderKind::ComponentRunner
+        })
+        .and_then(|provider| {
+            super::resolver::provider_runtime_image(
+                state.vfsd,
+                &state.registry,
+                &manifest,
+                &process.runner,
+                &provider.package_id,
+                provider
+                    .executable_path
+                    .strip_prefix("/pkg/")
+                    .unwrap_or(&provider.executable_path),
+                &provider.expected_signer,
+            )
+            .map(|(image, directory)| BundleProvider {
+                package: provider.package_id.clone(),
+                path: provider.executable_path.clone(),
+                image,
+                directory,
+            })
+        });
+    let package_dir = match bexos_userspace::vfs::get_package_directory(state.vfsd, &staged_package)
+    {
+        Ok(directory) => directory.0,
+        Err(error) => {
+            super::close_dependency_roots(dependency_roots);
+            return Err(alloc::format!("replacement package directory {error:?}"));
+        }
+    };
+    let directory_dependencies = dependency_roots
+        .into_iter()
+        .map(|dependency| PackageDirectoryDependency {
+            package_name: dependency.package_name,
+            mount_alias: dependency.mount_alias.unwrap_or_default(),
+            export_name: dependency.export_name,
+            export_path: dependency.export_path,
+            symbol_prefix: dependency.symbol_prefix,
+            soname: dependency.soname,
+            abi_version: dependency.abi_version,
+            kind: dependency.kind,
+            direct_dependencies: dependency.direct_dependencies,
+            directory: KernelHandle {
+                raw: dependency.directory.0,
+            },
+        })
+        .collect();
     let image = BundleImage {
-        runtime: replacement_runtime.or_else(|| {
-            super::resolver::default_runtime_image(state.vfsd, &state.registry, &manifest)
-        }),
-        starnix_runtime: matches!(
-            adapter.kind,
-            super::migration_adapter::MigrationAdapterKind::Nix
-        )
-        .then_some(include_bytes!(env!("BEXOS_STARNIX_REPLACEMENT")) as &'static [u8]),
+        provider,
         package: target.to_string(),
-        path: adapter.executable_path.to_string(),
-        handle: Memory::from_bytes(&elf).map_err(|_| "executable VMO")?,
+        path: adapter.executable_path.unwrap_or_default().to_string(),
+        package_dir,
+        directory_dependencies,
+        handle: image_guard.retain(),
         bytes: elf,
         libraries,
     };
@@ -942,6 +1164,27 @@ impl Update {
         for launch in &mut state.launches {
             if launch.process_handle == s.process_handle {
                 launch.process_handle = self.replacement.process_handle.raw;
+                launch.component_job_handle = self.replacement.job_handle.raw;
+                launch.controller_handle = self.replacement.controller_handle.raw;
+                launch.events_handle = self.replacement.events_handle.raw;
+                launch.native_host_job_handle =
+                    self.replacement.native_host.map_or(0, |host| host.job.raw);
+                launch.native_host_process_handle = self
+                    .replacement
+                    .native_host
+                    .map_or(0, |host| host.process.raw);
+                launch.native_host_space_handle = self
+                    .replacement
+                    .native_host
+                    .map_or(0, |host| host.address_space.raw);
+                launch.native_host_thread_handle = self
+                    .replacement
+                    .native_host
+                    .map_or(0, |host| host.thread.raw);
+                launch.runner_ready = self.replacement.events_handle.is_none();
+                launch.runner_stopped = false;
+                launch.stop_deadline_ns = 0;
+                launch.stop_exit_code = -1;
                 launch.space_handle = self.replacement.address_space_handle.raw;
                 launch.thread_handle = self.replacement.main_thread_handle.raw;
             }

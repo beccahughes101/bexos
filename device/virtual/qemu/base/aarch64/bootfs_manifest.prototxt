@@ -96,5 +96,3 @@ early_drivers {
   package: "//drivers/d1/serial/virtio/console:virtio_console_driver"
   wave: 1
 }
-
-early_drivers { package: "//testing/wasm:boot_wasm" wave: 4 }

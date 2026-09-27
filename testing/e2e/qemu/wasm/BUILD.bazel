@@ -7,5 +7,7 @@ qemu_e2e_test(
  src = "wasm_e2e_test.rs",
  crate_name = "wasm_e2e_test",
  deps = ["//host/debug_client", "//testing/e2e", "//tools/qemu:qemu_test"],
+ extra_data = ["//services/wasm_runner:replacement_archive"],
+ extra_args = ["$(rootpath //services/wasm_runner:replacement_archive)"],
 )
 qemu_suites()

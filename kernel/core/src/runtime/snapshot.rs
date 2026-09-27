@@ -7,7 +7,8 @@ use crate::transplant::{
     codec::{Reader, Result, Writer},
 };
 
-pub const VERSION: u64 = 21;
+pub const VERSION: u64 = 22;
+const JOB_VERSION: u64 = 22;
 const INTERRUPT_VERSION: u64 = 20;
 const RESTRICTED_VERSION: u64 = 21;
 const CHANNEL_IDENTITY_VERSION: u64 = 19;
@@ -191,6 +192,15 @@ impl<B: Backend> Runtime<B> {
         w.word(self.time_page_vmo.unwrap_or(usize::MAX) as u64)?;
         w.word(self.zero_page.unwrap_or(0))?;
         self.write_entropy(w)?;
+        w.word(self.jobs.len() as u64)?;
+        for job in &self.jobs {
+            w.text(&job.name)?;
+            w.text(&job.package)?;
+            w.word(job.hardware as u64)?;
+            w.word(job.resource_group_id as u64)?;
+            w.word(job.realtime_scheduling as u64)?;
+            w.word(job.max_processes as u64)?;
+        }
         w.word(self.processes.len() as u64)?;
         for p in &self.processes {
             w.text(&p.name)?;
@@ -198,6 +208,7 @@ impl<B: Backend> Runtime<B> {
             w.word(p.hardware as u64)?;
             w.word(p.resource_group_id as u64)?;
             w.word(p.realtime_scheduling as u64)?;
+            w.word(p.job.unwrap_or(usize::MAX) as u64)?;
             w.word(p.authority as u64)?;
             w.word(p.quarantined as u64)?;
             w.word(p.root)?;
@@ -267,6 +278,7 @@ impl<B: Backend> Runtime<B> {
                     Object::IommuDomain(id) => (10, id, 0),
                     Object::Interrupt(id) => (11, id, 0),
                     Object::ResourceGroup(id) => (12, id as usize, 0),
+                    Object::Job(id) => (13, id, 0),
                 };
                 for v in [kind, id as u64, end as u64, c.rights as u64, c.owner as u64] {
                     w.word(v)?;
@@ -373,6 +385,7 @@ impl<B: Backend> Runtime<B> {
         }
         let version = r.word()?;
         if version != VERSION
+            && version != RESTRICTED_VERSION
             && version != INTERRUPT_VERSION
             && version != CHANNEL_IDENTITY_VERSION
             && version != PRE_SLOT_VERSION
@@ -426,6 +439,34 @@ impl<B: Backend> Runtime<B> {
         if version >= ENTROPY_VERSION {
             rt.read_entropy(r)?;
         }
+        if version >= JOB_VERSION {
+            for _ in 0..r.count(MAX_JOBS)? {
+                let name = r.text(64)?.to_string();
+                let package = r.text(96)?.to_string();
+                let hardware = r.word()?;
+                let resource_group_id = u32::try_from(r.word()?)
+                    .map_err(|_| TransplantError::InvalidRuntimeSnapshot)?;
+                let realtime_scheduling = r.flag()?;
+                let max_processes = u16::try_from(r.word()?)
+                    .map_err(|_| TransplantError::InvalidRuntimeSnapshot)?;
+                if name.is_empty()
+                    || package.is_empty()
+                    || hardware > 2
+                    || resource_group_id == 0
+                    || max_processes == 0
+                {
+                    return Err(TransplantError::InvalidRuntimeSnapshot);
+                }
+                rt.jobs.push(Job {
+                    name,
+                    package,
+                    hardware: hardware as u32,
+                    resource_group_id,
+                    realtime_scheduling,
+                    max_processes,
+                });
+            }
+        }
         for _ in 0..r.count(32)? {
             let name = r.text(64)?.to_string();
             let package = r.text(96)?.to_string();
@@ -442,6 +483,17 @@ impl<B: Backend> Runtime<B> {
                 r.flag()?
             } else {
                 false
+            };
+            let job = if version >= JOB_VERSION {
+                match r.word()? {
+                    value if value == usize::MAX as u64 => None,
+                    value => Some(
+                        usize::try_from(value)
+                            .map_err(|_| TransplantError::InvalidRuntimeSnapshot)?,
+                    ),
+                }
+            } else {
+                None
             };
             if resource_group_id == 0 {
                 return Err(TransplantError::InvalidRuntimeSnapshot);
@@ -494,6 +546,7 @@ impl<B: Backend> Runtime<B> {
                 hardware: hardware as u32,
                 resource_group_id,
                 realtime_scheduling,
+                job,
                 root,
                 asid,
                 userspace_pac_key,
@@ -578,6 +631,7 @@ impl<B: Backend> Runtime<B> {
                     (12, 0) => Object::ResourceGroup(
                         u32::try_from(id).map_err(|_| TransplantError::InvalidRuntimeSnapshot)?,
                     ),
+                    (13, 0) if version >= JOB_VERSION => Object::Job(id),
                     _ => return Err(TransplantError::InvalidRuntimeSnapshot),
                 };
                 Some(Capability {
@@ -801,6 +855,22 @@ impl<B: Backend> Runtime<B> {
         let mut transit = alloc::vec![false; self.handles.len()];
         let valid_vmo = |id: usize| self.vmos.get(id).and_then(|v| v.as_ref()).ok_or(bad);
         for (pid, p) in self.processes.iter().enumerate() {
+            if let Some(job_id) = p.job {
+                let job = self.jobs.get(job_id).ok_or(bad)?;
+                if p.package != job.package
+                    || p.hardware != job.hardware
+                    || p.resource_group_id != job.resource_group_id
+                    || p.realtime_scheduling != job.realtime_scheduling
+                    || self
+                        .processes
+                        .iter()
+                        .filter(|process| process.job == Some(job_id))
+                        .count()
+                        > usize::from(job.max_processes)
+                {
+                    return Err(bad);
+                }
+            }
             if (!p.exited && p.root == 0) || p.root % 4096 != 0 || !p.context.valid_user_stack() {
                 return Err(bad);
             }
@@ -889,6 +959,11 @@ impl<B: Backend> Runtime<B> {
                 }
                 Object::Process(id) | Object::Space(id) => {
                     if id >= self.processes.len() {
+                        return Err(bad);
+                    }
+                }
+                Object::Job(id) => {
+                    if id >= self.jobs.len() {
                         return Err(bad);
                     }
                 }

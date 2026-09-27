@@ -87,6 +87,74 @@ guest failure before it was stopped. At the requester's direction, no further
 AArch64 or x86_64 E2E run was performed. Consequently this record does not
 claim guest acceptance, retained live flows across replacement, or a passing
 dual-architecture QEMU result.
+## RFC 0072 isolated component runners (2026-09-26)
+
+RFC 72 is implemented with one isolated component job, process, and standard
+`bexos.component.runner` endpoint per launch. The validated surface includes
+the prototxt provider registry, immutable one-process jobs and attenuated
+rights, the fixed BootFS native host, the extracted native ELF loader,
+directory-capability and bounded read-only BootFS adapter transport, independently
+packaged WASM/Starnix providers, lifecycle cleanup, and provider rollout through
+the existing heart-transplant transaction.
+
+Formatting and all 14 focused host targets passed. Bazel reported all 14 tests
+passing:
+
+```sh
+bazel run @rules_rust//:rustfmt
+bazel test //tools/fidlc:fidlc_tests //kernel/core:core_tests \
+  //lib/native_loader:tests //lib/userspace:userspace_tests \
+  //lib/userspace:startup_compat_tests //lib/component_runner:tests \
+  //lib/app_registry:app_registry_tests \
+  //services/native_runner:tests //services/appd:appd_tests \
+  //services/appd:shell_policy_tests \
+  //services/wasm_runner:wasm_runner_tests \
+  //services/starnix_runner:tests //lib/wasm_abi:tests \
+  //lib/starnix_abi:tests
+```
+
+The full product assembly, BootFS image, and system image passed for both
+architectures:
+
+```sh
+bazel build --config=aarch64 \
+  //device/virtual/qemu/nongui:virtual_aarch64_product_assembly \
+  //device/virtual/qemu/nongui:bootfs_image \
+  //device/virtual/qemu/nongui:system_image_bin
+bazel build --config=x86_64 \
+  //device/virtual/qemu/nongui:virtual_x86_64_product_assembly \
+  //device/virtual/qemu/nongui:bootfs_image \
+  //device/virtual/qemu/nongui:system_image_bin
+```
+
+The native, WASM, and Starnix runner ELFs also built for both architectures and
+were inspected as statically linked ELF executables:
+
+```sh
+bazel build --config=aarch64 \
+  //services/native_runner:native_runner_elf \
+  //services/wasm_runner:wasm_runner_elf \
+  //services/starnix_runner:starnix_runner_elf
+bazel build --config=x86_64 \
+  //services/native_runner:native_runner_elf \
+  //services/wasm_runner:wasm_runner_elf \
+  //services/starnix_runner:starnix_runner_elf
+```
+
+The combined RFC 72 scenario and all of its image/runfile dependencies built
+for AArch64 and x86_64:
+
+```sh
+bazel build \
+  //testing/e2e/qemu/runners:rfc72_isolation_test_aarch64 \
+  //testing/e2e/qemu/runners:rfc72_isolation_test_x86_64
+```
+
+The combined scenario contains guest assertions for concurrent native,
+WASM/Dioxus, and Starnix execution, per-runner crash isolation, appd and
+unrelated-component liveness, and live WASM-provider replacement. QEMU was not
+executed for this change, per explicit instruction, so no live guest result is
+claimed.
 
 ## RFC 0036/0071 routed VPP and network extensions (2026-09-24)
 

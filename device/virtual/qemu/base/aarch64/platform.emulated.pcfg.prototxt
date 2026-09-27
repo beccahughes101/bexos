@@ -6,6 +6,21 @@ metadata {
 }
 
 runner_policy {
+  component_runner_providers { runner_name: "elf" kind: DIRECT_ELF }
+  component_runner_providers {
+    runner_name: "wasm"
+    kind: COMPONENT_RUNNER
+    package_id: "bexos.platform.wasm_runner"
+    executable_path: "/pkg/bin/wasm_runner"
+    expected_signer: "bexos_official_platform_v1"
+  }
+  component_runner_providers {
+    runner_name: "nix"
+    kind: COMPONENT_RUNNER
+    package_id: "bexos.platform.starnix_runner"
+    executable_path: "/pkg/bin/starnix_runner"
+    expected_signer: "bexos_official_platform_v1"
+  }
   realtime_scheduling_allowlist { package_id: "bexos.service.splashd" expected_signer: "bexos_official_platform_v1" }
   realtime_scheduling_allowlist { package_id: "bexos.service.scened" expected_signer: "bexos_official_platform_v1" }
   default_tier: TIER_1_WASM

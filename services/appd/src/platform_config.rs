@@ -570,6 +570,7 @@ pub struct RunnerPolicy {
     pub native_elf_runner_allowlist: Vec<NativeRunnerGrant>,
     pub realtime_scheduling_allowlist: Vec<RealtimeSchedulingGrant>,
     pub allow_starnix_runner: bool,
+    pub component_runner_providers: Vec<ComponentRunnerProvider>,
 }
 
 impl Default for RunnerPolicy {
@@ -582,8 +583,36 @@ impl Default for RunnerPolicy {
             native_elf_runner_allowlist: Vec::new(),
             realtime_scheduling_allowlist: Vec::new(),
             allow_starnix_runner: false,
+            component_runner_providers: Vec::new(),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ComponentRunnerProviderKind {
+    #[default]
+    Unspecified,
+    DirectElf,
+    ComponentRunner,
+}
+
+impl ComponentRunnerProviderKind {
+    fn from_proto(value: u64) -> Self {
+        match value {
+            1 => Self::DirectElf,
+            2 => Self::ComponentRunner,
+            _ => Self::Unspecified,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ComponentRunnerProvider {
+    pub runner_name: String,
+    pub kind: ComponentRunnerProviderKind,
+    pub package_id: String,
+    pub executable_path: String,
+    pub expected_signer: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -774,28 +803,86 @@ impl PlatformConfig {
     pub fn decode(bytes: &[u8]) -> Result<Self, ManifestError> {
         let config = decode_platform_config(bytes)?;
         config.network_policy.validate()?;
+        config.runner_policy.validate()?;
         Ok(config)
     }
 }
 
 impl RunnerPolicy {
+    pub fn provider_for(&self, runner: &str) -> Option<&ComponentRunnerProvider> {
+        let normalized = runner.trim().to_ascii_lowercase();
+        self.component_runner_providers
+            .iter()
+            .find(|provider| provider.runner_name == normalized)
+    }
+
+    pub fn validate(&self) -> Result<(), ManifestError> {
+        for (index, provider) in self.component_runner_providers.iter().enumerate() {
+            if provider.runner_name.is_empty()
+                || provider.runner_name != provider.runner_name.trim().to_ascii_lowercase()
+                || !provider
+                    .runner_name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+                || self.component_runner_providers[..index]
+                    .iter()
+                    .any(|other| other.runner_name == provider.runner_name)
+            {
+                return Err(ManifestError::InvalidConfigValue);
+            }
+            match provider.kind {
+                ComponentRunnerProviderKind::DirectElf => {
+                    if provider.runner_name != "elf"
+                        || !provider.package_id.is_empty()
+                        || !provider.executable_path.is_empty()
+                        || !provider.expected_signer.is_empty()
+                    {
+                        return Err(ManifestError::InvalidConfigValue);
+                    }
+                }
+                ComponentRunnerProviderKind::ComponentRunner => {
+                    if provider.package_id.is_empty()
+                        || provider.expected_signer.is_empty()
+                        || !valid_runner_executable_path(&provider.executable_path)
+                    {
+                        return Err(ManifestError::InvalidConfigValue);
+                    }
+                }
+                ComponentRunnerProviderKind::Unspecified => {
+                    return Err(ManifestError::InvalidConfigValue);
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn evaluate_runner(
         &self,
         runner: &str,
         identity: PackageIdentity<'_>,
     ) -> RunnerPolicyDecision {
-        match runner.trim().to_ascii_lowercase().as_str() {
-            "wasm" | "web" => RunnerPolicyDecision::Allow,
-            "elf" => self.evaluate_elf(identity),
-            "nix" if self.allow_starnix_runner => RunnerPolicyDecision::Allow,
-            "android" | "nix" => {
+        let normalized = runner.trim().to_ascii_lowercase();
+        let Some(provider) = self.provider_for(&normalized) else {
+            return if matches!(normalized.as_str(), "android" | "nix") && self.allow_microvm_runner
+            {
+                RunnerPolicyDecision::RouteToMicrovm
+            } else {
+                RunnerPolicyDecision::Deny
+            };
+        };
+        match provider.kind {
+            ComponentRunnerProviderKind::DirectElf => self.evaluate_elf(identity),
+            ComponentRunnerProviderKind::ComponentRunner
+                if normalized == "nix" && !self.allow_starnix_runner =>
+            {
                 if self.allow_microvm_runner {
                     RunnerPolicyDecision::RouteToMicrovm
                 } else {
                     RunnerPolicyDecision::Deny
                 }
             }
-            _ => RunnerPolicyDecision::Deny,
+            ComponentRunnerProviderKind::ComponentRunner => RunnerPolicyDecision::Allow,
+            ComponentRunnerProviderKind::Unspecified => RunnerPolicyDecision::Deny,
         }
     }
 
@@ -1321,10 +1408,38 @@ fn decode_runner_policy(bytes: &[u8]) -> Result<RunnerPolicy, ManifestError> {
                 .realtime_scheduling_allowlist
                 .push(decode_realtime_scheduling_grant(field.bytes()?)?),
             7 => policy.allow_starnix_runner = field.varint()? != 0,
+            8 => policy
+                .component_runner_providers
+                .push(decode_component_runner_provider(field.bytes()?)?),
             _ => {}
         }
     }
     Ok(policy)
+}
+
+fn decode_component_runner_provider(
+    bytes: &[u8],
+) -> Result<ComponentRunnerProvider, ManifestError> {
+    let mut provider = ComponentRunnerProvider::default();
+    let mut cursor = Cursor::new(bytes);
+    while let Some(field) = cursor.next_field()? {
+        match field.number {
+            1 => provider.runner_name = field.string()?,
+            2 => provider.kind = ComponentRunnerProviderKind::from_proto(field.varint()?),
+            3 => provider.package_id = field.string()?,
+            4 => provider.executable_path = field.string()?,
+            5 => provider.expected_signer = field.string()?,
+            _ => {}
+        }
+    }
+    Ok(provider)
+}
+
+fn valid_runner_executable_path(path: &str) -> bool {
+    path.starts_with("/pkg/")
+        && path.len() > "/pkg/".len()
+        && !path.ends_with('/')
+        && !path.split('/').any(|segment| matches!(segment, "." | ".."))
 }
 
 fn decode_realtime_scheduling_grant(

@@ -1944,9 +1944,19 @@ fn legacy_entropy_snapshot_remains_arm_only() {
     source.create_process("legacy", "legacy", 0).unwrap();
     source.set_boot_entropy_seed(Some([1, 2, 3, 4]));
     source.random_bytes(32).unwrap();
-    // Remove the header and sole process context architecture tags to recreate
-    // the legacy v15 layout, including its entropy stream position.
+    // Remove the header, empty job table, and sole process context architecture
+    // tags to recreate the legacy v15 layout, including its entropy stream
+    // position.
     let mut bytes = encode(&source);
+    let process_name = bytes
+        .windows(b"legacy".len())
+        .position(|part| part == b"legacy")
+        .unwrap();
+    // v22 stores the optional job index after the process's realtime flag.
+    bytes.drain(process_name + 44..process_name + 52);
+    // Immediately before the encoded process name are its string length, the
+    // process count, and (in v22+) the empty job count.
+    bytes.drain(process_name - 24..process_name - 16);
     let scheduler_start = bytes
         .windows(8)
         .rposition(|part| part == b"BEXSCH01" || part == b"BEXSCH02")

@@ -1,0 +1,30 @@
+load("//testing/e2e/qemu:architecture_test.bzl", "qemu_suites")
+load("//testing/e2e/qemu:qemu_e2e.bzl", "qemu_e2e_test")
+
+package(default_visibility = ["//visibility:public"])
+
+qemu_e2e_test(
+    tier = "extended",
+    name = "rfc72_isolation_test",
+    src = "rfc72_isolation_e2e_test.rs",
+    crate_name = "rfc72_isolation_e2e_test",
+    deps = [
+        "//host/debug_client",
+        "//testing/e2e",
+        "//tools/qemu:qemu_test",
+    ],
+    extra_data = [
+        "//testing/e2e/qemu/elf:library_archive",
+        "//testing/e2e/qemu/elf:probe_archive",
+        "//testing/e2e/qemu/starnix:archive",
+        "//services/wasm_runner:replacement_archive",
+    ],
+    extra_args = [
+        "$(rootpath //testing/e2e/qemu/elf:library_archive)",
+        "$(rootpath //testing/e2e/qemu/elf:probe_archive)",
+        "$(rootpath //testing/e2e/qemu/starnix:archive)",
+        "$(rootpath //services/wasm_runner:replacement_archive)",
+    ],
+)
+
+qemu_suites()

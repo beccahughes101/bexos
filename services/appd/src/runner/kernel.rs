@@ -4,15 +4,18 @@ use alloc::vec::Vec;
 use kernel_fidl::{
     ChannelControlCreateChannelRequest, ChannelControlPublicClient, FidlTransport, FidlWireError,
     HandleRef, HardwareAccess, Rights, Status, SystemPrivilegedBexosSystemPrivilegedClient,
+    SystemPrivilegedCreateComponentJobRequest, SystemPrivilegedCreateProcessInJobRequest,
     SystemPrivilegedCreateProcessRequest, SystemPrivilegedCreateResourceGroupRequest,
     SystemPrivilegedCreateResourceGroupV2Request, SystemPrivilegedOpenResourceGroupRequest,
-    SystemPrivilegedStartThreadInProcessRequest, SystemPrivilegedTerminateProcessRequest,
+    SystemPrivilegedPublicClient, SystemPrivilegedStartDelegatedProcessRequest,
+    SystemPrivilegedTerminateJobRequest, SystemPrivilegedTerminateProcessRequest,
     VirtualMemoryCreateSubVmarRequest, VirtualMemoryCreateVmoRequest,
     VirtualMemoryDestroyVmarRequest, VirtualMemoryMapInVmSpaceRequest, VirtualMemoryMapVmoRequest,
     VirtualMemoryPublicClient, VirtualMemoryUnmapVmarRequest, VmarFlags, VmoFlags,
 };
 
-use crate::platform_config::HardwareAccessTier;
+use super::{PackageLibraryDependency, PackageLibraryKind};
+use crate::platform_config::{ComponentRunnerProviderKind, HardwareAccessTier};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct KernelHandle {
@@ -49,6 +52,11 @@ pub struct CreatedProcess {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CreatedJob {
+    pub job: KernelHandle,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CreatedVmar {
     pub vmar: KernelHandle,
     pub base_address: u64,
@@ -64,6 +72,56 @@ pub struct CreatedChannel {
 pub struct CreatedResourceGroup {
     pub id: u32,
     pub handle: KernelHandle,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ComponentStartRequest<'a> {
+    pub resolved_url: &'a str,
+    pub runner: &'a str,
+    pub program_type_url: &'a str,
+    pub program: &'a [u8],
+    pub service: bool,
+    pub migratable: bool,
+    pub package_dir: Option<KernelHandle>,
+    pub dependencies: &'a [ResolvedDependencyHandle<'a>],
+    pub startup: KernelHandle,
+    pub job: KernelHandle,
+    pub controller: KernelHandle,
+    pub events: KernelHandle,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ResolvedDependencyHandle<'a> {
+    pub package_name: &'a str,
+    pub mount_alias: &'a str,
+    pub export_name: &'a str,
+    pub export_path: &'a str,
+    pub symbol_prefix: &'a str,
+    pub soname: &'a str,
+    pub abi_version: u32,
+    pub kind: PackageLibraryKind,
+    pub direct_dependencies: &'a [PackageLibraryDependency],
+    pub directory: KernelHandle,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct NativeRunnerPrepareRequest<'a> {
+    pub provider_kind: ComponentRunnerProviderKind,
+    pub provider_package: &'a str,
+    pub provider_path: &'a str,
+    pub provider_package_dir: Option<KernelHandle>,
+    pub provider_image: Option<KernelHandle>,
+    pub provider_image_size: u64,
+    pub dependencies: &'a [ResolvedDependencyHandle<'a>],
+    pub dependency_images: &'a [KernelHandle],
+    pub dependency_image_sizes: &'a [u64],
+    pub target_process: KernelHandle,
+    pub target_address_space: KernelHandle,
+    pub target_root_vmar: KernelHandle,
+    pub target_job: KernelHandle,
+    pub runner: KernelHandle,
+    pub events: KernelHandle,
+    pub events_reply: KernelHandle,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -124,6 +182,22 @@ pub trait KernelOps {
         realtime_scheduling: bool,
     ) -> Result<CreatedProcess, KernelError>;
 
+    fn create_component_job(
+        &mut self,
+        name: &str,
+        resource_group_id: u32,
+        package_id: &str,
+        hardware_access: HardwareAccessTier,
+        realtime_scheduling: bool,
+        max_processes: u16,
+    ) -> Result<CreatedJob, KernelError>;
+
+    fn create_process_in_job(
+        &mut self,
+        job: KernelHandle,
+        name: &str,
+    ) -> Result<CreatedProcess, KernelError>;
+
     fn create_vmo(&mut self, size_bytes: u64, flags: u32) -> Result<KernelHandle, KernelError>;
 
     fn create_vmo_from_bytes(&mut self, bytes: &[u8]) -> Result<KernelHandle, KernelError>;
@@ -176,6 +250,116 @@ pub trait KernelOps {
 
     fn create_channel(&mut self) -> Result<CreatedChannel, KernelError>;
 
+    fn duplicate_handle(
+        &mut self,
+        handle: KernelHandle,
+        rights: u32,
+    ) -> Result<KernelHandle, KernelError> {
+        bexos_userspace::Memory::duplicate(handle.raw, rights)
+            .map(|raw| KernelHandle { raw })
+            .map_err(|_| KernelError::AccessDenied)
+    }
+
+    fn send_component_start(
+        &mut self,
+        channel: KernelHandle,
+        request: &ComponentStartRequest<'_>,
+    ) -> Result<(), KernelError> {
+        use component_runner_fidl::{
+            ComponentRunnerStartRequest, ComponentStartInfo, DependencyKind, DependencyReference,
+            FidlEncode, HandleRef as ComponentHandleRef, ProgramMetadata, ResolvedDependency,
+            WireVector,
+        };
+        let package_dir = request
+            .package_dir
+            .iter()
+            .map(|handle| ComponentHandleRef { raw: handle.raw })
+            .collect::<Vec<_>>();
+        let direct_dependencies = request
+            .dependencies
+            .iter()
+            .map(|dependency| {
+                dependency
+                    .direct_dependencies
+                    .iter()
+                    .map(|direct| DependencyReference {
+                        package_name: direct.package_name.as_str(),
+                        abi_version: direct.abi_version,
+                        soname: direct.soname.as_str(),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let dependencies = request
+            .dependencies
+            .iter()
+            .zip(&direct_dependencies)
+            .map(|(dependency, direct)| ResolvedDependency {
+                package_name: dependency.package_name,
+                mount_alias: dependency.mount_alias,
+                export_name: dependency.export_name,
+                export_path: dependency.export_path,
+                symbol_prefix: dependency.symbol_prefix,
+                soname: dependency.soname,
+                abi_version: dependency.abi_version,
+                kind: match dependency.kind {
+                    PackageLibraryKind::Native => DependencyKind::Native,
+                    PackageLibraryKind::WasmComponent => DependencyKind::WasmComponent,
+                },
+                direct_dependencies: WireVector::from_slice(direct),
+                directory: ComponentHandleRef {
+                    raw: dependency.directory.raw,
+                },
+            })
+            .collect::<Vec<_>>();
+        let mut bytes = [0u8; 131072];
+        bytes[..8].copy_from_slice(&1u64.to_le_bytes());
+        let mut handles = [ComponentHandleRef { raw: 0 }; 72];
+        let encoded = ComponentRunnerStartRequest {
+            start_info: ComponentStartInfo {
+                resolved_url: request.resolved_url,
+                runner: request.runner,
+                program: ProgramMetadata {
+                    type_url: request.program_type_url,
+                    payload: request.program,
+                },
+                service: request.service,
+                migratable: request.migratable,
+                package_dir: &package_dir,
+                dependencies: WireVector::from_slice(&dependencies),
+                startup: ComponentHandleRef {
+                    raw: request.startup.raw,
+                },
+                job: ComponentHandleRef {
+                    raw: request.job.raw,
+                },
+            },
+            controller: ComponentHandleRef {
+                raw: request.controller.raw,
+            },
+            events: ComponentHandleRef {
+                raw: request.events.raw,
+            },
+        }
+        .encode(&mut bytes[8..], &mut handles)
+        .map_err(|_| KernelError::Transport)?;
+        let raw_handles = handles[..encoded.handles]
+            .iter()
+            .map(|handle| handle.raw)
+            .collect::<Vec<_>>();
+        bexos_userspace::Channel(channel.raw)
+            .send(&bytes[..8 + encoded.bytes], &raw_handles)
+            .map_err(|_| KernelError::Transport)
+    }
+
+    fn prepare_native_runner(
+        &mut self,
+        _host: KernelHandle,
+        _request: &NativeRunnerPrepareRequest<'_>,
+    ) -> Result<KernelHandle, KernelError> {
+        Err(KernelError::InvalidArgs)
+    }
+
     fn send_runner_startup(
         &mut self,
         channel: KernelHandle,
@@ -215,6 +399,10 @@ pub trait KernelOps {
         Ok(())
     }
 
+    fn terminate_job(&mut self, _job: KernelHandle, _exit_code: i32) -> Result<(), KernelError> {
+        Ok(())
+    }
+
     fn kick_restricted_thread(&mut self, thread: KernelHandle) -> Result<(), KernelError> {
         let _ = thread;
         Err(KernelError::InvalidArgs)
@@ -233,6 +421,29 @@ pub enum KernelOperation {
         bytes: Vec<u8>,
         modules: Vec<KernelHandle>,
     },
+    ComponentStart {
+        channel: KernelHandle,
+        runner: String,
+        program_type_url: String,
+        program: Vec<u8>,
+        startup: KernelHandle,
+        job: KernelHandle,
+        controller: KernelHandle,
+        events: KernelHandle,
+    },
+    NativeRunnerPrepare {
+        host: KernelHandle,
+        provider_kind: ComponentRunnerProviderKind,
+        provider_package: String,
+        provider_path: String,
+        target_job: KernelHandle,
+        target_process: KernelHandle,
+        runner: KernelHandle,
+    },
+    DuplicateHandle {
+        handle: KernelHandle,
+        rights: u32,
+    },
     CreateResourceGroup {
         name: String,
         cpu_shares: u32,
@@ -244,6 +455,18 @@ pub enum KernelOperation {
         package_id: String,
         hardware_access: HardwareAccessTier,
         realtime_scheduling: bool,
+    },
+    CreateComponentJob {
+        name: String,
+        resource_group_id: u32,
+        package_id: String,
+        hardware_access: HardwareAccessTier,
+        realtime_scheduling: bool,
+        max_processes: u16,
+    },
+    CreateProcessInJob {
+        job: KernelHandle,
+        name: String,
     },
     CreateVmo {
         size_bytes: u64,
@@ -296,6 +519,10 @@ pub enum KernelOperation {
     },
     TerminateProcess {
         process: KernelHandle,
+        exit_code: i32,
+    },
+    TerminateJob {
+        job: KernelHandle,
         exit_code: i32,
     },
     KickRestrictedThread {
@@ -361,6 +588,79 @@ impl FakeKernelOps {
 }
 
 impl KernelOps for FakeKernelOps {
+    fn prepare_native_runner(
+        &mut self,
+        host: KernelHandle,
+        request: &NativeRunnerPrepareRequest<'_>,
+    ) -> Result<KernelHandle, KernelError> {
+        self.checkpoint()?;
+        self.operations.push(KernelOperation::NativeRunnerPrepare {
+            host,
+            provider_kind: request.provider_kind,
+            provider_package: request.provider_package.to_string(),
+            provider_path: request.provider_path.to_string(),
+            target_job: request.target_job,
+            target_process: request.target_process,
+            runner: request.runner,
+        });
+        for handle in [
+            request.provider_package_dir,
+            request.provider_image,
+            Some(request.target_job),
+            Some(request.target_process),
+            Some(request.target_address_space),
+            Some(request.target_root_vmar),
+            Some(request.runner),
+            Some(request.events),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            self.live_handles.remove(&handle.raw);
+        }
+        for dependency in request.dependencies {
+            self.live_handles.remove(&dependency.directory.raw);
+        }
+        Ok(self.alloc())
+    }
+
+    fn duplicate_handle(
+        &mut self,
+        handle: KernelHandle,
+        rights: u32,
+    ) -> Result<KernelHandle, KernelError> {
+        self.checkpoint()?;
+        self.operations
+            .push(KernelOperation::DuplicateHandle { handle, rights });
+        Ok(self.alloc())
+    }
+
+    fn send_component_start(
+        &mut self,
+        channel: KernelHandle,
+        request: &ComponentStartRequest<'_>,
+    ) -> Result<(), KernelError> {
+        self.operations.push(KernelOperation::ComponentStart {
+            channel,
+            runner: request.runner.to_string(),
+            program_type_url: request.program_type_url.to_string(),
+            program: request.program.to_vec(),
+            startup: request.startup,
+            job: request.job,
+            controller: request.controller,
+            events: request.events,
+        });
+        for handle in [
+            &request.startup,
+            &request.job,
+            &request.controller,
+            &request.events,
+        ] {
+            self.live_handles.remove(&handle.raw);
+        }
+        Ok(())
+    }
+
     fn send_runner_startup(
         &mut self,
         channel: KernelHandle,
@@ -452,6 +752,44 @@ impl KernelOps for FakeKernelOps {
             package_id: package_id.to_string(),
             hardware_access,
             realtime_scheduling,
+        });
+        Ok(CreatedProcess {
+            process: self.alloc(),
+            address_space: self.alloc(),
+            root_vmar: self.alloc(),
+        })
+    }
+
+    fn create_component_job(
+        &mut self,
+        name: &str,
+        resource_group_id: u32,
+        package_id: &str,
+        hardware_access: HardwareAccessTier,
+        realtime_scheduling: bool,
+        max_processes: u16,
+    ) -> Result<CreatedJob, KernelError> {
+        self.checkpoint()?;
+        self.operations.push(KernelOperation::CreateComponentJob {
+            name: name.to_string(),
+            resource_group_id,
+            package_id: package_id.to_string(),
+            hardware_access,
+            realtime_scheduling,
+            max_processes,
+        });
+        Ok(CreatedJob { job: self.alloc() })
+    }
+
+    fn create_process_in_job(
+        &mut self,
+        job: KernelHandle,
+        name: &str,
+    ) -> Result<CreatedProcess, KernelError> {
+        self.checkpoint()?;
+        self.operations.push(KernelOperation::CreateProcessInJob {
+            job,
+            name: name.to_string(),
         });
         Ok(CreatedProcess {
             process: self.alloc(),
@@ -618,6 +956,13 @@ impl KernelOps for FakeKernelOps {
         Ok(())
     }
 
+    fn terminate_job(&mut self, job: KernelHandle, exit_code: i32) -> Result<(), KernelError> {
+        self.checkpoint()?;
+        self.operations
+            .push(KernelOperation::TerminateJob { job, exit_code });
+        Ok(())
+    }
+
     fn kick_restricted_thread(&mut self, thread: KernelHandle) -> Result<(), KernelError> {
         self.checkpoint()?;
         self.operations
@@ -630,19 +975,23 @@ pub struct KernelFidlOps<C, V, S> {
     channel: ChannelControlPublicClient<C>,
     memory: VirtualMemoryPublicClient<V>,
     system: SystemPrivilegedBexosSystemPrivilegedClient<S>,
+    public_system: SystemPrivilegedPublicClient<S>,
 }
 
-impl<C, V, S> KernelFidlOps<C, V, S> {
+impl<C, V, S: Clone> KernelFidlOps<C, V, S> {
     pub fn new(channel_transport: C, memory_transport: V, system_transport: S) -> Self {
         Self {
             channel: ChannelControlPublicClient::new(channel_transport),
             memory: VirtualMemoryPublicClient::new(memory_transport),
+            public_system: SystemPrivilegedPublicClient::new(system_transport.clone()),
             system: SystemPrivilegedBexosSystemPrivilegedClient::new(system_transport),
         }
     }
 }
 
-impl<C: FidlTransport, V: FidlTransport, S: FidlTransport> KernelOps for KernelFidlOps<C, V, S> {
+impl<C: FidlTransport, V: FidlTransport, S: FidlTransport + Clone> KernelOps
+    for KernelFidlOps<C, V, S>
+{
     fn supports_shared_library_vmos(&self) -> bool {
         true
     }
@@ -762,6 +1111,66 @@ impl<C: FidlTransport, V: FidlTransport, S: FidlTransport> KernelOps for KernelF
                 package_id,
                 hardware_access: to_fidl_hardware_access(hardware_access),
                 realtime_scheduling,
+            },
+            &mut request_bytes,
+            &mut request_handles,
+            &mut response_bytes,
+            &mut response_handles,
+        )?;
+        status_to_result(response.status)?;
+        Ok(CreatedProcess {
+            process: response.process_handle.into(),
+            address_space: response.address_space_handle.into(),
+            root_vmar: response.root_vmar_handle.into(),
+        })
+    }
+
+    fn create_component_job(
+        &mut self,
+        name: &str,
+        resource_group_id: u32,
+        package_id: &str,
+        hardware_access: HardwareAccessTier,
+        realtime_scheduling: bool,
+        max_processes: u16,
+    ) -> Result<CreatedJob, KernelError> {
+        let mut request_bytes = [0; 256];
+        let mut response_bytes = [0; 24];
+        let mut request_handles = [HandleRef { raw: 0 }; 2];
+        let mut response_handles = [HandleRef { raw: 0 }; 2];
+        let response = self.system.create_component_job(
+            &SystemPrivilegedCreateComponentJobRequest {
+                name,
+                resource_group_id,
+                package_id,
+                hardware_access: to_fidl_hardware_access(hardware_access),
+                realtime_scheduling,
+                max_processes,
+            },
+            &mut request_bytes,
+            &mut request_handles,
+            &mut response_bytes,
+            &mut response_handles,
+        )?;
+        status_to_result(response.status)?;
+        Ok(CreatedJob {
+            job: response.job_handle.into(),
+        })
+    }
+
+    fn create_process_in_job(
+        &mut self,
+        job: KernelHandle,
+        name: &str,
+    ) -> Result<CreatedProcess, KernelError> {
+        let mut request_bytes = [0; 128];
+        let mut response_bytes = [0; 32];
+        let mut request_handles = [HandleRef { raw: 0 }; 2];
+        let mut response_handles = [HandleRef { raw: 0 }; 4];
+        let response = self.system.create_process_in_job(
+            &SystemPrivilegedCreateProcessInJobRequest {
+                job_handle: job.into(),
+                name,
             },
             &mut request_bytes,
             &mut request_handles,
@@ -955,6 +1364,155 @@ impl<C: FidlTransport, V: FidlTransport, S: FidlTransport> KernelOps for KernelF
         })
     }
 
+    fn prepare_native_runner(
+        &mut self,
+        host: KernelHandle,
+        request: &NativeRunnerPrepareRequest<'_>,
+    ) -> Result<KernelHandle, KernelError> {
+        use component_runner_fidl::{
+            DependencyKind, DependencyReference, FidlDecode as ComponentDecode,
+            FidlEncode as ComponentEncode, HandleRef as ComponentHandleRef,
+            NativeRunnerHostEventsOnPreparedRequest, NativeRunnerHostPrepareRequest,
+            NativeRunnerPrepareInfo, NativeRunnerProviderKind, ResolvedDependencyMetadata,
+            WireVector,
+        };
+        let direct_dependencies = request
+            .dependencies
+            .iter()
+            .map(|dependency| {
+                dependency
+                    .direct_dependencies
+                    .iter()
+                    .map(|direct| DependencyReference {
+                        package_name: direct.package_name.as_str(),
+                        abi_version: direct.abi_version,
+                        soname: direct.soname.as_str(),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let dependencies = request
+            .dependencies
+            .iter()
+            .zip(&direct_dependencies)
+            .map(|(dependency, direct)| ResolvedDependencyMetadata {
+                package_name: dependency.package_name,
+                mount_alias: dependency.mount_alias,
+                export_name: dependency.export_name,
+                export_path: dependency.export_path,
+                symbol_prefix: dependency.symbol_prefix,
+                soname: dependency.soname,
+                abi_version: dependency.abi_version,
+                kind: match dependency.kind {
+                    PackageLibraryKind::Native => DependencyKind::Native,
+                    PackageLibraryKind::WasmComponent => DependencyKind::WasmComponent,
+                },
+                direct_dependencies: WireVector::from_slice(direct),
+            })
+            .collect::<Vec<_>>();
+        let dependency_directories = request
+            .dependencies
+            .iter()
+            .filter(|dependency| !dependency.directory.is_none())
+            .map(|dependency| ComponentHandleRef {
+                raw: dependency.directory.raw,
+            })
+            .collect::<Vec<_>>();
+        let images = request
+            .provider_image
+            .iter()
+            .map(|image| ComponentHandleRef { raw: image.raw })
+            .collect::<Vec<_>>();
+        let dependency_images = request
+            .dependency_images
+            .iter()
+            .map(|image| ComponentHandleRef { raw: image.raw })
+            .collect::<Vec<_>>();
+        let mut bytes = [0u8; 131072];
+        bytes[..8].copy_from_slice(&1u64.to_le_bytes());
+        let mut handles = [ComponentHandleRef { raw: 0 }; 80];
+        let encoded = NativeRunnerHostPrepareRequest {
+            prepare_info: NativeRunnerPrepareInfo {
+                provider_kind: match request.provider_kind {
+                    ComponentRunnerProviderKind::DirectElf => NativeRunnerProviderKind::DirectElf,
+                    ComponentRunnerProviderKind::ComponentRunner => {
+                        NativeRunnerProviderKind::ComponentRunner
+                    }
+                    ComponentRunnerProviderKind::Unspecified => {
+                        return Err(KernelError::InvalidArgs);
+                    }
+                },
+                provider_package: request.provider_package,
+                provider_path: request.provider_path,
+                provider_package_dir: ComponentHandleRef {
+                    raw: request
+                        .provider_package_dir
+                        .unwrap_or_else(KernelHandle::none)
+                        .raw,
+                },
+                provider_image: &images,
+                provider_image_size: request.provider_image_size,
+                dependencies: WireVector::from_slice(&dependencies),
+                dependency_directories: &dependency_directories,
+                dependency_images: &dependency_images,
+                dependency_image_sizes: request.dependency_image_sizes,
+                target_process: ComponentHandleRef {
+                    raw: request.target_process.raw,
+                },
+                target_address_space: ComponentHandleRef {
+                    raw: request.target_address_space.raw,
+                },
+                target_root_vmar: ComponentHandleRef {
+                    raw: request.target_root_vmar.raw,
+                },
+                target_job: ComponentHandleRef {
+                    raw: request.target_job.raw,
+                },
+                runner: ComponentHandleRef {
+                    raw: request.runner.raw,
+                },
+            },
+            events: ComponentHandleRef {
+                raw: request.events.raw,
+            },
+        }
+        .encode(&mut bytes[8..], &mut handles)
+        .map_err(|_| KernelError::Transport)?;
+        let raw_handles = handles[..encoded.handles]
+            .iter()
+            .map(|handle| handle.raw)
+            .collect::<Vec<_>>();
+        bexos_userspace::Channel(host.raw)
+            .send(&bytes[..8 + encoded.bytes], &raw_handles)
+            .map_err(|_| KernelError::Transport)?;
+        let response = bexos_userspace::Channel(request.events_reply.raw)
+            .recv_blocking()
+            .map_err(|_| KernelError::PeerClosed)?;
+        if response.bytes.len() < 8
+            || u64::from_le_bytes(
+                response.bytes[..8]
+                    .try_into()
+                    .map_err(|_| KernelError::Transport)?,
+            ) != 1
+        {
+            return Err(KernelError::Transport);
+        }
+        let response_handles = response
+            .handles
+            .iter()
+            .map(|raw| ComponentHandleRef { raw: *raw })
+            .collect::<Vec<_>>();
+        let prepared = NativeRunnerHostEventsOnPreparedRequest::decode(
+            &response.bytes[8..],
+            &response_handles,
+        )
+        .map_err(|_| KernelError::Transport)?;
+        status_to_result(prepared.status)?;
+        Ok(KernelHandle {
+            raw: prepared.main_thread.raw,
+        })
+    }
+
     fn start_thread_in_process(
         &mut self,
         process: KernelHandle,
@@ -968,8 +1526,8 @@ impl<C: FidlTransport, V: FidlTransport, S: FidlTransport> KernelOps for KernelF
         let mut response_bytes = [0; 16];
         let mut request_handles = [HandleRef { raw: 0 }; 4];
         let mut response_handles = [HandleRef { raw: 0 }; 2];
-        let response = self.system.start_thread_in_process(
-            &SystemPrivilegedStartThreadInProcessRequest {
+        let response = self.public_system.start_delegated_process(
+            &SystemPrivilegedStartDelegatedProcessRequest {
                 process_handle: process.into(),
                 address_space_handle: vm_space.into(),
                 entry_vaddr,
@@ -998,6 +1556,24 @@ impl<C: FidlTransport, V: FidlTransport, S: FidlTransport> KernelOps for KernelF
         let response = self.system.terminate_process(
             &SystemPrivilegedTerminateProcessRequest {
                 process_handle: process.into(),
+                exit_code,
+            },
+            &mut request_bytes,
+            &mut request_handles,
+            &mut response_bytes,
+            &mut response_handles,
+        )?;
+        status_to_result(response.status)
+    }
+
+    fn terminate_job(&mut self, job: KernelHandle, exit_code: i32) -> Result<(), KernelError> {
+        let mut request_bytes = [0; 32];
+        let mut response_bytes = [0; 16];
+        let mut request_handles = [HandleRef { raw: 0 }; 2];
+        let mut response_handles = [HandleRef { raw: 0 }; 1];
+        let response = self.public_system.terminate_job(
+            &SystemPrivilegedTerminateJobRequest {
+                job_handle: job.into(),
                 exit_code,
             },
             &mut request_bytes,

@@ -12,6 +12,13 @@ BexOS currently has these implementation layers:
   init-style platform service, manifest registry, service broker, driver
   startup/lifecycle coordinator, live device registry, runner policy gate,
   namespace/config provider, debug/lifecycle surface, and migration participant.
+- **Component-runner transport** in `idl/bexos/component/runner.fidl`, with
+  one immutable one-process kernel job per launch, callback-based readiness and
+  termination, controller stop/kill/signal/service forwarding, and prototxt
+  provider registration. WASM and Starnix serve this contract in a distinct
+  per-component provider process. Production appd launches the fixed BootFS
+  native host for every component and retains only its restricted static loader; see
+  [RFC 72 current state](rfcs/0072/CURRENT.md).
 - **D1 native drivers** in `drivers/d1/<type>/<vendor>/<device>`, currently covering PCI root, VirtIO-Net, Intel e1000e/igb, PL011 UART, NVMe block, BexFS, archivefs, diskimage, and a Linux shim support crate. Appd is the driver manager and launches isolated native ELF processes; there is no generic shared-object-loading devhost. Hardware driver manifests must declare heart-transplant lifecycle support. Shared driver mechanics live in `lib/driver_runtime` and direct-plane recovery journals in `lib/device_dataplane`.
 - **Core services** in `services/`, currently debugd, vfsd, updated, powerd,
   usersd, keychain, fontd, timed, networkd, multi-instance netstackd, vswitchd,
@@ -57,7 +64,8 @@ The current code models these authority boundaries:
   enforcement while delegating declared worker process creation and termination
   back to appd's privileged worker launcher.
 - Kernel service access for privileged operations is represented by `bexos.kernel.SystemPrivileged` and the `BEXOS_SYSTEM_PRIVILEGED` permission.
-- Platform policy controls native ELF runner access and driver allowlisting.
+- Platform policy controls native ELF runner access, driver allowlisting, and
+  normalized signed `elf`/`wasm`/`nix` provider registrations.
 - Device drivers expose per-device service instances and can consume system
   services through manifest-declared service links.
 - Migration uses explicit control protocols and generation numbers instead of implicit package-name authority.

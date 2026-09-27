@@ -1,0 +1,152 @@
+library bexos.component.runner;
+
+using bexos.kernel;
+
+/// Opaque application runner options. The type URL remains the manifest ABI
+/// discriminator; only the selected runner interprets the payload.
+struct ProgramMetadata {
+    type_url string:256;
+    payload vector<uint8>:65536;
+};
+
+enum DependencyKind : uint8 {
+    NATIVE = 1;
+    WASM_COMPONENT = 2;
+};
+
+struct DependencyReference {
+    package_name string:128;
+    abi_version uint32;
+    soname string:128;
+};
+
+resource struct ResolvedDependency {
+    package_name string:128;
+    mount_alias string:64;
+    export_name string:128;
+    export_path string:256;
+    symbol_prefix string:64;
+    soname string:128;
+    abi_version uint32;
+    kind DependencyKind;
+    direct_dependencies vector<DependencyReference>:64;
+    directory handle:CHANNEL;
+};
+
+/// Dependency metadata used by the private native host. Directory handles are
+/// carried in a parallel vector so BootFS launches can instead provide the
+/// parallel immutable VMO vector without manufacturing invalid channel
+/// handles.
+struct ResolvedDependencyMetadata {
+    package_name string:128;
+    mount_alias string:64;
+    export_name string:128;
+    export_path string:256;
+    symbol_prefix string:64;
+    soname string:128;
+    abi_version uint32;
+    kind DependencyKind;
+    direct_dependencies vector<DependencyReference>:64;
+};
+
+resource struct ServiceConnection {
+    service string:128;
+    protocol string:128;
+    capability string:128;
+    /// Little-endian packed uint64 ordinals. The byte representation avoids a
+    /// nested-vector limitation in the current FIDL resource encoder.
+    method_ordinals vector<uint8>:512;
+    permission_values vector<string:128>:16;
+    caller_package string:128;
+    caller_uid uint64;
+    caller_foreground bool;
+    endpoint handle:CHANNEL;
+};
+
+resource struct ComponentStartInfo {
+    resolved_url string:256;
+    runner string:32;
+    program ProgramMetadata;
+    service bool;
+    migratable bool;
+    package_dir vector<handle:CHANNEL>:1;
+    dependencies vector<ResolvedDependency>:64;
+    /// Channel carrying one versioned bexos.app.bootstrap.Startup message.
+    /// Keeping the resource envelope on its native wire contract avoids
+    /// flattening or duplicating its evolving handle-bearing fields here.
+    startup handle:CHANNEL;
+    job handle:JOB;
+};
+
+/// Control is deliberately one-way. Completion is reported exactly once by
+/// ComponentRunnerEvents.OnStop, including failures that precede readiness.
+protocol ComponentController {
+    1: Stop();
+    2: Kill();
+    3: SendSignal(struct { signal uint32; });
+    4: Connect(resource struct { connection ServiceConnection; });
+};
+
+/// Callback protocol used because the BexOS FIDL subset does not expose event
+/// syntax yet.
+protocol ComponentRunnerEvents {
+    1: OnReady(struct { status bexos.kernel.Status; });
+    2: OnStop(struct {
+        status bexos.kernel.Status;
+        exit_code int64;
+    });
+};
+
+protocol ComponentRunner {
+    1: Start(resource struct {
+        start_info ComponentStartInfo;
+        controller server_end:ComponentController;
+        events client_end:ComponentRunnerEvents;
+    });
+};
+
+enum NativeRunnerProviderKind : uint8 {
+    DIRECT_ELF = 1;
+    COMPONENT_RUNNER = 2;
+};
+
+/// Private bootstrap contract between appd and its fixed BootFS native host.
+resource struct NativeRunnerPrepareInfo {
+    provider_kind NativeRunnerProviderKind;
+    provider_package string:128;
+    provider_path string:256;
+    provider_package_dir handle:CHANNEL;
+    /// BootFS launches use a private immutable VMO snapshot because the
+    /// filesystem service is not available yet. Exactly one of this vector or
+    /// provider_package_dir is present.
+    provider_image vector<handle:VMO>:1;
+    provider_image_size uint64;
+    dependencies vector<ResolvedDependencyMetadata>:64;
+    /// Ordered one-for-one with dependencies when package directories are
+    /// available. Empty for the bounded BootFS VMO fallback.
+    dependency_directories vector<handle:CHANNEL>:64;
+    /// Immutable dependency images ordered exactly like dependencies. Empty
+    /// when dependency directories are available; otherwise used by the
+    /// bounded BootFS adapter before directory services are available.
+    dependency_images vector<handle:VMO>:64;
+    dependency_image_sizes vector<uint64>:64;
+    target_process handle:PROCESS;
+    target_address_space handle:VM_SPACE;
+    target_root_vmar handle:VMAR;
+    target_job handle:JOB;
+    runner server_end:ComponentRunner;
+};
+
+protocol NativeRunnerHostEvents {
+    1: OnPrepared(resource struct {
+        status bexos.kernel.Status;
+        main_thread handle:THREAD;
+    });
+};
+
+protocol NativeRunnerHost {
+    1: Prepare(resource struct {
+        prepare_info NativeRunnerPrepareInfo;
+        events client_end:NativeRunnerHostEvents;
+    });
+};

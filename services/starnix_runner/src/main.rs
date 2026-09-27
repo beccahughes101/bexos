@@ -6,8 +6,12 @@ fn run(channel: u64) -> ! {
     #[cfg(starnix_runner_replacement)]
     bexos_userspace::log("starnix_runner: replacement runtime started\n");
     let status = match bexos_starnix_runner::run(bexos_userspace::Channel(channel)) {
-        Ok(status) => status,
+        Ok(status) => {
+            let _ = bexos_component_runner::stop(kernel_fidl::Status::Ok, i64::from(status));
+            status
+        }
         Err(error) => {
+            let _ = bexos_component_runner::stop(kernel_fidl::Status::ErrInvalidArgs, 126);
             bexos_userspace::log(&format!("starnix_runner: failed: {error:?}\n"));
             126
         }

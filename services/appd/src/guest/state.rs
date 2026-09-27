@@ -387,6 +387,7 @@ pub struct AppdState {
     pub pending_record: Option<AppRecord>,
     pub pending_archive: (u64, u64),
     pub pending_replacement: (u64, u64, u64),
+    pub native_runner_image: (u64, u64),
     pub component_configs: Vec<ComponentConfigRecord>,
     // Rebuildable registration cache; authoritative state lives in prefsd.
     pub preference_registered: alloc::collections::BTreeSet<String>,
@@ -461,6 +462,7 @@ impl AppdState {
             pending_record: None,
             pending_archive: (0, 0),
             pending_replacement: (0, 0, 0),
+            native_runner_image: (0, 0),
             component_configs: Vec::new(),
             preference_registered: Default::default(),
             preference_provider: (0, 0),
@@ -951,7 +953,7 @@ impl State for AppdState {
             0 => {
                 let mut w = Encoder::new();
                 for n in [
-                    13,
+                    14,
                     self.vfsd.0,
                     self.sys_state_root.0,
                     self.active_slot as u64,
@@ -974,6 +976,8 @@ impl State for AppdState {
                     self.watchdogs.len() as u64,
                     self.kernel_generation_floor,
                     self.tee_generation_floor,
+                    self.native_runner_image.0,
+                    self.native_runner_image.1,
                 ] {
                     w.word(n);
                 }
@@ -1215,7 +1219,7 @@ impl State for AppdState {
             0 => {
                 let mut r = Decoder::new(bytes);
                 let version = r.word()?;
-                if !(1..=13).contains(&version) {
+                if !(1..=14).contains(&version) {
                     return Err(Error::UnsupportedVersion);
                 }
                 self.vfsd = Channel(r.word()?);
@@ -1270,6 +1274,9 @@ impl State for AppdState {
                 if version >= 12 {
                     self.kernel_generation_floor = r.word()?;
                     self.tee_generation_floor = r.word()?;
+                }
+                if version >= 14 {
+                    self.native_runner_image = (r.word()?, r.word()?);
                 }
                 r.finish()?;
                 self.launches.truncate(launch_count);
@@ -1701,6 +1708,9 @@ impl State for AppdState {
         }
         if self.pending_archive.0 != 0 {
             handles.push(self.pending_archive.0);
+        }
+        if self.native_runner_image.0 != 0 {
+            handles.push(self.native_runner_image.0);
         }
         // Pending replacement descriptors are carried in record 4 so the
         // activated appd can update its registry after a self-transplant. They
