@@ -1,6 +1,6 @@
 # Secure-only transition RAM; this is absent from the normal address space.
 transition_base: 1099511627776
-transition_bytes: 536870912
+transition_bytes: 500187136
 owner_bytes: 16777216
 trusty_bank_bytes: 67108864
 upload_bytes: 68157440

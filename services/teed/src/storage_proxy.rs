@@ -11,8 +11,30 @@ impl StorageProxy {
         StorageProxyHandler {
             context: (self as *mut Self).cast(),
             dispatch,
+            begin_trial,
+            resolve_trial,
         }
     }
+}
+unsafe extern "C" fn begin_trial(context: *mut c_void) -> i32 {
+    let Some(proxy) = (unsafe { context.cast::<StorageProxy>().as_mut() }) else {
+        return STATUS_INVALID_ARGS;
+    };
+    bexos_rpmb_proxy::trial_control(proxy.channel, bexos_rpmb_proxy::TrialAction::Begin)
+        .map_or_else(|status| status, |()| STATUS_OK)
+}
+
+unsafe extern "C" fn resolve_trial(context: *mut c_void, commit: bool) -> i32 {
+    let Some(proxy) = (unsafe { context.cast::<StorageProxy>().as_mut() }) else {
+        return STATUS_INVALID_ARGS;
+    };
+    let action = if commit {
+        bexos_rpmb_proxy::TrialAction::Commit
+    } else {
+        bexos_rpmb_proxy::TrialAction::Rollback
+    };
+    bexos_rpmb_proxy::trial_control(proxy.channel, action)
+        .map_or_else(|status| status, |()| STATUS_OK)
 }
 unsafe extern "C" fn dispatch(
     context: *mut c_void,

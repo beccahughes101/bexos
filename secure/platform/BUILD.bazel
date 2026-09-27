@@ -26,6 +26,15 @@ genrule(
 )
 
 genrule(
+    name = "arm_owner_assembly_check",
+    srcs = ["arm_owner.S", "qemu_aarch64.prototxt", ":qemu_aarch64.h"],
+    outs = ["arm_owner.check.o"],
+    tools = ["@llvm//tools:clang"],
+    cmd = "sed 's|[.]incbin TRUSTY_IMAGE|.incbin \"$(location qemu_aarch64.prototxt)\"|' $(location arm_owner.S) > $(@D)/arm_owner.check.S && " +
+          "$(location @llvm//tools:clang) --target=aarch64-none-elf -march=armv8.4-a -include $(location :qemu_aarch64.h) -c $(@D)/arm_owner.check.S -o $@",
+)
+
+genrule(
     name = "arm_owner_container",
     srcs = ["arm_owner.S", "arm_owner.ld", ":qemu_aarch64.h", ":arm_owner_core", "//third_party/trusty:cached_aarch64_payload"],
     outs = ["arm_owner.bin", "arm_owner.elf"],

@@ -33,7 +33,12 @@ impl<T: DebugTransport> DebugClient<T> {
             },
             &mut payload,
         );
-        let response = if matches!(
+        let response = if component_id.starts_with("tee.") {
+            // Secure-service startup and RPMB-backed first use run under TCG
+            // in the firmware suites. Match the bounded update deadline rather
+            // than treating slow emulation as a transport failure.
+            self.call_with_timeout(METHOD_EXEC_COMMAND, payload, 300)?
+        } else if matches!(
             component_id,
             "update.apply_app"
                 | "update.apply_from_feed"

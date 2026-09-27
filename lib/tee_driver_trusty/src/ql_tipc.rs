@@ -64,6 +64,15 @@ pub struct TipcSession {
 
 impl QueuedTipc {
     pub fn create() -> Result<Self, i32> {
+        Self::create_inner(false)
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    pub fn create_after_owner_cutover() -> Result<Self, i32> {
+        Self::create_inner(true)
+    }
+
+    fn create_inner(owner_cutover: bool) -> Result<Self, i32> {
         let vmo = Memory::create(QL_BUFFER_SIZE as u64, 0)
             .map_err(kernel_status)
             .inspect_err(|status| log_status("QL-TIPC VMO create", *status))?;
@@ -103,7 +112,15 @@ impl QueuedTipc {
         }
         if let Err(status) = tipc.call_create() {
             log_status("QL-TIPC device SMC", status);
-            let _ = tipc.shutdown();
+            if owner_cutover {
+                // The attempted candidate may already have faulted and the
+                // owner may be restoring the suspended source. Never send a
+                // candidate cleanup opcode to whichever bank is selected now.
+                #[cfg(target_arch = "aarch64")]
+                tipc.retire_after_owner_cutover();
+            } else {
+                let _ = tipc.shutdown();
+            }
             return Err(status);
         }
         Ok(tipc)
@@ -120,6 +137,16 @@ impl QueuedTipc {
     }
 
     pub fn connect(&mut self, id: u64, uuid: [u8; 16], port: &str) -> Result<TipcSession, i32> {
+        self.connect_while(id, uuid, port, || true)
+    }
+
+    pub fn connect_while(
+        &mut self,
+        id: u64,
+        uuid: [u8; 16],
+        port: &str,
+        mut keep_waiting: impl FnMut() -> bool,
+    ) -> Result<TipcSession, i32> {
         if port.is_empty() || port.len() > 128 {
             return Err(STATUS_INVALID_ARGS);
         }
@@ -130,10 +157,18 @@ impl QueuedTipc {
         payload.extend_from_slice(port.as_bytes());
         payload.push(0);
         for _ in 0..MAX_CONNECT_ATTEMPTS {
+            if !keep_waiting() {
+                return Err(STATUS_TIMED_OUT);
+            }
             self.command(QL_OP_CONNECT, 0, &payload)?;
             let (header, _) = self.response(QL_OP_CONNECT)?;
             if header.status == 0 && header.handle != 0 {
-                self.wait_for_event(header.handle, cookie, IPC_HANDLE_POLL_READY)?;
+                self.wait_for_event_while(
+                    header.handle,
+                    cookie,
+                    IPC_HANDLE_POLL_READY,
+                    &mut keep_waiting,
+                )?;
                 if port == "com.android.trusty.storage.proxy" {
                     self.storage_handle = Some(header.handle);
                 }
@@ -394,7 +429,20 @@ impl QueuedTipc {
     }
 
     fn wait_for_event(&mut self, handle: u32, cookie: u64, expected: u32) -> Result<(), i32> {
+        self.wait_for_event_while(handle, cookie, expected, &mut || true)
+    }
+
+    fn wait_for_event_while(
+        &mut self,
+        handle: u32,
+        cookie: u64,
+        expected: u32,
+        keep_waiting: &mut impl FnMut() -> bool,
+    ) -> Result<(), i32> {
         for poll in 0..MAX_EVENT_POLLS {
+            if !keep_waiting() {
+                return Err(STATUS_TIMED_OUT);
+            }
             self.pump_storage()?;
             self.command(QL_OP_GET_EVENT, handle, &0u64.to_le_bytes())?;
             let (header, payload) = self.response(QL_OP_GET_EVENT)?;

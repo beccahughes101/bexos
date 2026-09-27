@@ -2,7 +2,9 @@
 
 extern crate alloc;
 mod storage_proxy;
-use bexos_tee_driver_client::{OP_STORAGE_PROXY_HANDLER, StorageProxyHandler};
+use bexos_tee_driver_client::{
+    OP_KEYMINT_BOOT_RECORDS, OP_STORAGE_PROXY_HANDLER, StorageProxyHandler,
+};
 
 pub mod bundle;
 pub mod migration;
@@ -90,6 +92,18 @@ pub struct CommandResult {
 }
 
 pub trait TeeBackend {
+    fn session_uuid(&self, _session_id: u64) -> Option<[u8; 16]> {
+        None
+    }
+    fn set_keymint_boot_records(
+        &mut self,
+        _boot_info: &[u8],
+        _boot_response: &[u8],
+        _hal_info: &[u8],
+        _hal_response: &[u8],
+    ) -> Result<(), TeeStatus> {
+        Ok(())
+    }
     fn rpmb_channel(&self) -> Option<bexos_userspace::Channel> {
         None
     }
@@ -431,6 +445,51 @@ impl Default for DriverBackend {
 }
 
 impl TeeBackend for DriverBackend {
+    fn set_keymint_boot_records(
+        &mut self,
+        boot_info: &[u8],
+        boot_response: &[u8],
+        hal_info: &[u8],
+        hal_response: &[u8],
+    ) -> Result<(), TeeStatus> {
+        let boot_len = u32::try_from(boot_info.len()).map_err(|_| TeeStatus::ErrInvalidArgs)?;
+        let boot_response_len =
+            u32::try_from(boot_response.len()).map_err(|_| TeeStatus::ErrInvalidArgs)?;
+        let hal_len = u32::try_from(hal_info.len()).map_err(|_| TeeStatus::ErrInvalidArgs)?;
+        let hal_response_len =
+            u32::try_from(hal_response.len()).map_err(|_| TeeStatus::ErrInvalidArgs)?;
+        let mut records = Vec::with_capacity(
+            16 + boot_info.len() + boot_response.len() + hal_info.len() + hal_response.len(),
+        );
+        records.extend_from_slice(&boot_len.to_le_bytes());
+        records.extend_from_slice(&boot_response_len.to_le_bytes());
+        records.extend_from_slice(&hal_len.to_le_bytes());
+        records.extend_from_slice(&hal_response_len.to_le_bytes());
+        records.extend_from_slice(boot_info);
+        records.extend_from_slice(boot_response);
+        records.extend_from_slice(hal_info);
+        records.extend_from_slice(hal_response);
+        let request_id = self.alloc_request_id();
+        self.request(TeeDriverRequest {
+            op: OP_KEYMINT_BOOT_RECORDS,
+            request_id,
+            input: TeeBuffer {
+                ptr: records.as_ptr(),
+                len: records.len(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })?;
+        Ok(())
+    }
+
+    fn session_uuid(&self, session_id: u64) -> Option<[u8; 16]> {
+        self.sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .map(|session| session.uuid)
+    }
+
     fn progress_storage(&mut self) -> Result<(), TeeStatus> {
         if self.proxy.is_none() {
             return Ok(());
@@ -991,11 +1050,17 @@ fn array_text(bytes: &[u8]) -> String {
 #[derive(Debug)]
 pub struct TeeService<B> {
     backend: B,
+    keymint_boot_info: Option<(Vec<u8>, Vec<u8>)>,
+    keymint_hal_info: Option<(Vec<u8>, Vec<u8>)>,
 }
 
 impl<B: TeeBackend> TeeService<B> {
     pub fn new(backend: B) -> Self {
-        Self { backend }
+        Self {
+            backend,
+            keymint_boot_info: None,
+            keymint_hal_info: None,
+        }
     }
 
     pub fn backend(&self) -> &B {
@@ -1004,6 +1069,37 @@ impl<B: TeeBackend> TeeService<B> {
 
     pub fn backend_mut(&mut self) -> &mut B {
         &mut self.backend
+    }
+
+    pub(crate) fn keymint_boot_records(&self) -> (Option<(&[u8], &[u8])>, Option<(&[u8], &[u8])>) {
+        (
+            self.keymint_boot_info
+                .as_ref()
+                .map(|(request, response)| (request.as_slice(), response.as_slice())),
+            self.keymint_hal_info
+                .as_ref()
+                .map(|(request, response)| (request.as_slice(), response.as_slice())),
+        )
+    }
+
+    pub(crate) fn restore_keymint_boot_records(
+        &mut self,
+        boot_info: Option<(Vec<u8>, Vec<u8>)>,
+        hal_info: Option<(Vec<u8>, Vec<u8>)>,
+    ) -> Result<(), TeeStatus> {
+        if let (Some((boot_info, boot_response)), Some((hal_info, hal_response))) =
+            (&boot_info, &hal_info)
+        {
+            self.backend.set_keymint_boot_records(
+                boot_info,
+                boot_response,
+                hal_info,
+                hal_response,
+            )?;
+        }
+        self.keymint_boot_info = boot_info;
+        self.keymint_hal_info = hal_info;
+        Ok(())
     }
 
     pub async fn info(&mut self) -> Result<TeeInfo, TeeStatus> {
@@ -1096,6 +1192,17 @@ impl<B: TeeBackend> TeeService<B> {
         if result.bytes.len() > INVOKE_RESPONSE_LIMIT {
             return Err(TeeStatus::ErrBufferTooSmall);
         }
+        if self.backend.session_uuid(session_id) == Some(KEYMINT_UUID) {
+            match command_id {
+                bexos_trusty_client::keymint::KEYMINT_CMD_SET_BOOT_INFO => {
+                    self.keymint_boot_info = Some((payload.to_vec(), result.bytes.clone()));
+                }
+                bexos_trusty_client::keymint::KEYMINT_CMD_SET_HAL_INFO => {
+                    self.keymint_hal_info = Some((payload.to_vec(), result.bytes.clone()));
+                }
+                _ => {}
+            }
+        }
         Ok(result)
     }
 
@@ -1116,7 +1223,14 @@ impl<B: TeeBackend> TeeService<B> {
         {
             return Err(TeeStatus::ErrInvalidArgs);
         }
-        self.backend
+        let replay_keymint = target == "qemu-aarch64-tee"
+            && activation == TeeActivationMode::LiveNow
+            && self.backend.info().await?.kind == TeeKind::ArmTrusty;
+        if replay_keymint && (self.keymint_boot_info.is_none() || self.keymint_hal_info.is_none()) {
+            return Err(TeeStatus::ErrVerifyFailed);
+        }
+        let version = self
+            .backend
             .update_tee_core(
                 generation,
                 target,
@@ -1125,11 +1239,42 @@ impl<B: TeeBackend> TeeService<B> {
                 image,
                 image_physical,
             )
-            .await
+            .await?;
+        if replay_keymint {
+            self.reinitialize_keymint().await?;
+        }
+        Ok(version)
     }
 
     pub async fn update_status(&mut self) -> Result<TeeUpdateProgress, TeeStatus> {
         self.backend.update_status().await
+    }
+
+    async fn reinitialize_keymint(&mut self) -> Result<(), TeeStatus> {
+        use bexos_trusty_client::keymint_shared_secret as sharing;
+
+        let session = self.backend.open_session(KEYMINT_UUID).await?;
+        let result = async {
+            let request = sharing::get_parameters().map_err(|_| TeeStatus::ErrVerifyFailed)?;
+            let response = self
+                .backend
+                .invoke_command(session, sharing::GET_PARAMETERS, &request)
+                .await?;
+            let request = sharing::compute_for_single_instance(&response.bytes)
+                .map_err(|_| TeeStatus::ErrVerifyFailed)?;
+            let response = self
+                .backend
+                .invoke_command(session, sharing::COMPUTE_SHARED_SECRET, &request)
+                .await?;
+            sharing::decode_check(&response.bytes).map_err(|_| TeeStatus::ErrVerifyFailed)?;
+            Ok(())
+        }
+        .await;
+        let closed = self.backend.close_session(session).await;
+        if result.is_ok() && closed != TeeStatus::Ok {
+            return Err(closed);
+        }
+        result
     }
 }
 
@@ -1230,6 +1375,13 @@ impl Default for SoftwareEmuBackend {
 }
 
 impl TeeBackend for SoftwareEmuBackend {
+    fn session_uuid(&self, session_id: u64) -> Option<[u8; 16]> {
+        self.sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .map(|session| session.uuid)
+    }
+
     async fn info(&mut self) -> Result<TeeInfo, TeeStatus> {
         Ok(TeeInfo {
             present: true,

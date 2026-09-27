@@ -78,14 +78,15 @@ diff --git a/external/arm-trusted-firmware/services/spd/trusty/trusty.c b/extern
 @@ -309 +343 @@
 -				x2, x3);
 +				x2, x3, 0, 0, 0, 0);
-@@ -353,0 +388,9 @@
+@@ -353,0 +388,10 @@
 +#ifdef BEXOS_SEL2_OWNER
 +	/* The Trusty SPD normally targets S-EL1. The authenticated BexOS BL32 is
 +	 * the permanent S-EL2 owner, so admit its requested exception level in
 +	 * the saved secure context used by the initial EL3 return. */
 +	el3_state_t *el3_state = get_el3state_ctx(&ctx->cpu_ctx);
 +	write_ctx_reg(el3_state, CTX_SCR_EL3,
-+		      read_ctx_reg(el3_state, CTX_SCR_EL3) | SCR_EEL2_BIT);
++		      (read_ctx_reg(el3_state, CTX_SCR_EL3) | SCR_EEL2_BIT) &
++		      ~SCR_FIQ_BIT);
 +#endif
 +
 @@ -427 +470,2 @@

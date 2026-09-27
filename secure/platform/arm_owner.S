@@ -11,6 +11,8 @@
 .equ OWNER_L1_HIGH_TABLE, BEXOS_OWNER_BASE + 0x103000
 .equ OWNER_STACKS_BASE, BEXOS_OWNER_BASE + 0x200000
 .equ OWNER_BOOT_STACK, OWNER_STACKS_BASE + 0x10000
+.equ CANDIDATE_STARTUP_TIMEOUT_SECONDS, 30
+.equ CANDIDATE_CUTOVER_TIMEOUT_SECONDS, 5
 
 .section .text.entry,"ax"
 .global _start
@@ -240,7 +242,11 @@ owner_vectors:
 .endr
     b lower_sync
     .balign 128
-.rept 7
+    b owner_timeout
+    .balign 128
+    b owner_timeout
+    .balign 128
+.rept 5
     b owner_failed
     .balign 128
 .endr
@@ -390,6 +396,7 @@ lower_sync:
     str xzr, [x17]
     bl bexos_arm_owner_candidate_ready
     cbz x0, owner_failed
+    bl arm_candidate_cutover_watchdog
     mov x2, x0
     mov x1, xzr
     movz x0, #0
@@ -431,10 +438,12 @@ lower_sync:
     b.lo 6f
     cmp x17, #5
     b.hi owner_failed
+    bl disable_candidate_watchdog
     adr x16, pending_restore
     str x17, [x16]
     b 6f
 commit_response:
+    bl disable_candidate_watchdog
     adr x16, source_saved
     str xzr, [x16]
 6:
@@ -557,6 +566,10 @@ launch_candidate:
     adr x0, candidate_booting
     mov x1, #1
     str x1, [x0]
+    /* The deadline begins before the candidate executes. A malformed built-in
+     * task can otherwise hang during startup and never reach the first
+     * NS_RETURN readiness boundary. */
+    bl arm_candidate_watchdog
     adr x9, boot_arguments
     ldp x0, x1, [x9]
     ldp x2, x3, [x9, #16]
@@ -568,6 +581,7 @@ launch_candidate:
     eret
 
 owner_failed:
+    bl disable_candidate_watchdog
     adr x0, source_saved
     ldr x0, [x0]
     cbz x0, 9f
@@ -591,6 +605,143 @@ owner_failed:
     b restore_source
 9:
     b owner_failed
+
+owner_timeout:
+    /* The owner-private S-EL2 physical timer is the only interrupt admitted
+     * during candidate validation. Acknowledge it before using the ordinary
+     * candidate-failure rollback path. */
+    ldr x9, =0x0801000c
+    ldr w10, [x9]
+    ldr x9, =0x08010010
+    str w10, [x9]
+    b owner_failed
+
+arm_candidate_watchdog:
+    /* PPI 20 is QEMU virt's architected S-EL2 physical timer, so the watchdog
+     * is owned independently of Trusty's CNTP scheduler timer. Preserve the
+     * candidate CPU's complete SGI/PPI configuration, then admit only this
+     * additional PPI as Group 0. The pinned QEMU Trusty GIC setup places its
+     * timer and boot IPIs in Group 1, so their IRQ delivery remains untouched. */
+    ldr x9, =0x08000100
+    ldr w10, [x9]
+    adr x11, watchdog_gic_enable
+    str w10, [x11]
+    ldr x9, =0x08000080
+    ldr w10, [x9]
+    adr x11, watchdog_gic_group
+    str w10, [x11]
+    ldr x9, =0x08000414
+    ldrb w10, [x9]
+    adr x11, watchdog_gic_priority
+    strb w10, [x11]
+    ldr x9, =0x08010000
+    ldr w10, [x9]
+    adr x11, watchdog_gicc_control
+    str w10, [x11]
+    mrs x10, hcr_el2
+    adr x11, watchdog_hcr
+    str x10, [x11]
+    adr x11, watchdog_armed
+    mov w12, #1
+    str w12, [x11]
+    mrs x10, cnthps_cval_el2
+    adr x11, watchdog_timer_cval
+    str x10, [x11]
+    mrs x10, cnthps_ctl_el2
+    adr x11, watchdog_timer_ctl
+    str x10, [x11]
+    mov w11, #0x00100000
+    ldr x9, =0x08000080
+    ldr w10, [x9]
+    bic w10, w10, w11
+    str w10, [x9]
+    /* Keep GICC_CTLR.FIQEn set so the owner timer is signaled as FIQ. Enable
+     * both groups while it is armed; HCR_EL2.FMO routes only that reserved
+     * Group 0 class to the resident S-EL2 vectors. */
+    ldr x9, =0x08010000
+    ldr w10, [x9]
+    orr w10, w10, #3
+    orr w10, w10, #8
+    str w10, [x9]
+    ldr x9, =0x08000414
+    mov w10, #0
+    strb w10, [x9]
+    ldr x9, =0x08000280
+    str w11, [x9]
+    ldr x9, =0x08000100
+    str w11, [x9]
+    /* A source-built debug Trusty image initializes all built-in apps before
+     * its first NS_RETURN. Give that independently bounded boot phase thirty
+     * seconds; the first readiness return below restarts the tighter bounded
+     * cutover/service-validation window. */
+    mrs x9, cntfrq_el0
+    mov x10, #CANDIDATE_STARTUP_TIMEOUT_SECONDS
+    mul x9, x9, x10
+    mrs x10, cntpct_el0
+    add x9, x9, x10
+    msr cnthps_cval_el2, x9
+    mov x9, #1
+    msr cnthps_ctl_el2, x9
+    mrs x9, hcr_el2
+    orr x9, x9, #8
+    msr hcr_el2, x9
+    isb
+    ret
+
+arm_candidate_cutover_watchdog:
+    /* Preserve the already-saved interrupt state and narrow the remaining
+     * candidate window to five seconds at the architectural readiness
+     * boundary. Serialized QL-TIPC retained-session binding and six required
+    * service probes cannot meet the long-term 150 ms performance target in
+     * the source-built QEMU debug product. */
+    mrs x9, cntfrq_el0
+    mov x10, #CANDIDATE_CUTOVER_TIMEOUT_SECONDS
+    mul x9, x9, x10
+    mrs x10, cntpct_el0
+    add x9, x9, x10
+    msr cnthps_cval_el2, x9
+    mov x9, #1
+    msr cnthps_ctl_el2, x9
+    isb
+    ret
+
+disable_candidate_watchdog:
+    adr x11, watchdog_armed
+    ldr w10, [x11]
+    cbz w10, 1f
+    str wzr, [x11]
+    msr cnthps_ctl_el2, xzr
+    adr x11, watchdog_hcr
+    ldr x9, [x11]
+    msr hcr_el2, x9
+    mov w10, #0x00100000
+    ldr x9, =0x08000180
+    str w10, [x9]
+    adr x11, watchdog_gic_group
+    ldr w10, [x11]
+    ldr x9, =0x08000080
+    str w10, [x9]
+    adr x11, watchdog_gic_priority
+    ldrb w10, [x11]
+    ldr x9, =0x08000414
+    strb w10, [x9]
+    adr x11, watchdog_gicc_control
+    ldr w10, [x11]
+    ldr x9, =0x08010000
+    str w10, [x9]
+    adr x11, watchdog_gic_enable
+    ldr w10, [x11]
+    ldr x9, =0x08000100
+    str w10, [x9]
+    adr x11, watchdog_timer_cval
+    ldr x10, [x11]
+    msr cnthps_cval_el2, x10
+    adr x11, watchdog_timer_ctl
+    ldr x10, [x11]
+    msr cnthps_ctl_el2, x10
+    isb
+1:
+    ret
 
 restore_source:
     /* x16 is 4 for source bank A and 5 for source bank B. */
@@ -682,6 +833,24 @@ source_frame:
     .quad 0
 owner_smc_stacks:
     .space 32
+watchdog_gic_enable:
+    .word 0
+watchdog_gic_group:
+    .word 0
+watchdog_gic_priority:
+    .byte 0
+.balign 4
+watchdog_gicc_control:
+    .word 0
+watchdog_armed:
+    .word 0
+.balign 8
+watchdog_hcr:
+    .quad 0
+watchdog_timer_cval:
+    .quad 0
+watchdog_timer_ctl:
+    .quad 0
 .balign 16
 source_system:
     .space 176

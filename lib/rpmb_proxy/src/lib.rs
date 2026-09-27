@@ -9,6 +9,16 @@ use rpmb_fidl::{
 pub const FRAME_SIZE: usize = 512;
 pub const MAX_FRAMES: usize = 8;
 const HEADER: usize = 24;
+const TRIAL_MAGIC: &[u8; 16] = b"BEXOSRPMBTRIAL01";
+const TRIAL_ACK: u8 = 0xa5;
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TrialAction {
+    Begin = 1,
+    Commit = 2,
+    Rollback = 3,
+}
 
 pub fn exchange(channel: Channel, frames: &[u8], read_frames: usize) -> Result<Vec<u8>, i32> {
     validate_frames(frames, read_frames)?;
@@ -36,6 +46,29 @@ pub fn exchange(channel: Channel, frames: &[u8], read_frames: usize) -> Result<V
         return Err(-8);
     }
     Ok(bytes)
+}
+
+/// Ask the platform RPMB transport to create or resolve an isolated firmware
+/// trial. Ordinary devices do not understand this deliberately non-RPMB frame
+/// and therefore fail closed; maintained ARM platforms must return the exact
+/// authenticated-transport acknowledgement below.
+pub fn trial_control(channel: Channel, action: TrialAction) -> Result<(), i32> {
+    let mut request = [0u8; FRAME_SIZE];
+    request[..TRIAL_MAGIC.len()].copy_from_slice(TRIAL_MAGIC);
+    request[TRIAL_MAGIC.len()] = action as u8;
+    let response = exchange(channel, &request, 1)?;
+    if response.len() == FRAME_SIZE
+        && response[..TRIAL_MAGIC.len()] == *TRIAL_MAGIC
+        && response[TRIAL_MAGIC.len()] == action as u8
+        && response[TRIAL_MAGIC.len() + 1] == TRIAL_ACK
+        && response[TRIAL_MAGIC.len() + 2..]
+            .iter()
+            .all(|byte| *byte == 0)
+    {
+        Ok(())
+    } else {
+        Err(-8)
+    }
 }
 
 pub fn validate_frames(frames: &[u8], count: usize) -> Result<(), i32> {
@@ -146,5 +179,14 @@ mod tests {
             assert_eq!(output[16], 1);
             assert_eq!(output.len(), HEADER);
         }
+    }
+
+    #[test]
+    fn trial_control_frame_cannot_be_confused_with_an_rpmb_command() {
+        let mut request = [0u8; FRAME_SIZE];
+        request[..TRIAL_MAGIC.len()].copy_from_slice(TRIAL_MAGIC);
+        request[TRIAL_MAGIC.len()] = TrialAction::Begin as u8;
+        assert_eq!(u16::from_be_bytes(request[510..512].try_into().unwrap()), 0);
+        assert_ne!(&request[..TRIAL_MAGIC.len()], &[0; TRIAL_MAGIC.len()]);
     }
 }

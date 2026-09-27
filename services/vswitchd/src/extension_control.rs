@@ -97,13 +97,15 @@ fn install(
         NetworkExtensionHook::Firewall => Hook::Firewall,
         NetworkExtensionHook::PostRouting => Hook::PostRouting,
     };
-    if (request.kind == NetworkExtensionKind::Firewall) != (hook == Hook::Firewall) {
-        if request.module.raw != 0 {
-            let _ = Memory::close(request.module.raw);
-        }
+    if request.module.raw == 0 {
         return Err(SwitchError::InvalidExtension);
     }
-    if request.module.raw == 0 {
+    if (request.kind == NetworkExtensionKind::Firewall) != (hook == Hook::Firewall) {
+        let _ = Memory::close(request.module.raw);
+        return Err(SwitchError::InvalidExtension);
+    }
+    if request.module_length == 0 {
+        let _ = Memory::close(request.module.raw);
         if request.kind == NetworkExtensionKind::Firewall {
             runtime
                 .data_plane
@@ -117,7 +119,7 @@ fn install(
         }
         return Ok(request.generation);
     }
-    if request.module_length == 0 || request.module_length > 4 << 20 {
+    if request.module_length > 4 << 20 {
         let _ = Memory::close(request.module.raw);
         return Err(SwitchError::InvalidExtension);
     }

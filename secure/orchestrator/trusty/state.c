@@ -12,11 +12,17 @@
 #define BEXOS_TRUSTY_FIXTURE_MODE 0u
 #endif
 
+#if defined(__APPLE__)
+#define BEXOS_FIRMWARE_SECTION "__DATA,__bexos_fw"
+#else
+#define BEXOS_FIRMWARE_SECTION ".bexos.firmware"
+#endif
+
 /* Authenticated candidate metadata consumed by permanent execution owners
  * before they admit the image. Keep this in a loaded segment and independent
  * of mutable TA state so architecture, generation and migration compatibility
  * are properties of the exact signed bytes. */
-__attribute__((used, section(".bexos.firmware")))
+__attribute__((used, section(BEXOS_FIRMWARE_SECTION)))
 const struct {
     uint8_t magic[8];
     uint64_t generation;

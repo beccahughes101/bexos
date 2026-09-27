@@ -93,12 +93,26 @@ and corruption, and orchestrator update behavior.
 
 ### Current implementation checkpoint
 
-As of 2026-09-09, live Trusty replacement remains incomplete on both QEMU
-products. Architecture-bound slot/selection support, a shared live coordinator
-and writer gate, protected codecs, capability queries, and a source-built ARM
-secure transition platform are being implemented. They do not establish actual
-TA migration, candidate execution, retained-client cutover or product acceptance.
-See the [current checkpoint](../../trusty-completion.md) for exact status.
+As of 2026-09-26, the maintained ARM QEMU product has an authenticated permanent
+S-EL2 execution owner and performs complete Trusty/LK live candidate execution,
+transport/session rebinding, required-service probing, durable commitment, and
+source restoration for incompatible, faulting, or hanging candidates. Signed
+generation-2 and generation-3 candidates execute without replacing normal-world
+processes or public session identity. Authenticated A/B reboot trials use the
+same owner and commit at the first healthy Trusty return.
+
+The maintained QEMU adapter isolates live-candidate RPMB writes in a cloned
+authenticated backend until commit and re-establishes verified KeyMint boot/HAL
+and shared-secret state across the cutover. This is the current QEMU mechanism,
+not the full concurrent snapshot/delta design above and not physical-board RPMB
+evidence.
+
+This implements the ARM product boundary, not every completion gate in this
+long-term RFC. The source-built debug product currently uses a 30 guest-second
+startup watchdog and a 5 guest-second cutover window, so the intended 150 ms
+cutover target remains open. Integrated-x86 live Trusty replacement, physical
+boards, production provisioning, and ConfirmationUI remain future work. See the
+[current checkpoint](../../trusty-completion.md) for exact status and evidence.
 
 ### Historical implementation checkpoint — 2026-09-04
 
@@ -146,7 +160,8 @@ credential or Gatekeeper-token broker.
 The integrated QEMU product now uses the in-tree SVM/NPT execution owner and
 real BexOS-to-Trusty transport. The requirements below remain applicable to
 other secure execution backends and physical products; live Trusty replacement
-still needs the implementation and validation described in the checkpoint.
+on this x86 product still needs the implementation and validation described in
+the checkpoint.
 
 
 The earlier x86 design is retained as future work. It may host an equivalent

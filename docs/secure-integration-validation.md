@@ -1,8 +1,91 @@
 # Secure integration validation
 
-The 2026-09-09 Trusty completion work is recorded in
-[Trusty completion checkpoint](trusty-completion.md). Live Trusty replacement
-remains unimplemented; earlier results below retain their original scope and date.
+## ARM64 live Trusty replacement — 2026-09-26
+
+The maintained ARM QEMU product now implements live Trusty replacement. Its
+permanent S-EL2 owner authenticates and executes S-EL1 candidates, retains the
+source CPU/QL-TIPC state and an independent startup watchdog, and resolves the
+protected selection only after normal-world session rebinding and required
+service readiness.
+
+The final uncached product test passed **1/1** in **758.9 seconds** test time
+(**779.552 seconds** total):
+
+```sh
+bazel test --config=e2e --jobs=3 --nocache_test_results \
+  --test_output=errors \
+  //testing/e2e/qemu/update:firmware_live_arm_e2e_test_aarch64
+```
+
+That run proved tampered-image rejection; exact-source rollback for an
+incompatible migration ABI, synchronous candidate exception, and intentional
+pre-readiness hang; completion of an in-flight request on the retained public
+session after every rollback/cutover; and successful live generation 1→2→3
+replacement. The valid trials preserved teed/updated/debugd process and thread
+identities, passed the measured-generation probe, replayed verified KeyMint
+boot/HAL state before commitment, renegotiated its shared secret before update
+success, passed KeyMint/AuthMgr checks, and admitted a fresh orchestrator client
+after the retained single-client session closed.
+
+The final-tree focused validation also passed **22/22 tests** in **216.754
+seconds**. It covered the debug client, RPMB proxy, Trusty driver/client,
+teed migration, QEMU controller, secure firmware/monitor/orchestrator, ARM
+layout and memory probing, network services, and image validation. The resident
+owner's assembly invariant check built successfully as well:
+
+```sh
+bazel test -c opt --config=aarch64 --jobs=4 --test_tag_filters= \
+  --nocache_test_results \
+  //host/debug_client:framing_tests \
+  //host/debug_client:debug_client_tests \
+  //services/teed:teed_tests \
+  //services/networkd:internal_tests \
+  //services/vswitchd:internal_tests \
+  //lib/rpmb_proxy:rpmb_proxy_tests \
+  //tools/qemu:qemu_tests \
+  //lib/trusty_client:trusty_client_tests \
+  //lib/tee_driver_trusty:tee_driver_trusty_tests \
+  //lib/tee_driver_trusty:tee_driver_trusty_shared \
+  //secure/platform:layout_test \
+  //secure/platform:memory_probe_test \
+  //secure/orchestrator:live_tests \
+  //secure/orchestrator:tee_slots_tests \
+  //secure/orchestrator/trusty:boot_selection_test \
+  //lib/secure_firmware:tests \
+  //lib/secure_firmware:store_tests \
+  //lib/secure_firmware:selection_wire_tests \
+  //lib/secure_monitor_abi:tests \
+  //lib/trusty_boot:tests \
+  //lib/trusty_boot:recovery_tests \
+  //secure/monitor:monitor_tests \
+  //kernel:image_validation_tests
+bazel build //secure/platform:arm_owner_assembly_check
+bazel run @rules_rust//:rustfmt
+```
+
+After formatting, the six directly affected debug-client, RPMB-proxy, Trusty
+driver, teed, and QEMU unit targets passed again with uncached test results.
+
+The QEMU RPMB relay creates a separate authenticated backend from the durable
+source image before candidate service probing. Candidate writes and counters
+remain in that backend until protected Trusty commitment; rollback destroys it,
+and commit fsyncs and atomically publishes it while the committed backend keeps
+serving the running guest. The transport control handshake fails closed on
+platforms without that transaction contract. This satisfies the maintained
+QEMU live-product path; it is not physical RPMB evidence and does not claim the
+long-term concurrent snapshot/delta design.
+
+The resident owner's timer is armed before the first candidate instruction and
+uses secure Group-0 PPI 20, which the pinned Trusty GIC initialization preserves.
+Current debug QEMU limits are 30 guest seconds for startup and 5 guest seconds
+after readiness. The approved 150 ms target, integrated-x86 live Trusty,
+physical boards, production provisioning, ConfirmationUI, and complete
+cross-product matrices remain open.
+
+Earlier results below retain their original scope and date; statements there
+that live Trusty replacement was absent describe those historical checkpoints,
+not the current ARM QEMU implementation. The concise current status is in the
+[Trusty completion checkpoint](trusty-completion.md).
 
 ## Stopped at user request — 2026-09-07
 

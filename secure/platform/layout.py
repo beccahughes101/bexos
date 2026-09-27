@@ -27,8 +27,8 @@ def parse(text):
         raise ValueError("upload region cannot contain the maximum signed firmware")
     if persistent < 4096 + 4 * 65 * 1024 * 1024:
         raise ValueError("persistent region cannot contain all authenticated A/B slots")
-    if owner + 2 * bank + upload + migration + persistent > size:
-        raise ValueError("secure regions exceed transition memory")
+    if owner + 2 * bank + upload + migration + persistent != size:
+        raise ValueError("secure regions must exactly partition transition memory")
     return values
 
 def generate(values):

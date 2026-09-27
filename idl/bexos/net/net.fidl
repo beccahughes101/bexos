@@ -483,6 +483,8 @@ struct NetworkExtensionStatus {
 
 /// Private networkd -> vswitchd atomic module deployment boundary. Module
 /// VMOs contain raw core WebAssembly and are never exposed to the packet loop.
+/// A zero module_length selects the provider's compiled-in module; callers
+/// still pass a valid VMO because resource handles are non-nullable.
 protocol SwitchExtensionController {
     1: Install(resource struct {
         name string:64;

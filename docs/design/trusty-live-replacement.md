@@ -1,8 +1,9 @@
 # Complete Trusty replacement on maintained QEMU products
 
 Approved design, 2026-09-09. This specifies the intended completed system,
-**not implemented or accepted behavior**. The
-[current checkpoint](../current/trusty-completion.md) records what exists.
+including requirements that remain beyond the current ARM QEMU implementation;
+it is not itself an acceptance claim. The
+[current checkpoint](../trusty-completion.md) records what exists.
 Physical boards, production provisioning, ConfirmationUI and additional
 speculative secure services remain future work.
 

@@ -11,13 +11,15 @@ fn error(e: impl std::fmt::Debug) -> String {
     format!("firmware product: {e:?}")
 }
 fn print_serial_tail<T: DebugTransport>(session: &mut DebugSession<T>) {
-    if let Ok(output) = session.wait_for_serial_markers(&[], std::time::Duration::from_millis(10)) {
-        let start = output.len().saturating_sub(16 * 1024);
-        eprintln!(
-            "e2e: guest diagnostics tail:\n{}",
-            String::from_utf8_lossy(&output[start..])
-        );
-    }
+    let _ = session
+        .client
+        .drain_for(std::time::Duration::from_millis(250));
+    let output = session.serial_output();
+    let start = output.len().saturating_sub(32 * 1024);
+    eprintln!(
+        "e2e: guest diagnostics tail:\n{}",
+        String::from_utf8_lossy(&output[start..])
+    );
 }
 fn invoke<T: DebugTransport>(
     session: &mut DebugSession<T>,
@@ -117,21 +119,33 @@ fn live_with_pending<T: DebugTransport>(
     );
     // Both frames enter the retained transport before activation completes.
     // The queued client request must finish after either commitment or rollback.
-    let replies = session
-        .client
-        .call_batch(&[
+    // The resident owner's startup watchdog is measured in guest time. Under
+    // TCG, its bounded 30-second hang recovery can exceed the debug client's
+    // ordinary 60-second wall-clock deadline. Keep both queued requests on one
+    // deadline, but allow the same slow-emulation class as update uploads.
+    let replies = match session.client.call_batch_with_timeout(
+        &[
             (METHOD_EXEC_COMMAND, activation),
             (METHOD_TEE_INVOKE, invocation),
-        ])
-        .map_err(error)?;
+        ],
+        300,
+    ) {
+        Ok(replies) => replies,
+        Err(status) => {
+            print_serial_tail(session);
+            return Err(error(status));
+        }
+    };
+    let activated = decode_exec_response(&replies[0].payload).map_err(error)?;
     let invoked = decode_tee_invoke_response(&replies[1].payload).map_err(error)?;
     if invoked.status != 0 || invoked.response != expected {
+        print_serial_tail(session);
         return Err(format!(
-            "in-flight secure request changed across cutover: {invoked:?}"
+            "in-flight secure request changed across cutover: activation={activated:?} invoke={invoked:?}"
         ));
     }
     eprintln!("e2e: retained in-flight client request completed across cutover");
-    decode_exec_response(&replies[0].payload).map_err(error)
+    Ok(activated)
 }
 fn progress<T: DebugTransport>(
     session: &mut DebugSession<T>,
@@ -280,7 +294,19 @@ pub fn run(artifacts: QemuArtifacts, paths: &[String], reboot: bool) -> Result<(
                         "retained ARM session failed after generation {generation}"
                     ));
                 }
-                verify_tee_proxy(&mut session)?;
+                // The orchestrator TA intentionally admits one client, and
+                // `retained` is that client. Exercise other security services
+                // here; a full fresh orchestrator open follows after the
+                // retained identity is explicitly closed below.
+                for command in ["tee.keymint_smoke", "tee.authmgr_smoke"] {
+                    let result = session.client.exec_command(command, &[]).map_err(error)?;
+                    if result.exit_code != 0 {
+                        print_serial_tail(&mut session);
+                        return Err(format!(
+                            "{command} after ARM Trusty generation {generation}: {result:?}"
+                        ));
+                    }
+                }
                 let after = session.client.list_processes().map_err(error)?;
                 for (package, pid, thread) in &identities {
                     if !after.iter().any(|p| {
@@ -292,6 +318,7 @@ pub fn run(artifacts: QemuArtifacts, paths: &[String], reboot: bool) -> Result<(
             }
         }
         session.client.tee_close_session(retained).map_err(error)?;
+        verify_tee_proxy(&mut session).inspect_err(|_| print_serial_tail(&mut session))?;
         eprintln!(
             "e2e: ARM Trusty activation retained normal-world processes and public session identity"
         );

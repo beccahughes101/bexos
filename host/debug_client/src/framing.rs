@@ -204,6 +204,17 @@ impl<T: DebugTransport> DebugClient<T> {
         &mut self,
         requests: &[(u32, Vec<u8>)],
     ) -> Result<Vec<Frame>, DebugClientError> {
+        self.call_batch_with_timeout(requests, 60)
+    }
+
+    /// Queue an ordered group and wait with an operation-specific bounded
+    /// deadline. Long-running commands must opt in explicitly; ordinary
+    /// batches retain the 60-second default above.
+    pub fn call_batch_with_timeout(
+        &mut self,
+        requests: &[(u32, Vec<u8>)],
+        timeout_seconds: u64,
+    ) -> Result<Vec<Frame>, DebugClientError> {
         if requests.len() > 64 || self.next_request_id == 0 {
             return Err(std::io::Error::new(
                 ErrorKind::InvalidInput,
@@ -211,7 +222,7 @@ impl<T: DebugTransport> DebugClient<T> {
             )
             .into());
         }
-        let deadline = self.response_deadline();
+        let deadline = self.response_deadline_with_default(timeout_seconds);
         let mut bytes = Vec::new();
         let mut pending = Vec::new();
         for (method_id, payload) in requests {
@@ -259,10 +270,6 @@ impl<T: DebugTransport> DebugClient<T> {
         frame.encode(&mut bytes)?;
         self.transport.write_all(&bytes)?;
         Ok(request_id)
-    }
-
-    pub(super) fn response_deadline(&self) -> Instant {
-        self.response_deadline_with_default(60)
     }
 
     fn response_deadline_with_default(&self, default_seconds: u64) -> Instant {

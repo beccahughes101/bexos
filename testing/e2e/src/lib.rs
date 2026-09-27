@@ -80,6 +80,12 @@ impl<T: DebugTransport> DebugSession<T> {
             _guard: guard,
         }
     }
+
+    /// Returns all serial bytes observed during boot and through the debug
+    /// trace transport so failing end-to-end assertions can report context.
+    pub fn serial_output(&self) -> Vec<u8> {
+        self.combined_serial_output()
+    }
 }
 
 pub trait DebugSessionGuard {}

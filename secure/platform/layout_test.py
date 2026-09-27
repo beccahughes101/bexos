@@ -23,7 +23,7 @@ class LayoutTest(unittest.TestCase):
         for text in [PROFILE + "transition_base: 1099511627776", PROFILE + "typo: 4096",
                      PROFILE.replace("transition_base: 1099511627776", "transition_base: 0"),
                      PROFILE.replace("transition_base: 1099511627776", "transition_base: 281474976710656"),
-                     PROFILE.replace("transition_bytes: 268435456", "transition_bytes: 67108864"),
+                     PROFILE.replace("transition_bytes: 500187136", "transition_bytes: 67108864"),
                      PROFILE.replace("owner_bytes: 16777216", "owner_bytes: 4096"),
                      PROFILE.replace("owner_bytes: 16777216", "owner_bytes: 268435456"),
                      PROFILE.replace("upload_bytes: 68157440", "upload_bytes: 67108864"),

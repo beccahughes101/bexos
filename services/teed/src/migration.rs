@@ -86,7 +86,7 @@ impl<B: MigratableBackend + Default> State for Runtime<B> {
         let (apps, sessions, next_session_id, secure_os_version, anti_rollback_version, update) =
             backend.parts();
         let mut w = Encoder::new();
-        w.word(6);
+        w.word(7);
         w.word(self.control.0);
         w.word(self.migration.map_or(0, |c| c.0));
         w.word(self.generation);
@@ -118,6 +118,13 @@ impl<B: MigratableBackend + Default> State for Runtime<B> {
             w.word(*session);
             w.word(*owner);
         }
+        let (keymint_boot_info, keymint_hal_info) = self.service.keymint_boot_records();
+        let (boot_request, boot_response) = keymint_boot_info.unwrap_or((&[], &[]));
+        let (hal_request, hal_response) = keymint_hal_info.unwrap_or((&[], &[]));
+        w.bytes(boot_request);
+        w.bytes(boot_response);
+        w.bytes(hal_request);
+        w.bytes(hal_response);
         Ok(Some(w.finish()))
     }
 
@@ -127,7 +134,7 @@ impl<B: MigratableBackend + Default> State for Runtime<B> {
         }
         let mut r = Decoder::new(bytes.ok_or(Error::InvalidData)?);
         let version = r.word()?;
-        if !(1..=6).contains(&version) {
+        if !(1..=7).contains(&version) {
             return Err(Error::UnsupportedVersion);
         }
         self.control = Channel(r.word()?);
@@ -181,6 +188,27 @@ impl<B: MigratableBackend + Default> State for Runtime<B> {
                 }
             }
         }
+        let (keymint_boot_info, keymint_hal_info) = if version >= 7 {
+            let boot_request = r.bytes(64 * 1024)?.to_vec();
+            let boot_response = r.bytes(64 * 1024)?.to_vec();
+            let hal_request = r.bytes(64 * 1024)?.to_vec();
+            let hal_response = r.bytes(64 * 1024)?.to_vec();
+            let present = [
+                !boot_request.is_empty(),
+                !boot_response.is_empty(),
+                !hal_request.is_empty(),
+                !hal_response.is_empty(),
+            ];
+            if present.iter().any(|value| *value) && present.iter().any(|value| !*value) {
+                return Err(Error::InvalidData);
+            }
+            (
+                present[0].then_some((boot_request, boot_response)),
+                present[0].then_some((hal_request, hal_response)),
+            )
+        } else {
+            (None, None)
+        };
         r.finish()?;
         if rpmb != 0 {
             self.service.backend_mut().set_rpmb_channel(Channel(rpmb));
@@ -195,6 +223,9 @@ impl<B: MigratableBackend + Default> State for Runtime<B> {
                 anti_rollback_version,
                 update,
             ));
+        self.service
+            .restore_keymint_boot_records(keymint_boot_info, keymint_hal_info)
+            .map_err(|_| Error::InvalidData)?;
         Ok(())
     }
 

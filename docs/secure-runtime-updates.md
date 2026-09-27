@@ -1,12 +1,15 @@
 # Secure Runtime And Updates
 
-The 2026-09-09 Trusty completion work is recorded in
-[Trusty completion checkpoint](trusty-completion.md). Live Trusty replacement
-remains unimplemented; earlier results below retain their original scope and date.
+The current Trusty completion work is recorded in
+[Trusty completion checkpoint](trusty-completion.md). ARM QEMU live Trusty
+replacement is implemented; integrated-x86 live Trusty replacement and the
+remaining cross-product acceptance gates are still open. Earlier results below
+retain their original scope and date.
 
 ## Current secure stack
 
-The complete x86 monitor-replacement and firmware-recovery plan is not yet accepted.
+The complete cross-architecture replacement and firmware-recovery plan is not
+yet accepted.
 The current x86 checkpoints are described in
 [secure integration validation](secure-integration-validation.md). They include
 actual BexOS-to-Trusty transport, confined device DMA and two authenticated
@@ -16,8 +19,18 @@ fault/hang rollback and old-memory reuse. The revised policy passed monitor
 reboot and persistent-data continuity. The authenticated-selection policy
 correction also passed actual Trusty generation-2 reboot and committed-image
 corruption recovery. The complete final E2E matrices still require validation.
-Live Trusty replacement and ARM
-execution tests are excluded from this x86 effort.
+Live Trusty replacement remains excluded from that x86 effort.
+
+The maintained ARM QEMU product now boots an authenticated permanent S-EL2
+owner below TF-A. It runs Trusty at S-EL1 from protected A/B banks, retains the
+source CPU and transport state through a live trial, and rebinds public QL-TIPC
+sessions before probing the required secure services. Incompatible migration
+state, synchronous faults, pre-readiness hangs, and failed service probes return
+to the suspended source; successful generation-2 and generation-3 trials commit
+the protected selection. QEMU candidates use a cloned authenticated RPMB
+backend until commit, and verified KeyMint boot/HAL state plus its per-boot
+shared secret are re-established across each live replacement. Reboot trials
+use the same A/B owner and commit at the first healthy `NS_RETURN`.
 
 The product now uses a permanent recovery/execution nucleus, with separately
 signed replaceable scheduling code, private data and stacks. CPU, device,
@@ -40,7 +53,8 @@ disabled by default and does not alter another platform's policy.
 
 `updated`, `teed`, the provider, debugd and bexctl expose explicit live/on-reboot
 activation and staged, pending, committed, rolled-back and recovery-required
-outcomes. Trusty accepts reboot activation only. Component updates serialize,
+outcomes. ARM Trusty accepts live and reboot activation; the integrated x86
+Trusty path remains reboot-only. Component updates serialize,
 and their protected generation floors are independent of application updates.
 The implementation checkpoints below describe the earlier reconstruction work;
 they do not supersede the current product status above.
@@ -52,7 +66,8 @@ provisioner and explicit stale-generation/corrupted-RPMB rejection. The normal
 RPMB proxy takes over the same helper at a drained frame boundary. A separate
 ARM AuthMgr readiness failure exposed lost secure timer delivery; scoped GIC
 interrupt ownership and its kernel-transplant state are implemented in source,
-with guest validation pending. See the validation record for exact bundles.
+and the permanent S-EL2 owner reserves its watchdog interrupt independently of
+Trusty's Group-1 traffic. See the validation record for exact bundles and scope.
 
 The QEMU firmware is built from the pinned Trusty superproject by Bazel and
 contains upstream KeyMint, Gatekeeper, secure storage, AVB, AuthMgr FE/BE, plus
@@ -127,8 +142,10 @@ hashing and simulated health/commit success. Activation also checks the configur
 update-owner domain. The product monitor now installs copied candidate staging
 with independent AVB authentication. Reboot activation now starts selected Trusty
 images under a restricted trial, fences persistent writes, and resolves protected
-commitment before normal services begin. Live Trusty startup with storage
-snapshot/catch-up and retained sessions remains future work outside this scope.
+commitment before normal services begin. ARM QEMU implements live Trusty startup,
+an isolated candidate RPMB backend, and retained-session rebinding. The design's broader
+concurrent storage snapshot/catch-up model remains an open completion gate, as
+does live Trusty replacement for integrated x86 and physical products.
 `teed` preserves public session/catalog/update state while
 dropping in-flight secure calls with an explicit unavailable error. Appd keeps
 trusted-app package activation transactional and rolls back candidates that do

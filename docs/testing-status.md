@@ -1,5 +1,39 @@
 # Testing Status
 
+## ARM64 live Trusty replacement (2026-09-26)
+
+The maintained ARM QEMU product now performs live Trusty/LK replacement under
+the permanent S-EL2 owner. The final uncached product scenario passed:
+
+```sh
+bazel test --config=e2e --jobs=3 --nocache_test_results \
+  --test_output=errors \
+  //testing/e2e/qemu/update:firmware_live_arm_e2e_test_aarch64
+```
+
+Bazel reported **1/1 passed**, **758.9 seconds** test time and **779.552
+seconds** total elapsed time. The one boot rejected a tampered bundle, restored
+the exact source transport and retained in-flight request after migration
+incompatibility, a synchronous candidate fault, and a candidate startup hang,
+then committed independently signed Trusty generations 2 and 3 without
+restarting teed, updated, debugd, or their threads. Each committed generation
+preserved the public orchestrator session, initialized KeyMint boot/HAL and
+shared-secret state, passed KeyMint and AuthMgr service checks, and allowed a
+fresh orchestrator session after the retained single-client session closed.
+
+Candidate RPMB traffic used an isolated cloned authenticated backend. Failed
+trials discarded that backend; committed trials synchronously published it to
+the instance's durable RPMB image. The valid AuthMgr first-boot write therefore
+completed without granting a precommit candidate access to the source's
+authoritative store. This is QEMU product evidence, not physical-board RPMB
+validation or evidence for the RFC's broader concurrent snapshot/catch-up
+design.
+
+Focused final-tree validation and formatting are listed in the corresponding
+[secure integration record](secure-integration-validation.md). Integrated-x86
+live Trusty replacement, physical boards, production provisioning,
+ConfirmationUI, and the long-term 150 ms cutover target remain open.
+
 ## RFC 0036/0071 routed VPP and network extensions (2026-09-24)
 
 The tree now contains the bounded native L2/L3 graph, routed-interface and

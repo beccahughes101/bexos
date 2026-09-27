@@ -315,10 +315,15 @@ pub fn test_link_map(symbols: &[(&[u8], u64)]) -> Vec<u8> {
 /// Install a process-local storage-proxy handler. The callback remains owned by
 /// teed and must be reinstalled after driver reload or heart transplant.
 pub const OP_STORAGE_PROXY_HANDLER: u32 = 15;
+/// Restore the verified KeyMint boot/HAL initialization requests after a teed
+/// heart transplant so a later Trusty trial can replay them before commit.
+pub const OP_KEYMINT_BOOT_RECORDS: u32 = 16;
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct StorageProxyHandler {
     pub context: *mut c_void,
     pub dispatch:
         unsafe extern "C" fn(*mut c_void, *const u8, usize, *mut u8, usize, *mut usize) -> i32,
+    pub begin_trial: unsafe extern "C" fn(*mut c_void) -> i32,
+    pub resolve_trial: unsafe extern "C" fn(*mut c_void, bool) -> i32,
 }

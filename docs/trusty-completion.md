@@ -1,4 +1,48 @@
-# Trusty completion checkpoint — 2026-09-09
+# Trusty completion checkpoint — 2026-09-26
+
+ARM64 live Trusty replacement is implemented for the maintained QEMU product.
+TF-A authenticates a permanent S-EL2 owner, which retains secure stage-two,
+bank selection, transaction state, and an owner-private timer interrupt while
+running independently signed Trusty/LK candidates at S-EL1. The normal-world
+driver authenticates and stages immutable firmware, rebinds retained public
+sessions to a new QL-TIPC transport, probes storage, KeyMint, Gatekeeper, AVB,
+AuthMgr BE, and the orchestrator, and commits only after the candidate reports
+its running generation. Verified KeyMint boot/HAL initialization is replayed
+before commitment; teed then renegotiates the candidate's per-boot shared
+secret before reporting update success. These records survive teed heart
+transplant through its versioned migration state.
+
+The resident owner preserves the suspended source context and exact source
+transport until commitment. Incompatible migration state, candidate exceptions,
+startup hangs, service-probe failures, and noncommit restore that source and its
+retained sessions. The startup watchdog is armed before the first candidate
+instruction and uses reserved Group-0 PPI 20; the pinned Trusty GIC setup keeps
+that interrupt enabled and owner-routed while leaving Trusty's Group-1 timer and
+IPI traffic untouched. On-reboot trials commit at their first architectural
+`NS_RETURN` health boundary.
+
+The maintained QEMU RPMB transport gives each live candidate a cloned,
+authenticated backend. Precommit writes—including AuthMgr's first-start
+initialization—remain isolated; rollback discards the clone, while a protected
+Trusty commit durably publishes it. Platforms without the transaction handshake
+fail closed. Physical RPMB implementations still require their own equivalent
+contract and validation.
+
+Current QEMU timing is deliberately honest: source-built debug Trusty receives
+a 30 guest-second startup watchdog and a 5 guest-second post-readiness cutover
+window. The approved long-term 150 ms cutover target remains an unmet
+performance/architecture gate. Live Trusty replacement on the integrated x86
+product, physical-board validation, production provisioning, and secure
+ConfirmationUI also remain future work. The full design is preserved in
+[the approved live-replacement design](design/trusty-live-replacement.md).
+
+Final product validation passed the uncached ARM live scenario in 758.9 seconds
+and the final-tree focused validation passed 22/22 tests in 216.754 seconds.
+The exact commands and scopes are recorded in the 2026-09-26 section of
+[secure integration validation](secure-integration-validation.md) and
+[testing status](testing-status.md).
+
+# Historical checkpoint — 2026-09-09
 
 The ARM64/x86_64 live Trusty replacement plan is **not complete**. Neither
 product currently executes a live replacement of Trusty/LK and its TAs.

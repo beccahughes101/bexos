@@ -101,6 +101,12 @@ Trusty replacement fixtures are configured by prototxt under
 into the pinned Trusty tree through `configure_image.py`, and the orchestrator
 TA reports them through its internal query protocol.
 
+The maintained ARM QEMU live path runs each candidate against an isolated clone
+of the instance RPMB backend. Rollback removes the clone; durable Trusty commit
+publishes it. KeyMint boot/HAL initialization is replayed and checked before
+that commit, with shared-secret negotiation completed before the update returns
+success. This host mechanism is not a physical-board RPMB implementation.
+
 Standard and AuthMgr-acceptance fixture bundle targets exist for both maintained
 architectures:
 
@@ -135,15 +141,17 @@ these targets. The generated bundle hashes were:
 | `bazel-bin/third_party/trusty/aarch64_generation2/image.bin` | `8468e0e517e5d568222984bbcb77b06067ba21f05c5a3b2b9b491f386067ed22` |
 | `bazel-bin/third_party/trusty/bundle_x86_64_generation2/image.bin` | `09f6229b4b22d35cc000b1a96638822474345a60caf76b5873c63a4952cd19ef` |
 
-These bundles are build artifacts, not refreshed product snapshots. Product live
-Trusty replacement does not yet consume them.
+These bundles are build artifacts, not refreshed product snapshots. The ARM QEMU
+live/reboot product tests consume the fixture bundles directly; explicit refresh
+commands remain responsible for saved snapshots.
 
 ## Current completion work
 
-The [Trusty completion checkpoint](../../docs/current/trusty-completion.md)
-records the current ARM/x86 replacement work. Live Trusty remains unavailable;
-new shared libraries and the ARM platform probe are prerequisites, not product
-replacement acceptance. Firmware source changes require explicit refreshes.
+The [Trusty completion checkpoint](../../docs/trusty-completion.md)
+records the current ARM/x86 replacement work. ARM QEMU live Trusty replacement
+now runs through the authenticated permanent S-EL2 owner; integrated x86 live
+Trusty replacement remains unavailable. Firmware source changes require
+explicit refreshes.
 The checkpoint records the refreshed standard ARM bundle and its secure-stack
 regression result; it also identifies saved variants that have not been
 refreshed. A 2026-09-09 follow-up records the x86 create-user stall

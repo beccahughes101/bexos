@@ -73,6 +73,8 @@ struct Context {
     transport: Option<QueuedTipc>,
     sessions: Vec<TipcSession>,
     next_session_id: u64,
+    keymint_boot_info: Option<(Vec<u8>, Vec<u8>)>,
+    keymint_hal_info: Option<(Vec<u8>, Vec<u8>)>,
     probed: bool,
     info: TeeDriverInfo,
     update: TeeUpdateState,
@@ -94,6 +96,8 @@ pub unsafe extern "C" fn bexos_tee_driver_context_create(out: *mut *mut c_void) 
         transport: None,
         sessions: Vec::new(),
         next_session_id: 1,
+        keymint_boot_info: None,
+        keymint_hal_info: None,
         probed: false,
         info: TeeDriverInfo {
             present: 0,
@@ -181,6 +185,49 @@ pub unsafe extern "C" fn bexos_tee_driver_submit(
                 });
                 if let Some(transport) = ctx.transport.as_mut() {
                     transport.storage_handler = ctx.storage_handler;
+                }
+            }
+        }
+        OP_KEYMINT_BOOT_RECORDS => {
+            if request.input.ptr.is_null() || request.input.len < 16 {
+                completion.status = STATUS_INVALID_ARGS;
+            } else {
+                let input =
+                    unsafe { core::slice::from_raw_parts(request.input.ptr, request.input.len) };
+                let boot_len = u32::from_le_bytes(input[..4].try_into().unwrap()) as usize;
+                let boot_response_len =
+                    u32::from_le_bytes(input[4..8].try_into().unwrap()) as usize;
+                let hal_len = u32::from_le_bytes(input[8..12].try_into().unwrap()) as usize;
+                let hal_response_len =
+                    u32::from_le_bytes(input[12..16].try_into().unwrap()) as usize;
+                if boot_len == 0
+                    || boot_response_len == 0
+                    || hal_len == 0
+                    || hal_response_len == 0
+                    || boot_len > 64 * 1024
+                    || boot_response_len > 64 * 1024
+                    || hal_len > 64 * 1024
+                    || hal_response_len > 64 * 1024
+                    || 16usize
+                        .checked_add(boot_len)
+                        .and_then(|size| size.checked_add(boot_response_len))
+                        .and_then(|size| size.checked_add(hal_len))
+                        .and_then(|size| size.checked_add(hal_response_len))
+                        != Some(input.len())
+                {
+                    completion.status = STATUS_INVALID_ARGS;
+                } else {
+                    let boot_response_at = 16 + boot_len;
+                    let hal_at = boot_response_at + boot_response_len;
+                    let hal_response_at = hal_at + hal_len;
+                    ctx.keymint_boot_info = Some((
+                        input[16..boot_response_at].to_vec(),
+                        input[boot_response_at..hal_at].to_vec(),
+                    ));
+                    ctx.keymint_hal_info = Some((
+                        input[hal_at..hal_response_at].to_vec(),
+                        input[hal_response_at..].to_vec(),
+                    ));
                 }
             }
         }
@@ -303,6 +350,17 @@ fn trusty_invoke(
     };
     match result {
         Ok(written) => {
+            if session.uuid == KEYMINT_UUID {
+                match request.command_id {
+                    0x82 => {
+                        ctx.keymint_boot_info = Some((input.to_vec(), output[..written].to_vec()));
+                    }
+                    0x81 => {
+                        ctx.keymint_hal_info = Some((input.to_vec(), output[..written].to_vec()));
+                    }
+                    _ => {}
+                }
+            }
             completion.value = written as u64;
             STATUS_OK
         }
@@ -407,14 +465,76 @@ fn rebind_live_sessions(ctx: &mut Context, fence_storage_writes: bool) -> Result
 }
 
 #[cfg(target_arch = "aarch64")]
+fn bind_candidate_sessions(
+    ctx: &mut Context,
+    fence_storage_writes: bool,
+    cutover_started_ms: u64,
+) -> Result<(), i32> {
+    let mut transport = QueuedTipc::create_after_owner_cutover().inspect_err(|status| {
+        log_status("candidate QL-TIPC create", *status);
+    })?;
+    transport.storage_handler = ctx.storage_handler;
+    transport.fence_storage_writes(fence_storage_writes);
+    let mut sessions = ctx.sessions.clone();
+    sessions.sort_by_key(|session| u8::from(session.uuid != STORAGE_UUID));
+    let mut rebound = Vec::with_capacity(sessions.len());
+    for session in sessions {
+        match transport.connect_while(session.id, session.uuid, &session.port, || {
+            bexos_userspace::live_migration::now_ms().saturating_sub(cutover_started_ms)
+                < firmware::ARM_CUTOVER_DEADLINE_MS
+        }) {
+            Ok(session) => rebound.push(session),
+            Err(status) => {
+                log_status("retained candidate session bind", status);
+                transport.retire_after_owner_cutover();
+                return Err(status);
+            }
+        }
+    }
+    ctx.sessions = rebound;
+    ctx.transport = Some(transport);
+    Ok(())
+}
+
+#[cfg(target_arch = "aarch64")]
+fn restore_source_transport(
+    ctx: &mut Context,
+    source_transport: Option<QueuedTipc>,
+    source_sessions: Vec<TipcSession>,
+) {
+    if let Some(mut candidate) = ctx.transport.take() {
+        candidate.retire_after_owner_cutover();
+    }
+    ctx.transport = source_transport;
+    ctx.sessions = source_sessions;
+    syscall::log("tee-driver-trusty: retained sessions restored on suspended source transport\n");
+}
+
+#[cfg(target_arch = "aarch64")]
+fn begin_storage_trial(ctx: &Context) -> Result<(), i32> {
+    let handler = ctx.storage_handler.ok_or(STATUS_UNAVAILABLE)?;
+    let status = unsafe { (handler.begin_trial)(handler.context) };
+    (status == STATUS_OK).then_some(()).ok_or(status)
+}
+
+#[cfg(target_arch = "aarch64")]
+fn resolve_storage_trial(ctx: &Context, commit: bool) -> Result<(), i32> {
+    let handler = ctx.storage_handler.ok_or(STATUS_UNAVAILABLE)?;
+    let status = unsafe { (handler.resolve_trial)(handler.context, commit) };
+    (status == STATUS_OK).then_some(()).ok_or(status)
+}
+
+#[cfg(target_arch = "aarch64")]
 fn probe_candidate_services(
     ctx: &mut Context,
     generation: u64,
     cutover_started_ms: u64,
     activation: Option<&firmware::Activation>,
 ) -> Result<(), i32> {
-    let within_deadline =
-        || bexos_userspace::live_migration::now_ms().saturating_sub(cutover_started_ms) < 150;
+    let within_deadline = || {
+        bexos_userspace::live_migration::now_ms().saturating_sub(cutover_started_ms)
+            < firmware::ARM_CUTOVER_DEADLINE_MS
+    };
     if !within_deadline() {
         return Err(STATUS_TIMED_OUT);
     }
@@ -430,6 +550,20 @@ fn probe_candidate_services(
         syscall::log("tee-driver-trusty: candidate generation measurement mismatch\n");
         return Err(STATUS_VERIFY_FAILED);
     }
+    let keymint_initialization = if activation.is_some() {
+        Some((
+            ctx.keymint_boot_info.clone().ok_or_else(|| {
+                syscall::log("tee-driver-trusty: candidate KeyMint boot record unavailable\n");
+                STATUS_VERIFY_FAILED
+            })?,
+            ctx.keymint_hal_info.clone().ok_or_else(|| {
+                syscall::log("tee-driver-trusty: candidate KeyMint HAL record unavailable\n");
+                STATUS_VERIFY_FAILED
+            })?,
+        ))
+    } else {
+        None
+    };
     let transport = ctx.transport.as_mut().ok_or(STATUS_UNAVAILABLE)?;
     let mut opened = Vec::new();
     for (index, uuid) in [
@@ -473,6 +607,19 @@ fn probe_candidate_services(
     } else {
         return Err(STATUS_NOT_FOUND);
     };
+    if let Some((boot_info, hal_info)) = keymint_initialization {
+        let keymint = ctx
+            .sessions
+            .iter()
+            .chain(opened.iter())
+            .find(|session| session.uuid == KEYMINT_UUID)
+            .map(|session| session.handle)
+            .ok_or(STATUS_NOT_FOUND)?;
+        initialize_candidate_keymint(transport, keymint, &boot_info, &hal_info)?;
+        if !within_deadline() {
+            return Err(STATUS_TIMED_OUT);
+        }
+    }
     let mut request = [0u8; 16];
     request[..4].copy_from_slice(&1u32.to_le_bytes());
     request[4..8].copy_from_slice(&0x203u32.to_le_bytes());
@@ -496,6 +643,27 @@ fn probe_candidate_services(
     (reported == generation && within_deadline())
         .then_some(())
         .ok_or(STATUS_VERIFY_FAILED)
+}
+
+#[cfg(target_arch = "aarch64")]
+fn initialize_candidate_keymint(
+    transport: &mut QueuedTipc,
+    handle: u32,
+    boot_info: &(Vec<u8>, Vec<u8>),
+    hal_info: &(Vec<u8>, Vec<u8>),
+) -> Result<(), i32> {
+    let call = |transport: &mut QueuedTipc, request: &[u8]| {
+        let mut response = alloc::vec![0; 64 * 1024];
+        let written = transport.invoke_keymint(handle, request, &mut response)?;
+        response.truncate(written);
+        Ok::<_, i32>(response)
+    };
+    if call(transport, &boot_info.0)? != boot_info.1 || call(transport, &hal_info.0)? != hal_info.1
+    {
+        return Err(STATUS_VERIFY_FAILED);
+    }
+    syscall::log("tee-driver-trusty: candidate KeyMint boot state initialized before commitment\n");
+    Ok(())
 }
 
 fn is_builtin_uuid(uuid: [u8; 16]) -> bool {
@@ -762,7 +930,7 @@ fn activate_registered_core(
     } else {
         bexos_secure_monitor_abi::firmware::TRUSTY
     };
-    let transaction = firmware::stage_and_activate(
+    let transaction = match firmware::stage_and_activate(
         image,
         request.core.generation,
         component,
@@ -773,15 +941,37 @@ fn activate_registered_core(
             }
             Ok(())
         },
-    )?;
+    ) {
+        Ok(transaction) => transaction,
+        Err(failure) => {
+            #[cfg(target_arch = "aarch64")]
+            syscall::log(&alloc::format!(
+                "tee-driver-trusty: activation failed status={} source_transport_restored={}\n",
+                failure.status,
+                failure.source_transport_restored
+            ));
+            return Err(failure.status);
+        }
+    };
     let report = transaction.report();
     if component == bexos_secure_monitor_abi::firmware::TRUSTY && activation == ACTIVATE_LIVE_NOW {
         #[cfg(target_arch = "aarch64")]
         if report.outcome == bexos_secure_monitor_abi::firmware::APPLYING {
-            if let Err(status) = rebind_live_sessions(ctx, true) {
+            let source_transport = ctx.transport.take();
+            let source_sessions = ctx.sessions.clone();
+            if let Err(status) = begin_storage_trial(ctx) {
+                log_status("candidate RPMB trial begin", status);
+                let _ = transaction.resolve(false);
+                restore_source_transport(ctx, source_transport, source_sessions);
+                return Err(status);
+            }
+            if let Err(status) = bind_candidate_sessions(ctx, false, report.cutover_started_ms) {
                 log_status("candidate transport rebind", status);
                 let _ = transaction.resolve(false);
-                let _ = rebind_live_sessions(ctx, false);
+                if let Err(rollback_status) = resolve_storage_trial(ctx, false) {
+                    log_status("candidate RPMB trial rollback", rollback_status);
+                }
+                restore_source_transport(ctx, source_transport, source_sessions);
                 return Err(if status == STATUS_INVALID_ARGS {
                     STATUS_PEER_CLOSED
                 } else {
@@ -796,14 +986,42 @@ fn activate_registered_core(
             ) {
                 log_status("candidate readiness", status);
                 let _ = transaction.resolve(false);
-                let _ = rebind_live_sessions(ctx, false);
+                if let Err(rollback_status) = resolve_storage_trial(ctx, false) {
+                    log_status("candidate RPMB trial rollback", rollback_status);
+                }
+                restore_source_transport(ctx, source_transport, source_sessions);
                 return Err(STATUS_VERIFY_FAILED);
             }
-            let committed = transaction.resolve(true).inspect_err(|status| {
-                log_status("candidate durable commit", *status);
-            })?;
+            let committed = match transaction.resolve(true) {
+                Ok(committed) => committed,
+                Err(status) => {
+                    log_status("candidate durable commit", status);
+                    if let Some(mut source) = source_transport {
+                        source.retire_after_owner_cutover();
+                    }
+                    return Err(status);
+                }
+            };
             if committed.outcome != bexos_secure_monitor_abi::firmware::COMMITTED {
+                if let Err(rollback_status) = resolve_storage_trial(ctx, false) {
+                    log_status("candidate RPMB trial rollback", rollback_status);
+                }
+                restore_source_transport(ctx, source_transport, source_sessions);
                 return Err(STATUS_UNAVAILABLE);
+            }
+            if let Err(status) = resolve_storage_trial(ctx, true) {
+                // The resident owner has durably selected the candidate. The
+                // source transport is no longer safe to restore; keep serving
+                // from the candidate's still-active isolated backend and make
+                // the failed persistence visible to the update caller.
+                log_status("candidate RPMB trial commit", status);
+                if let Some(mut source) = source_transport {
+                    source.retire_after_owner_cutover();
+                }
+                return Err(status);
+            }
+            if let Some(mut source) = source_transport {
+                source.retire_after_owner_cutover();
             }
             ctx.transport
                 .as_mut()

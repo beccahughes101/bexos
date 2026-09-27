@@ -525,6 +525,10 @@ fn install_bundled(
     config: &[u8],
     generation: u64,
 ) -> Result<(), Status> {
+    // Install is a resource method, so its module handle is non-nullable even
+    // when the provider selects a compiled-in module by a zero module length.
+    // A real VMO keeps the request valid and is consumed by vswitchd.
+    let placeholder = Memory::create(4096, 0).map_err(map_kernel_status)?;
     let response = client
         .install(
             &SwitchExtensionControllerInstallRequest {
@@ -533,7 +537,7 @@ fn install_bundled(
                 hook,
                 fail_open: false,
                 expected_digest: [0; 32],
-                module: HandleRef { raw: 0 },
+                module: HandleRef { raw: placeholder },
                 module_length: 0,
                 config,
                 generation,

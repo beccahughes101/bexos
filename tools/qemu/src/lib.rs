@@ -685,6 +685,8 @@ impl QemuDevice {
             Some(arm_rpmb_proxy::Proxy::start(
                 &self.workdir,
                 rpmb_socket.clone(),
+                self.artifacts.rpmbd.clone(),
+                self.rpmb.clone(),
             )?)
         } else {
             None

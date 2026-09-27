@@ -223,9 +223,14 @@ fn handle(registers: &[u64; 8]) -> Result<u64, Status> {
                     Ok(token | PINNED_HANDLE_TAG)
                 }
                 Request::Unregister { handle } if valid_owner(handle) => {
-                    if !CANDIDATE_READY {
-                        clear_stage();
+                    // The owner handle is the only authority that may resolve
+                    // a running candidate.  Releasing it before commitment or
+                    // rollback would strand the resident owner in Applying and
+                    // make the durable outcome unqueryable by the caller.
+                    if CANDIDATE_READY || REPORT[0] == abi::APPLYING {
+                        return Err(Status::Busy);
                     }
+                    clear_stage();
                     REGISTERED_TOKEN = 0;
                     REGISTERED_ADDRESS = 0;
                     REGISTERED_LENGTH = 0;
@@ -250,7 +255,11 @@ fn handle(registers: &[u64; 8]) -> Result<u64, Status> {
                 generation,
                 component,
                 ..
-            } if component == abi::TRUSTY && generation > ACTIVE_GENERATION => {
+            } if component == abi::TRUSTY
+                && generation > ACTIVE_GENERATION
+                && !CANDIDATE_READY
+                && REPORT[0] != abi::APPLYING =>
+            {
                 clear_stage();
                 STAGED_LENGTH = length;
                 STAGED_GENERATION = generation;
@@ -444,6 +453,14 @@ pub unsafe extern "C" fn bexos_arm_owner_candidate_ready() -> u64 {
         ACTIVE_SLOT = STAGED_SLOT;
         TRANSPORT_GENERATION = TRANSPORT_GENERATION.wrapping_add(1).max(1);
         REVISION = REVISION.wrapping_add(1);
+        // A reboot trial has no live normal-world transaction to issue the
+        // Resolve call.  Its first architectural NS_RETURN is the resident
+        // owner's health boundary, so commit the authenticated selection here.
+        // If durable readback fails, return failure and let the assembly path
+        // enter recovery instead of reporting a generation that was not saved.
+        if BOOT_TRIAL && commit_candidate().is_err() {
+            return 0;
+        }
         ACTIVE_GENERATION
     }
 }
