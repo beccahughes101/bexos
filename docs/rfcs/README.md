@@ -81,3 +81,4 @@ An RFC number does not indicate approval or implementation status.
 | [0070](0070/README.md) |  Starnix  | 2026-09-23 | [Implementation and gaps](0070/CURRENT.md) |
 | [0071](0071/README.md) |  VPP  | 2026-09-24 | [Implementation and gaps](0071/CURRENT.md) |
 | [0072](0072/README.md) |  Runners  | 2026-09-24 | [Implementation and gaps](0072/CURRENT.md) |
+| [0073](0032/README.md) |  SSO  | 2026-09-30 | [Implementation and gaps](0073/CURRENT.md) |
