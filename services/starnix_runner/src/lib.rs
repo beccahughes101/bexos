@@ -3281,8 +3281,15 @@ pub fn run(channel: Channel) -> Result<u8, Error> {
         &options.path,
         bexos_starnix_abi::MAX_IMAGE_BYTES,
     )
-    .map_err(|_| Error::Image)?;
+    .map_err(|error| {
+        bexos_userspace::log(&format!(
+            "starnix_runner: image read failed path={} error={error:?}\n",
+            options.path
+        ));
+        Error::Image
+    })?;
     if image_bytes.get(..4) != Some(b"\x7fELF") {
+        bexos_userspace::log("starnix_runner: image is not ELF\n");
         return Err(Error::Image);
     }
     let launch = Launch {
@@ -3353,12 +3360,23 @@ pub fn run(channel: Channel) -> Result<u8, Error> {
         vfs.chdir(&launch.options.working_directory)
             .map_err(|_| Error::Startup)?;
     }
-    let interpreter_path = starnix_kernel::interpreter(&image_bytes).map_err(|_| Error::Image)?;
+    let interpreter_path = starnix_kernel::interpreter(&image_bytes).map_err(|error| {
+        bexos_userspace::log(&format!(
+            "starnix_runner: interpreter parse failed error={error:?}\n"
+        ));
+        Error::Image
+    })?;
     let interpreter_bytes = interpreter_path
         .as_deref()
         .map(|path| vfs.read_file(path, 64 * 1024 * 1024))
         .transpose()
-        .map_err(|_| Error::Image)?;
+        .map_err(|error| {
+            bexos_userspace::log(&format!(
+                "starnix_runner: interpreter read failed path={} error={error:?}\n",
+                interpreter_path.as_deref().unwrap_or("")
+            ));
+            Error::Image
+        })?;
     let image = starnix_kernel::prepare_image_with_interpreter(
         &image_bytes,
         interpreter_bytes.as_deref(),
@@ -3368,7 +3386,13 @@ pub fn run(channel: Channel) -> Result<u8, Error> {
         launch.options.uid,
         launch.options.gid,
     )
-    .map_err(|_| Error::Image)?;
+    .map_err(|error| {
+        bexos_userspace::log(&format!(
+            "starnix_runner: image preparation failed architecture={:?} error={error:?}\n",
+            architecture()
+        ));
+        Error::Image
+    })?;
     for entry in &startup.namespace {
         let _ = Memory::close(entry.directory);
     }

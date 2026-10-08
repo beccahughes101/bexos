@@ -54,12 +54,15 @@ impl Proxy {
         let trial_workdir = workdir.to_path_buf();
         let task = thread::spawn(move || {
             let result = (|| {
+                // rpmbd removes its socket when an idle client never arrives.
+                // Establish ownership before slow TCG boot waits for both QEMU
+                // frontends, then keep all bytes fenced behind their accepts.
+                let backend_stream = connect(&backend, &task_stop)?;
                 // Accept both frontends before servicing either one. The
                 // runtime virtio port is consequently open before its driver
                 // enumerates, while all bytes remain fenced behind boot EOF.
                 let boot = accept(&boot, &task_stop, "boot")?;
                 let runtime = accept(&runtime, &task_stop, "runtime")?;
-                let backend_stream = connect(&backend, &task_stop)?;
                 bridge(boot, backend_stream, &task_stop)?;
                 if task_stop.load(Ordering::Acquire) {
                     return Ok(());

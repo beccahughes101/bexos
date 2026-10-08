@@ -463,7 +463,7 @@ impl<B: Backend> Runtime<B> {
         Ok(self.grant(
             self.current,
             Object::Vmar(root_vmar),
-            READ | WRITE | EXECUTE | MAP | ADMIN | TRANSFER,
+            READ | WRITE | EXECUTE | MAP | ADMIN | TRANSFER | DUPLICATE,
         ))
     }
     pub fn heap_vmar_handle(&self) -> Result<u64> {

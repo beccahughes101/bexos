@@ -92,6 +92,16 @@ pub const fn kernel_page_descriptor(
     if executable { desc } else { desc | DESC_PXN }
 }
 
+pub const fn kernel_block_descriptor_2m(
+    phys: u64,
+    attr: MemoryAttr,
+    access: Access,
+    executable: bool,
+) -> u64 {
+    let desc = block_descriptor_2m(phys, attr, access) | DESC_UXN;
+    if executable { desc } else { desc | DESC_PXN }
+}
+
 const fn shareability_bits(attr: MemoryAttr) -> u64 {
     match attr {
         MemoryAttr::Device => 0,

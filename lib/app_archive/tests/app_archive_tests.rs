@@ -62,6 +62,27 @@ fn round_trips_zstd_archive() {
     let archive = OpenArchive::parse_and_verify(&built.bytes, &trusted()).unwrap();
     let entry = archive.find("asset/repeated.bin").unwrap();
     assert_eq!(archive.read_file(entry).unwrap(), payload);
+    assert_eq!(archive.read_file_prefix(entry, 64).unwrap(), &payload[..64]);
+    assert_eq!(archive.read_file_prefix(entry, 20_000).unwrap(), payload);
+}
+
+#[test]
+fn reads_bounded_uncompressed_prefix() {
+    let payload = b"authenticated payload";
+    let built = build_archive(
+        &[BuildEntry {
+            path: "bin/app",
+            bytes: payload,
+            mode: 0o555,
+        }],
+        Compression::None,
+        KEY_ID,
+        SEED,
+    )
+    .unwrap();
+    let archive = OpenArchive::parse_and_verify(&built.bytes, &trusted()).unwrap();
+    let entry = archive.find("bin/app").unwrap();
+    assert_eq!(archive.read_file_prefix(entry, 4).unwrap(), b"auth");
 }
 
 #[test]

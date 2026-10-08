@@ -170,6 +170,7 @@ impl<T: DebugTransport> DebugClient<T> {
         // after package I/O. Its debugd-to-appd envelope allows 900 seconds.
         let timeout = match method_id {
             METHOD_LAUNCH_APP => 600,
+            METHOD_LIST_APPS | METHOD_LIST_PROCESSES => 300,
             // Bundle commit includes appd's package transaction and durable
             // registry publication. Keep the host deadline outside debugd's
             // 1,800-second aggregate transport bound.

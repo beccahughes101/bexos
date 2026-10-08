@@ -82,6 +82,19 @@ fn page_encoding_distinguishes_readonly_data_and_executable_kernel_pages() {
         assert_ne!(code, data);
         assert_eq!(code & (1 << 53), 0);
         assert_ne!(data & (1 << 53), 0);
+        let block = mmu::kernel_block_descriptor_2m(
+            0x4567_8000,
+            mmu::MemoryAttr::Normal,
+            mmu::Access::KernelReadWrite,
+            false,
+        );
+        assert_eq!(block & 0b11, 0b01);
+        assert_eq!(
+            block & mmu::TABLE_ADDR_MASK & !(mmu::BLOCK_2M_SIZE - 1),
+            0x4560_0000
+        );
+        assert_ne!(block & (1 << 53), 0);
+        assert_ne!(block & (1 << 54), 0);
     }
 }
 

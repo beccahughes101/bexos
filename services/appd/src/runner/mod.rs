@@ -118,6 +118,7 @@ fn start_component_protocol<K: KernelOps>(
     service: bool,
     migratable: bool,
     directories: &PackageDirectories,
+    package_image: Option<(KernelHandle, u64)>,
 ) -> Result<LaunchResult, LaunchError> {
     let startup = match kernel.create_channel() {
         Ok(channel) => channel,
@@ -196,6 +197,8 @@ fn start_component_protocol<K: KernelOps>(
             service,
             migratable,
             package_dir: directories.package_dir,
+            package_image: package_image.map(|(handle, _)| handle),
+            package_image_size: package_image.map_or(0, |(_, size)| size),
             dependencies: &dependency_handles,
             startup: startup.remote,
             job: delegated_job,
@@ -599,12 +602,28 @@ impl RunnerRegistry {
             let directories = resolver
                 .component_directories(&request.manifest.package_name)
                 .map_err(LaunchError::PackageImage)?;
+            let component_image = if provider_kind == ComponentRunnerProviderKind::ComponentRunner
+                && directories.package_dir.is_none()
+            {
+                if resolver.supports_directory_payloads() {
+                    return Err(LaunchError::PackageImage(PackageImageError::AccessDenied));
+                }
+                let path = component_payload_path(request.process)
+                    .ok_or(LaunchError::InvalidProgramMetadata)?;
+                let image = resolver
+                    .resolve_executable(&request.manifest.package_name, path)
+                    .map_err(LaunchError::PackageImage)?;
+                let vmo = immutable_vmo(kernel, image.bytes, "component_payload_vmo")?;
+                construction_vmos.push(vmo);
+                Some((vmo, image.bytes.len() as u64))
+            } else {
+                None
+            };
             if provider_kind == ComponentRunnerProviderKind::ComponentRunner
-                && (directories.package_dir.is_none()
-                    || directories
-                        .dependencies
-                        .iter()
-                        .any(|dependency| dependency.directory.is_none()))
+                && directories
+                    .dependencies
+                    .iter()
+                    .any(|dependency| dependency.directory.is_none())
             {
                 return Err(LaunchError::PackageImage(PackageImageError::AccessDenied));
             }
@@ -674,7 +693,7 @@ impl RunnerRegistry {
                 .map_err(|source| kernel_error("native_runner_job_duplicate", source))?;
             construction_handles.push(delegated_job);
             let delegated_process = kernel
-                .duplicate_handle(component.process, 1 | 2 | 32 | 128)
+                .duplicate_handle(component.process, 1 | 2 | 32 | 64 | 128)
                 .map_err(|source| kernel_error("native_runner_process_duplicate", source))?;
             construction_handles.push(delegated_process);
             let delegated_space = kernel
@@ -685,7 +704,7 @@ impl RunnerRegistry {
                 .duplicate_handle(component.root_vmar, 1 | 2 | 4 | 8 | 16 | 32)
                 .map_err(|source| kernel_error("native_runner_vmar_duplicate", source))?;
             construction_handles.push(delegated_vmar);
-            let main_thread = kernel.prepare_native_runner(
+            let prepared_target = kernel.prepare_native_runner(
                 host.service_manager_handle,
                 &kernel::NativeRunnerPrepareRequest {
                     provider_kind,
@@ -706,15 +725,18 @@ impl RunnerRegistry {
                     events_reply: events.local,
                 },
             );
-            let main_thread = match main_thread {
-                Ok(thread) => thread,
+            let prepared_target = match prepared_target {
+                Ok(prepared) => prepared,
                 Err(source) => {
                     let _ = kernel.terminate_job(component_job.job, -1);
                     let _ = kernel.terminate_job(host.job_handle, -1);
                     return Err(kernel_error("native_runner_prepare", source));
                 }
             };
-            construction_handles.push(main_thread);
+            construction_handles.push(prepared_target.main_thread);
+            if let Some((linker_data, _)) = prepared_target.runtime_linker_data {
+                construction_vmos.push(linker_data);
+            }
             kernel
                 .close_handle(host.service_manager_handle)
                 .map_err(|source| kernel_error("native_runner_host_close", source))?;
@@ -724,15 +746,18 @@ impl RunnerRegistry {
             kernel
                 .close_handle(component.root_vmar)
                 .map_err(|source| kernel_error("component_root_vmar_close", source))?;
+            if let Some((linker_data, _)) = prepared_target.runtime_linker_data {
+                construction_vmos.retain(|handle| *handle != linker_data);
+            }
             let result = LaunchResult {
                 job_handle: component_job.job,
                 process_handle: component.process,
                 address_space_handle: component.address_space,
-                main_thread_handle: main_thread,
+                main_thread_handle: prepared_target.main_thread,
                 service_manager_handle: runner.local,
                 controller_handle: KernelHandle::none(),
                 events_handle: KernelHandle::none(),
-                runtime_linker_data: None,
+                runtime_linker_data: prepared_target.runtime_linker_data,
                 native_host: Some(NativeHostHandles {
                     job: host.job_handle,
                     process: host.process_handle,
@@ -754,6 +779,7 @@ impl RunnerRegistry {
                 prepared.service,
                 prepared.migratable,
                 &directories,
+                component_image,
             )
         })();
         if launched.is_err() {
@@ -848,6 +874,13 @@ fn bootfs_dependency_metadata<R: PackageImageResolver>(
         )?;
     }
     Ok(dependencies)
+}
+
+fn component_payload_path(process: &Process) -> Option<&str> {
+    match process.runner_options.as_ref() {
+        Some(crate::manifest::ProcessRunnerOptions::Wasm(options)) => Some(&options.path),
+        _ => None,
+    }
 }
 
 pub fn hardware_access_for_driver(

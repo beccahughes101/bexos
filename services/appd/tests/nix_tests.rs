@@ -38,7 +38,7 @@ impl PackageImageResolver for NixImage {
         );
         if path == "/pkg/bin/native_runner" {
             return Ok(PackageImage {
-                bytes: Box::leak(valid_elf().into_boxed_slice()),
+                bytes: Box::leak(valid_elf_with_tls().into_boxed_slice()),
                 vmo: KernelHandle { raw: 72 },
                 vmo_offset: 0,
             });
@@ -154,6 +154,30 @@ fn nix_launch_uses_authenticated_runtime_and_versioned_startup() {
     assert_eq!(type_url, bexos_starnix_abi::OPTIONS_TYPE_URL);
     let decoded = bexos_starnix_abi::NixRunnerOptions::decode(bytes).expect("runner options");
     assert_eq!(decoded.path, "/pkg/bin/hello");
+    assert!(kernel.operations.iter().any(|operation| matches!(
+        operation,
+        KernelOperation::MapInVmSpace {
+            target_vaddr: TEST_TLS_BASE,
+            requested_rights,
+            ..
+        } if *requested_rights
+            == bexos_kernel_core::loader::RIGHTS_READ
+                | bexos_kernel_core::loader::RIGHTS_WRITE
+    )));
+    assert!(kernel.operations.iter().any(|operation| matches!(
+        operation,
+        KernelOperation::StartThreadInProcess {
+            thread_pointer_vaddr,
+            ..
+        } if *thread_pointer_vaddr == TEST_TLS_BASE
+            + if bexos_app_manifest::Architecture::current_guest()
+                == bexos_app_manifest::Architecture::X86_64
+            {
+                4096
+            } else {
+                0
+            }
+    )));
 }
 
 #[test]

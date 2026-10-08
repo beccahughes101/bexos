@@ -158,7 +158,12 @@ pub fn handle_sync_exception(esr: u64, elr: u64, frame: *mut bexos_kernel_core::
         crate::state::UART.with(|s| {
             if let Some(u) = s.as_mut() {
                 let far = crate::arch::CurrentArch::fault_address();
-                let _ = writeln!(u, "guest fault esr={esr:x} pc={elr:x} far={far:x}");
+                let saved = super::frame::TrapFrame::view(unsafe { &*frame });
+                let (x0, x2, lr, sp) = saved.fault_registers();
+                let _ = writeln!(
+                    u,
+                    "guest fault esr={esr:x} pc={elr:x} far={far:x} lr={lr:x} sp={sp:x} x0={x0:x} x2={x2:x}"
+                );
             }
         });
         crate::userspace::RUNTIME.with(|s| s.as_mut().unwrap().exit_current());

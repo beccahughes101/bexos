@@ -83,6 +83,8 @@ pub struct ComponentStartRequest<'a> {
     pub service: bool,
     pub migratable: bool,
     pub package_dir: Option<KernelHandle>,
+    pub package_image: Option<KernelHandle>,
+    pub package_image_size: u64,
     pub dependencies: &'a [ResolvedDependencyHandle<'a>],
     pub startup: KernelHandle,
     pub job: KernelHandle,
@@ -122,6 +124,12 @@ pub struct NativeRunnerPrepareRequest<'a> {
     pub runner: KernelHandle,
     pub events: KernelHandle,
     pub events_reply: KernelHandle,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeRunnerPrepared {
+    pub main_thread: KernelHandle,
+    pub runtime_linker_data: Option<(KernelHandle, u64)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -275,6 +283,11 @@ pub trait KernelOps {
             .iter()
             .map(|handle| ComponentHandleRef { raw: handle.raw })
             .collect::<Vec<_>>();
+        let package_image = request
+            .package_image
+            .iter()
+            .map(|handle| ComponentHandleRef { raw: handle.raw })
+            .collect::<Vec<_>>();
         let direct_dependencies = request
             .dependencies
             .iter()
@@ -326,6 +339,8 @@ pub trait KernelOps {
                 service: request.service,
                 migratable: request.migratable,
                 package_dir: &package_dir,
+                package_image: &package_image,
+                package_image_size: request.package_image_size,
                 dependencies: WireVector::from_slice(&dependencies),
                 startup: ComponentHandleRef {
                     raw: request.startup.raw,
@@ -356,7 +371,7 @@ pub trait KernelOps {
         &mut self,
         _host: KernelHandle,
         _request: &NativeRunnerPrepareRequest<'_>,
-    ) -> Result<KernelHandle, KernelError> {
+    ) -> Result<NativeRunnerPrepared, KernelError> {
         Err(KernelError::InvalidArgs)
     }
 
@@ -592,7 +607,7 @@ impl KernelOps for FakeKernelOps {
         &mut self,
         host: KernelHandle,
         request: &NativeRunnerPrepareRequest<'_>,
-    ) -> Result<KernelHandle, KernelError> {
+    ) -> Result<NativeRunnerPrepared, KernelError> {
         self.checkpoint()?;
         self.operations.push(KernelOperation::NativeRunnerPrepare {
             host,
@@ -621,7 +636,10 @@ impl KernelOps for FakeKernelOps {
         for dependency in request.dependencies {
             self.live_handles.remove(&dependency.directory.raw);
         }
-        Ok(self.alloc())
+        Ok(NativeRunnerPrepared {
+            main_thread: self.alloc(),
+            runtime_linker_data: None,
+        })
     }
 
     fn duplicate_handle(
@@ -657,6 +675,9 @@ impl KernelOps for FakeKernelOps {
             &request.events,
         ] {
             self.live_handles.remove(&handle.raw);
+        }
+        if let Some(package_image) = request.package_image {
+            self.live_handles.remove(&package_image.raw);
         }
         Ok(())
     }
@@ -1368,7 +1389,7 @@ impl<C: FidlTransport, V: FidlTransport, S: FidlTransport + Clone> KernelOps
         &mut self,
         host: KernelHandle,
         request: &NativeRunnerPrepareRequest<'_>,
-    ) -> Result<KernelHandle, KernelError> {
+    ) -> Result<NativeRunnerPrepared, KernelError> {
         use component_runner_fidl::{
             DependencyKind, DependencyReference, FidlDecode as ComponentDecode,
             FidlEncode as ComponentEncode, HandleRef as ComponentHandleRef,
@@ -1410,6 +1431,11 @@ impl<C: FidlTransport, V: FidlTransport, S: FidlTransport + Clone> KernelOps
                 direct_dependencies: WireVector::from_slice(direct),
             })
             .collect::<Vec<_>>();
+        let provider_package_dir = request
+            .provider_package_dir
+            .iter()
+            .map(|directory| ComponentHandleRef { raw: directory.raw })
+            .collect::<Vec<_>>();
         let dependency_directories = request
             .dependencies
             .iter()
@@ -1428,10 +1454,15 @@ impl<C: FidlTransport, V: FidlTransport, S: FidlTransport + Clone> KernelOps
             .iter()
             .map(|image| ComponentHandleRef { raw: image.raw })
             .collect::<Vec<_>>();
+        let dependency_image_sizes_le = request
+            .dependency_image_sizes
+            .iter()
+            .flat_map(|size| size.to_le_bytes())
+            .collect::<Vec<_>>();
         let mut bytes = [0u8; 131072];
         bytes[..8].copy_from_slice(&1u64.to_le_bytes());
         let mut handles = [ComponentHandleRef { raw: 0 }; 80];
-        let encoded = NativeRunnerHostPrepareRequest {
+        let encoded = match (NativeRunnerHostPrepareRequest {
             prepare_info: NativeRunnerPrepareInfo {
                 provider_kind: match request.provider_kind {
                     ComponentRunnerProviderKind::DirectElf => NativeRunnerProviderKind::DirectElf,
@@ -1444,18 +1475,13 @@ impl<C: FidlTransport, V: FidlTransport, S: FidlTransport + Clone> KernelOps
                 },
                 provider_package: request.provider_package,
                 provider_path: request.provider_path,
-                provider_package_dir: ComponentHandleRef {
-                    raw: request
-                        .provider_package_dir
-                        .unwrap_or_else(KernelHandle::none)
-                        .raw,
-                },
+                provider_package_dir: &provider_package_dir,
                 provider_image: &images,
                 provider_image_size: request.provider_image_size,
                 dependencies: WireVector::from_slice(&dependencies),
                 dependency_directories: &dependency_directories,
                 dependency_images: &dependency_images,
-                dependency_image_sizes: request.dependency_image_sizes,
+                dependency_image_sizes_le: &dependency_image_sizes_le,
                 target_process: ComponentHandleRef {
                     raw: request.target_process.raw,
                 },
@@ -1475,41 +1501,113 @@ impl<C: FidlTransport, V: FidlTransport, S: FidlTransport + Clone> KernelOps
             events: ComponentHandleRef {
                 raw: request.events.raw,
             },
-        }
+        })
         .encode(&mut bytes[8..], &mut handles)
-        .map_err(|_| KernelError::Transport)?;
+        {
+            Ok(encoded) => encoded,
+            Err(source) => {
+                bexos_userspace::log(&alloc::format!(
+                    "appd: native runner prepare encode failed: {source:?}\n"
+                ));
+                return Err(component_wire_error(source));
+            }
+        };
         let raw_handles = handles[..encoded.handles]
             .iter()
             .map(|handle| handle.raw)
             .collect::<Vec<_>>();
-        bexos_userspace::Channel(host.raw)
-            .send(&bytes[..8 + encoded.bytes], &raw_handles)
-            .map_err(|_| KernelError::Transport)?;
-        let response = bexos_userspace::Channel(request.events_reply.raw)
-            .recv_blocking()
-            .map_err(|_| KernelError::PeerClosed)?;
-        if response.bytes.len() < 8
-            || u64::from_le_bytes(
-                response.bytes[..8]
-                    .try_into()
-                    .map_err(|_| KernelError::Transport)?,
-            ) != 1
+        for (index, handle) in raw_handles.iter().enumerate() {
+            if *handle == host.raw || raw_handles[..index].contains(handle) {
+                bexos_userspace::log(&alloc::format!(
+                    "appd: native runner prepare invalid transfer handle index={index} raw={handle} host={} handles={raw_handles:?}\n",
+                    host.raw,
+                ));
+                return Err(KernelError::InvalidArgs);
+            }
+        }
+        if let Err(status) =
+            bexos_userspace::Channel(host.raw).send(&bytes[..8 + encoded.bytes], &raw_handles)
         {
-            return Err(KernelError::Transport);
+            bexos_userspace::log(&alloc::format!(
+                "appd: native runner prepare send failed status={status:?} host={} handles={raw_handles:?}\n",
+                host.raw,
+            ));
+            return Err(status_to_kernel_error(status));
+        }
+        let response = match bexos_userspace::Channel(request.events_reply.raw).recv_blocking() {
+            Ok(response) => response,
+            Err(status) => {
+                bexos_userspace::log(&alloc::format!(
+                    "appd: native runner prepare receive failed status={status:?} events={}\n",
+                    request.events_reply.raw,
+                ));
+                return Err(status_to_kernel_error(status));
+            }
+        };
+        let generation = response
+            .bytes
+            .get(..8)
+            .and_then(|bytes| bytes.try_into().ok())
+            .map(u64::from_le_bytes);
+        if generation != Some(1) {
+            bexos_userspace::log(&alloc::format!(
+                "appd: native runner prepare invalid reply header bytes={} handles={} generation={generation:?}\n",
+                response.bytes.len(),
+                response.handles.len(),
+            ));
+            return Err(KernelError::InvalidArgs);
         }
         let response_handles = response
             .handles
             .iter()
             .map(|raw| ComponentHandleRef { raw: *raw })
             .collect::<Vec<_>>();
-        let prepared = NativeRunnerHostEventsOnPreparedRequest::decode(
+        let prepared = match NativeRunnerHostEventsOnPreparedRequest::decode(
             &response.bytes[8..],
             &response_handles,
-        )
-        .map_err(|_| KernelError::Transport)?;
+        ) {
+            Ok(prepared) => prepared,
+            Err(source) => {
+                bexos_userspace::log(&alloc::format!(
+                    "appd: native runner prepare reply decode failed: {source:?} bytes={} handles={}\n",
+                    response.bytes.len(),
+                    response.handles.len(),
+                ));
+                return Err(component_wire_error(source));
+            }
+        };
+        if prepared.status != Status::Ok {
+            bexos_userspace::log(&alloc::format!(
+                "appd: native runner prepare rejected status={:?} main_thread={} linker_handles={} linker_len={}\n",
+                prepared.status,
+                prepared.main_thread.raw,
+                prepared.runtime_linker_data.len(),
+                prepared.runtime_linker_data_len,
+            ));
+        }
         status_to_result(prepared.status)?;
-        Ok(KernelHandle {
-            raw: prepared.main_thread.raw,
+        let runtime_linker_data = match prepared.runtime_linker_data.len() {
+            0 if prepared.runtime_linker_data_len == 0 => None,
+            1 if prepared.runtime_linker_data_len != 0 => Some((
+                KernelHandle {
+                    raw: prepared.runtime_linker_data[0].raw,
+                },
+                prepared.runtime_linker_data_len,
+            )),
+            count => {
+                bexos_userspace::log(&alloc::format!(
+                    "appd: native runner prepare invalid linker data handles={count} len={} response_handles={}\n",
+                    prepared.runtime_linker_data_len,
+                    response.handles.len(),
+                ));
+                return Err(KernelError::InvalidArgs);
+            }
+        };
+        Ok(NativeRunnerPrepared {
+            main_thread: KernelHandle {
+                raw: prepared.main_thread.raw,
+            },
+            runtime_linker_data,
         })
     }
 
@@ -1585,6 +1683,20 @@ impl<C: FidlTransport, V: FidlTransport, S: FidlTransport + Clone> KernelOps
     }
 }
 
+const fn component_wire_error(source: component_runner_fidl::FidlWireError) -> KernelError {
+    use component_runner_fidl::FidlWireError;
+    match source {
+        FidlWireError::BufferTooSmall
+        | FidlWireError::HandleTableTooSmall
+        | FidlWireError::LimitExceeded => KernelError::BufferTooSmall,
+        FidlWireError::InvalidUtf8
+        | FidlWireError::InvalidPresence
+        | FidlWireError::UnsupportedType
+        | FidlWireError::UnknownOrdinal(_) => KernelError::InvalidArgs,
+        FidlWireError::Transport => KernelError::Transport,
+    }
+}
+
 const fn to_fidl_hardware_access(access: HardwareAccessTier) -> HardwareAccess {
     match access {
         HardwareAccessTier::None => HardwareAccess::None,
@@ -1600,16 +1712,24 @@ impl From<FidlWireError> for KernelError {
 }
 
 fn status_to_result(status: Status) -> Result<(), KernelError> {
+    if status == Status::Ok {
+        Ok(())
+    } else {
+        Err(status_to_kernel_error(status))
+    }
+}
+
+const fn status_to_kernel_error(status: Status) -> KernelError {
     match status {
-        Status::Ok => Ok(()),
-        Status::ErrInvalidHandle => Err(KernelError::InvalidHandle),
-        Status::ErrAccessDenied => Err(KernelError::AccessDenied),
-        Status::ErrNoMemory => Err(KernelError::NoMemory),
-        Status::ErrBufferTooSmall => Err(KernelError::BufferTooSmall),
-        Status::ErrPeerClosed => Err(KernelError::PeerClosed),
-        Status::ErrTimedOut => Err(KernelError::TimedOut),
-        Status::ErrAlreadyExists => Err(KernelError::AlreadyExists),
-        Status::ErrInvalidArgs => Err(KernelError::InvalidArgs),
-        Status::ErrResourceExhausted => Err(KernelError::ResourceExhausted),
+        Status::Ok => KernelError::Transport,
+        Status::ErrInvalidHandle => KernelError::InvalidHandle,
+        Status::ErrAccessDenied => KernelError::AccessDenied,
+        Status::ErrNoMemory => KernelError::NoMemory,
+        Status::ErrBufferTooSmall => KernelError::BufferTooSmall,
+        Status::ErrPeerClosed => KernelError::PeerClosed,
+        Status::ErrTimedOut => KernelError::TimedOut,
+        Status::ErrAlreadyExists => KernelError::AlreadyExists,
+        Status::ErrInvalidArgs => KernelError::InvalidArgs,
+        Status::ErrResourceExhausted => KernelError::ResourceExhausted,
     }
 }

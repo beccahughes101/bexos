@@ -9,12 +9,20 @@ use alloc::vec::Vec;
 use bexos_app_archive::{OpenArchive, TrustedKey};
 pub use bexos_package_version::{
     HealthCheckStatus, MultiVersionPolicy, PackageSelector, SemVer, VersionMatchError,
-    parse_package_selector, select_unique_match, versioned_package_key,
+    parse_package_selector, select_unique_match, split_versioned_package, versioned_package_key,
 };
 
 pub use bexos_app_manifest::{Architecture, ManifestArchitecture};
 
 pub const PACKAGE_MANIFEST_PATH: &str = "package.bexmanifest";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BundleInspection {
+    pub package_key: String,
+    pub manifest_bytes: Vec<u8>,
+    pub archive_content_root: [u8; 32],
+    pub signer_key_id: [u8; 32],
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InstallSource {
@@ -123,6 +131,14 @@ impl AppRecord {
     }
 
     pub fn archive_id(&self) -> String {
+        if let Some(versioned_path) = self
+            .archive_path
+            .strip_prefix("pkg/")
+            .and_then(|path| path.strip_suffix("/pkg.bex"))
+            && let Some((package, version)) = versioned_path.rsplit_once('/')
+        {
+            return alloc::format!("{package}:{version}");
+        }
         self.archive_path
             .strip_prefix("pkg/")
             .and_then(|path| path.strip_suffix(".bex"))
@@ -145,6 +161,15 @@ pub struct ActivePinRecord {
 pub struct InstallRequest<'a> {
     pub archive_bytes: &'a [u8],
     pub trusted_keys: &'a [TrustedKey<'a>],
+    pub verified_signer: Option<VerifiedSignerMetadata>,
+    pub source: InstallSource,
+    pub protected: bool,
+    pub archive_path: &'a str,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InspectedInstallRequest<'a> {
+    pub inspection: &'a BundleInspection,
     pub verified_signer: Option<VerifiedSignerMetadata>,
     pub source: InstallSource,
     pub protected: bool,
@@ -191,6 +216,15 @@ impl MemoryAppRegistry {
         request: InstallRequest<'_>,
     ) -> Result<AppRecord, RegistryError> {
         let record = record_from_bundle(request)?;
+        self.upsert_checked(record.clone())?;
+        Ok(record)
+    }
+
+    pub fn install_inspected_bundle(
+        &mut self,
+        request: InspectedInstallRequest<'_>,
+    ) -> Result<AppRecord, RegistryError> {
+        let record = record_from_inspection(request)?;
         self.upsert_checked(record.clone())?;
         Ok(record)
     }
@@ -560,9 +594,17 @@ fn validate_active_pins(
     Ok(())
 }
 
-pub fn record_from_bundle(request: InstallRequest<'_>) -> Result<AppRecord, RegistryError> {
-    validate_archive_path(request.archive_path)?;
-    let archive = OpenArchive::parse_and_verify(request.archive_bytes, request.trusted_keys)
+/// Verifies the archive envelope, manifest identity, and bounded native headers.
+///
+/// Payload architecture checks only require the fixed ELF header. Reading a
+/// prefix avoids expanding a complete service binary merely to inspect its
+/// machine type; the signed archive digest still authenticates every stored
+/// payload byte.
+pub fn inspect_bundle(
+    archive_bytes: &[u8],
+    trusted_keys: &[TrustedKey<'_>],
+) -> Result<BundleInspection, RegistryError> {
+    let archive = OpenArchive::parse_and_verify(archive_bytes, trusted_keys)
         .map_err(|_| RegistryError::Archive)?;
     let manifest_entry = archive
         .find(PACKAGE_MANIFEST_PATH)
@@ -570,8 +612,7 @@ pub fn record_from_bundle(request: InstallRequest<'_>) -> Result<AppRecord, Regi
     let manifest_bytes = archive
         .read_file(manifest_entry)
         .map_err(|_| RegistryError::Archive)?;
-    let (package_id, display_name, version, multi_version_policy, min_bexos_abi_version) =
-        decode_manifest_header(&manifest_bytes)?;
+    let (package_id, _, version, _, _) = decode_manifest_header(&manifest_bytes)?;
     validate_package_id(&package_id)?;
     let architecture = ManifestArchitecture::decode(&manifest_bytes)
         .and_then(|m| m.validate(Some(Architecture::current_guest())))
@@ -580,16 +621,46 @@ pub fn record_from_bundle(request: InstallRequest<'_>) -> Result<AppRecord, Regi
         if entry.path == PACKAGE_MANIFEST_PATH {
             continue;
         }
-        let bytes = archive
-            .read_file(entry)
+        let prefix = archive
+            .read_file_prefix(entry, 64)
             .map_err(|_| RegistryError::Archive)?;
-        bexos_app_manifest::validate_payload(architecture, &bytes)
+        bexos_app_manifest::validate_payload(architecture, &prefix)
             .map_err(RegistryError::Architecture)?;
     }
+    Ok(BundleInspection {
+        package_key: versioned_package_key(&package_id, &version),
+        manifest_bytes,
+        archive_content_root: archive.content_root(),
+        signer_key_id: archive.key_id(),
+    })
+}
+
+pub fn record_from_bundle(request: InstallRequest<'_>) -> Result<AppRecord, RegistryError> {
+    let inspection = inspect_bundle(request.archive_bytes, request.trusted_keys)?;
+    record_from_inspection(InspectedInstallRequest {
+        inspection: &inspection,
+        verified_signer: request.verified_signer,
+        source: request.source,
+        protected: request.protected,
+        archive_path: request.archive_path,
+    })
+}
+
+pub fn record_from_inspection(
+    request: InspectedInstallRequest<'_>,
+) -> Result<AppRecord, RegistryError> {
+    validate_archive_path(request.archive_path)?;
+    let manifest_bytes = &request.inspection.manifest_bytes;
+    let (package_id, display_name, version, multi_version_policy, min_bexos_abi_version) =
+        decode_manifest_header(manifest_bytes)?;
+    validate_package_id(&package_id)?;
+    if request.inspection.package_key != versioned_package_key(&package_id, &version) {
+        return Err(RegistryError::PackageMismatch);
+    }
     let package_instance_id = installation_instance_id(
-        &manifest_bytes,
-        archive.content_root(),
-        archive.key_id(),
+        manifest_bytes,
+        request.inspection.archive_content_root,
+        request.inspection.signer_key_id,
         request.archive_path,
     );
     let Some(verified_signer) = request.verified_signer else {
@@ -598,12 +669,12 @@ pub fn record_from_bundle(request: InstallRequest<'_>) -> Result<AppRecord, Regi
     Ok(AppRecord {
         package_id,
         display_name,
-        manifest_bytes,
+        manifest_bytes: manifest_bytes.clone(),
         version,
         multi_version_policy,
         min_bexos_abi_version,
-        archive_content_root: archive.content_root(),
-        signer_key_id: archive.key_id(),
+        archive_content_root: request.inspection.archive_content_root,
+        signer_key_id: request.inspection.signer_key_id,
         verified_signer: Some(verified_signer),
         install_source: request.source,
         lifecycle_state: LifecycleState::Installed,

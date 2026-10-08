@@ -113,14 +113,19 @@ QEMU_STORAGE_PREINSTALLS_WITHOUT_BRUSH = [
 QEMU_STORAGE_PREINSTALLS_SHELL_FIXTURE = QEMU_STORAGE_PREINSTALLS_WITHOUT_BRUSH + [
     {
         "archive": "//testing/e2e/qemu/bexfs:shell_fixture_archive",
-        "path": "pkg/com.example.shell_fixture.bex",
+        "path": "pkg/bexos.test.shell_fixture.bex",
     },
 ]
 
 def qemu_images(graphics = False, input_fixture = False, prebuilt_apps = [], prebuilt_updates = {}, base_storage_preinstalls = None, include_boot_wasm = True):
-    boot_wasm_inputs = ["//testing/wasm:boot_wasm", "//testing/wasm:boot_manifest"] if include_boot_wasm else []
+    boot_wasm_inputs = [
+        "//services/wasm_runner:wasm_runner_elf",
+        "//testing/wasm:boot_wasm",
+        "//testing/wasm:boot_manifest",
+    ] if include_boot_wasm else []
     boot_wasm_entries = ("--entry /boot/pkg/bexos.test.wasm.boot/package.bexmanifest=$(location //testing/wasm:boot_manifest) " +
-                         "--entry /boot/pkg/bexos.test.wasm.boot/bin/boot.wasm=$(location //testing/wasm:boot_wasm) ") if include_boot_wasm else ""
+                         "--entry /boot/pkg/bexos.test.wasm.boot/bin/boot.wasm=$(location //testing/wasm:boot_wasm) " +
+                         "--elf /boot/pkg/bexos.platform.wasm_runner/bin/wasm_runner=$(location //services/wasm_runner:wasm_runner_elf) ") if include_boot_wasm else ""
     graphics_packages = [('drivers/d1/input/virtio', 'bexos.driver.input.virtio', 'input', 'input_driver'), ('drivers/d1/display/virtio/gpu', 'bexos.driver.display.virtio_gpu', 'gpu', 'gpu_driver'), ('services/splashd', 'bexos.service.splashd', 'splashd', 'splashd_elf'), ('services/fontd', 'bexos.service.fontd', 'fontd', 'fontd_elf'), ('services/scened', 'bexos.service.scened', 'scened', 'scened_elf')] if graphics else []
     if input_fixture:
         graphics_packages.append(('testing/e2e/qemu/graphics/input_fixture', 'bexos.testing.input_fixture', 'input_fixture', 'fixture_elf'))

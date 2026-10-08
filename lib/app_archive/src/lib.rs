@@ -298,6 +298,31 @@ impl<'a> OpenArchive<'a> {
         }
     }
 
+    /// Reads at most `maximum` bytes from the start of an authenticated entry.
+    ///
+    /// This is intended for bounded format inspection (for example an ELF
+    /// header) without allocating and expanding a complete service image.
+    pub fn read_file_prefix(
+        &self,
+        entry: &ArchiveEntry,
+        maximum: usize,
+    ) -> Result<Vec<u8>, ArchiveError> {
+        self.verify_entry_chunks(entry)?;
+        let stored = self.stored_bytes(entry)?;
+        let uncompressed_size =
+            usize::try_from(entry.uncompressed_size).map_err(|_| ArchiveError::LengthOverflow)?;
+        let prefix_len = uncompressed_size.min(maximum);
+        match entry.compression {
+            Compression::None => {
+                if stored.len() != uncompressed_size {
+                    return Err(ArchiveError::UnexpectedEof);
+                }
+                Ok(stored[..prefix_len].to_vec())
+            }
+            Compression::Zstd => decompress_zstd_prefix(stored, prefix_len),
+        }
+    }
+
     pub fn stored_bytes(&self, entry: &ArchiveEntry) -> Result<&'a [u8], ArchiveError> {
         slice(
             self.bytes,
@@ -706,7 +731,25 @@ fn decompress_zstd(bytes: &[u8], expected_len: usize) -> Result<Vec<u8>, Archive
     Ok(out)
 }
 
+#[cfg(feature = "zstd")]
+fn decompress_zstd_prefix(bytes: &[u8], prefix_len: usize) -> Result<Vec<u8>, ArchiveError> {
+    use ruzstd::io::Read;
+    let mut decoder =
+        ruzstd::decoding::StreamingDecoder::new(bytes).map_err(|_| ArchiveError::Zstd)?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(prefix_len)
+        .map_err(|_| ArchiveError::LengthOverflow)?;
+    out.resize(prefix_len, 0);
+    Read::read_exact(&mut decoder, &mut out).map_err(|_| ArchiveError::Zstd)?;
+    Ok(out)
+}
+
 #[cfg(not(feature = "zstd"))]
 fn decompress_zstd(_bytes: &[u8], _expected_len: usize) -> Result<Vec<u8>, ArchiveError> {
+    Err(ArchiveError::UnsupportedCompression)
+}
+
+#[cfg(not(feature = "zstd"))]
+fn decompress_zstd_prefix(_bytes: &[u8], _prefix_len: usize) -> Result<Vec<u8>, ArchiveError> {
     Err(ArchiveError::UnsupportedCompression)
 }

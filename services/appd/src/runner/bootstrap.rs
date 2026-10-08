@@ -1,19 +1,20 @@
 //! Deliberately small loader for the fixed BootFS `native_runner` image.
 //!
 //! This is the only ELF mapping code retained by appd.  It accepts one
-//! statically linked image, rejects PT_DYNAMIC and TLS, and has no dependency
-//! resolver or relocation path.
+//! statically linked image, rejects PT_DYNAMIC, and has no dependency resolver
+//! or relocation path. Static TLS is initialized before the first thread starts.
 use super::{
     CreatedProcess, KernelError, KernelHandle, KernelOps, LaunchError, LaunchResult, PackageImage,
 };
 use alloc::vec::Vec;
-use bexos_elf::{ParsedElf, load::PAGE_SIZE};
+use bexos_elf::{ElfError, ParsedElf, align_up_to, arch::Machine, load::PAGE_SIZE, tls};
 use bexos_kernel_core::loader::{RIGHTS_EXECUTE, RIGHTS_READ, RIGHTS_WRITE};
 
 pub const PACKAGE: &str = "bexos.platform.native_runner";
 pub const PATH: &str = "/pkg/bin/native_runner";
 const STACK_SIZE: u64 = bexos_boot::USER_STACK_SIZE;
 const STACK_TOP: u64 = bexos_boot::USER_STACK_TOP;
+const TLS_LOAD_BASE: u64 = 0xbe00_0000;
 const PT_DYNAMIC: u32 = 2;
 
 pub fn launch<K: KernelOps>(
@@ -22,9 +23,6 @@ pub fn launch<K: KernelOps>(
 ) -> Result<LaunchResult, LaunchError> {
     reject_non_static(image.bytes)?;
     let parsed = ParsedElf::parse(image.bytes).map_err(LaunchError::Elf)?;
-    if parsed.tls.is_some() {
-        return Err(LaunchError::InvalidNativeRunner);
-    }
     let job = kernel
         .create_component_job(
             PACKAGE,
@@ -124,6 +122,36 @@ fn map_and_start<K: KernelOps>(
                 owned.retain(|candidate| *candidate != vmo);
             }
         }
+        let thread_pointer_vaddr = if parsed.tls.is_some() {
+            let machine = Machine::current_guest();
+            let layout = tls::layout(machine, core::iter::once((image.bytes, parsed.tls)))
+                .map_err(LaunchError::Elf)?;
+            let tls_vaddr = align_up_to(TLS_LOAD_BASE, layout.align)
+                .ok_or(LaunchError::Elf(ElfError::Overflow))?;
+            let (tls_bytes, thread_pointer) =
+                tls::initialize(&layout, machine, tls_vaddr).map_err(LaunchError::Elf)?;
+            let tls_vmo = kernel
+                .create_vmo_from_bytes(&tls_bytes)
+                .map_err(|source| error("native_runner_tls_vmo", source))?;
+            owned.push(tls_vmo);
+            kernel
+                .map_in_vm_space(
+                    created.address_space,
+                    tls_vmo,
+                    0,
+                    tls_bytes.len() as u64,
+                    tls_vaddr,
+                    RIGHTS_READ | RIGHTS_WRITE,
+                )
+                .map_err(|source| error("native_runner_tls_map", source))?;
+            kernel
+                .release_vmo(tls_vmo)
+                .map_err(|source| error("native_runner_tls_release", source))?;
+            owned.retain(|candidate| *candidate != tls_vmo);
+            thread_pointer
+        } else {
+            0
+        };
         let stack = kernel
             .create_vmo(STACK_SIZE, 0)
             .map_err(|source| error("native_runner_stack_vmo", source))?;
@@ -150,7 +178,7 @@ fn map_and_start<K: KernelOps>(
             created.address_space,
             parsed.entry_vaddr,
             STACK_TOP,
-            0,
+            thread_pointer_vaddr,
             Some(host.remote),
         ) {
             Ok(thread) => thread,

@@ -95,6 +95,7 @@ pub fn main(channel: u64) -> ! {
                 && message.handles.len() == 1
             {
                 state.clients.push(Channel(message.handles[0]));
+                let _ = control.send(b"bexos.serial.bind.ok", &[]);
             } else {
                 for handle in message.handles {
                     let _ = Memory::close(handle);

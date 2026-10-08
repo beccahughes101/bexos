@@ -10,6 +10,7 @@ rust_library(
     deps = [
         "//idl:component_runner_fidl_rust",
         "//idl:kernel_fidl_rust",
+        "//lib/boot",
         "//lib/userspace",
     ],
 )

@@ -61,6 +61,7 @@ pub struct Start {
     pub resolved_url: String,
     pub program: Vec<u8>,
     pub package_dir: Option<u64>,
+    pub package_image: Option<(u64, u64)>,
     pub dependencies: Vec<ResolvedDependency>,
     pub startup: bexos_userspace::Channel,
     pub job: u64,
@@ -146,6 +147,7 @@ pub fn receive_start(
         || request.start_info.program.type_url.len() > 256
         || request.start_info.program.payload.len() > 65_536
         || request.start_info.package_dir.len() > 1
+        || request.start_info.package_image.len() > 1
         || request.start_info.dependencies.len() > 64
     {
         close_all_except(&message.handles, request.events.raw);
@@ -225,6 +227,11 @@ pub fn receive_start(
             .package_dir
             .get(0)
             .map(|handle| handle.raw),
+        package_image: request
+            .start_info
+            .package_image
+            .get(0)
+            .map(|handle| (handle.raw, request.start_info.package_image_size)),
         dependencies,
         startup: bexos_userspace::Channel(request.start_info.startup.raw),
         job: request.start_info.job.raw,
@@ -269,6 +276,11 @@ pub fn stop_requested() -> bool {
     STOP_REQUESTED.load(Ordering::Acquire)
 }
 
+pub fn controller_channel() -> Option<bexos_userspace::Channel> {
+    let channel = CONTROLLER.load(Ordering::Acquire);
+    (channel != 0).then_some(bexos_userspace::Channel(channel))
+}
+
 /// Reads one immutable package-relative file through a supplied directory
 /// capability. Paths are canonical `/pkg/...` paths and traversal is rejected.
 pub fn read_package_file(directory: u64, path: &str, max_bytes: u64) -> Result<Vec<u8>, Error> {
@@ -300,9 +312,31 @@ pub fn read_package_file(directory: u64, path: &str, max_bytes: u64) -> Result<V
     result
 }
 
+/// Reads a bounded immutable package payload supplied before directory
+/// services are online.
+pub fn read_package_image(handle: u64, size: u64, max_bytes: u64) -> Result<Vec<u8>, Error> {
+    if size == 0 || size > max_bytes {
+        return Err(Error::Package);
+    }
+    let rounded = bexos_boot::page_round(size).ok_or(Error::Package)?;
+    let address = bexos_userspace::Memory::map(handle, rounded, 2).map_err(|_| Error::Package)?;
+    let bytes = unsafe {
+        core::slice::from_raw_parts(
+            address as *const u8,
+            usize::try_from(size).map_err(|_| Error::Package)?,
+        )
+    }
+    .to_vec();
+    bexos_userspace::Memory::unmap(address, rounded).map_err(|_| Error::Package)?;
+    Ok(bytes)
+}
+
 pub fn close_start_directories(start: &Start) {
     if let Some(package_dir) = start.package_dir {
         let _ = bexos_userspace::Memory::close(package_dir);
+    }
+    if let Some((package_image, _)) = start.package_image {
+        let _ = bexos_userspace::Memory::close(package_image);
     }
     for dependency in &start.dependencies {
         let _ = bexos_userspace::Memory::close(dependency.directory);
@@ -330,7 +364,7 @@ pub fn poll_controller() -> Result<Option<ControllerAction>, Error> {
     if channel == 0 {
         return Ok(None);
     }
-    let message = match bexos_userspace::Channel(channel).recv() {
+    let message = match bexos_userspace::Channel(channel).try_recv() {
         Ok(message) => message,
         Err(kernel_fidl::Status::ErrTimedOut) => return Ok(None),
         Err(kernel_fidl::Status::ErrPeerClosed) => {

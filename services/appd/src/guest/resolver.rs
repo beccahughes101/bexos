@@ -8,6 +8,7 @@ use alloc::borrow::Cow;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
+use bexos_app_registry::InstallSource;
 use bexos_kernel_core::bootfs::Bootfs;
 use bexos_userspace::{Channel, Memory, fs, log};
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -46,8 +47,6 @@ pub struct Resolver<'a> {
 }
 struct ProviderImage {
     package: String,
-    path: String,
-    image: RuntimeImage,
     directory: Option<u64>,
 }
 impl Drop for ProviderImage {
@@ -70,12 +69,17 @@ impl<'a> Resolver<'a> {
                 if p.wave.is_none() {
                     continue;
                 }
-                if policy.provider_for(&p.runner).map(|provider| provider.kind)
-                    != Some(crate::platform_config::ComponentRunnerProviderKind::DirectElf)
-                {
-                    continue;
-                }
-                let package_path = executable_path(p).expect("boot runner options");
+                let package_path =
+                    match policy.provider_for(&p.runner).map(|provider| provider.kind) {
+                        Some(crate::platform_config::ComponentRunnerProviderKind::DirectElf) => {
+                            executable_path(p)
+                        }
+                        Some(
+                            crate::platform_config::ComponentRunnerProviderKind::ComponentRunner,
+                        ) => component_payload_path(p),
+                        _ => None,
+                    }
+                    .expect("boot runner options");
                 let path = format!(
                     "/boot/pkg/{}/{}",
                     manifest.package_name,
@@ -121,7 +125,6 @@ impl<'a> Resolver<'a> {
             vmo_offset: native.payload_offset,
             close_handle: false,
         });
-        let mut providers = Vec::new();
         for registration in &policy.component_runner_providers {
             if registration.kind
                 != crate::platform_config::ComponentRunnerProviderKind::ComponentRunner
@@ -140,23 +143,26 @@ impl<'a> Resolver<'a> {
                     .strip_prefix("/pkg/")
                     .unwrap_or(&registration.executable_path)
             );
-            if let Some(image) = boot
-                .find(&boot_path)
-                .ok()
-                .flatten()
-                .and_then(|file| RuntimeImage::new(file.bytes.to_vec()).ok())
-            {
-                providers.push(ProviderImage {
+            if let Some(file) = boot.find(&boot_path).ok().flatten() {
+                images.push(Image {
                     package: registration.package_id.clone(),
                     path: registration.executable_path.clone(),
-                    image,
-                    directory: None,
+                    export_name: String::new(),
+                    soname: String::new(),
+                    symbol_prefix: String::new(),
+                    abi_version: 0,
+                    kind: PackageLibraryKind::Native,
+                    direct_dependencies: Vec::new(),
+                    bytes: Cow::Borrowed(file.bytes),
+                    handle: boot_handle,
+                    vmo_offset: file.payload_offset,
+                    close_handle: false,
                 });
             }
         }
         Self {
             images,
-            providers,
+            providers: Vec::new(),
             component_package: String::new(),
             package_root: None,
             dependency_roots: Vec::new(),
@@ -249,7 +255,7 @@ impl<'a> Resolver<'a> {
             {
                 continue;
             }
-            if let Some((image, directory)) = provider_runtime_image(
+            if let Ok(directory) = provider_runtime_directory(
                 vfsd,
                 registry,
                 manifest,
@@ -263,8 +269,6 @@ impl<'a> Resolver<'a> {
             ) {
                 providers.push(ProviderImage {
                     package: registration.package_id.clone(),
-                    path: registration.executable_path.clone(),
-                    image,
                     directory: Some(directory),
                 });
             }
@@ -297,19 +301,7 @@ impl<'a> Resolver<'a> {
 }
 
 fn fixed_native_runner_image() -> Result<Image<'static>, fs_fidl::FsStatus> {
-    let handle = FIXED_NATIVE_RUNNER_HANDLE.load(Ordering::Acquire);
-    let len = FIXED_NATIVE_RUNNER_LEN.load(Ordering::Acquire);
-    if handle == 0 || len == 0 || len > 64 * 1024 * 1024 {
-        return Err(fs_fidl::FsStatus::NotFound);
-    }
-    let rounded = bexos_boot::page_round(len).ok_or(fs_fidl::FsStatus::InvalidArgs)?;
-    let address = Memory::map(handle, rounded, 2).map_err(|_| fs_fidl::FsStatus::NoSpace)?;
-    let mut bytes = Vec::with_capacity(len as usize);
-    unsafe {
-        core::ptr::copy_nonoverlapping(address as *const u8, bytes.as_mut_ptr(), len as usize);
-        bytes.set_len(len as usize);
-    }
-    Memory::unmap(address, rounded).map_err(|_| fs_fidl::FsStatus::Io)?;
+    let bytes = fixed_native_runner_bytes()?;
     Ok(Image {
         package: crate::runner::bootstrap::PACKAGE.into(),
         path: crate::runner::bootstrap::PATH.into(),
@@ -326,16 +318,29 @@ fn fixed_native_runner_image() -> Result<Image<'static>, fs_fidl::FsStatus> {
     })
 }
 
+pub(super) fn fixed_native_runner_bytes() -> Result<Vec<u8>, fs_fidl::FsStatus> {
+    let handle = FIXED_NATIVE_RUNNER_HANDLE.load(Ordering::Acquire);
+    let len = FIXED_NATIVE_RUNNER_LEN.load(Ordering::Acquire);
+    if handle == 0 || len == 0 || len > 64 * 1024 * 1024 {
+        return Err(fs_fidl::FsStatus::NotFound);
+    }
+    let rounded = bexos_boot::page_round(len).ok_or(fs_fidl::FsStatus::InvalidArgs)?;
+    let address = Memory::map(handle, rounded, 2).map_err(|_| fs_fidl::FsStatus::NoSpace)?;
+    let mut bytes = Vec::with_capacity(len as usize);
+    unsafe {
+        core::ptr::copy_nonoverlapping(address as *const u8, bytes.as_mut_ptr(), len as usize);
+        bytes.set_len(len as usize);
+    }
+    Memory::unmap(address, rounded).map_err(|_| fs_fidl::FsStatus::Io)?;
+    Ok(bytes)
+}
+
 fn package_path(path: &str) -> String {
     if path.starts_with("/pkg/") {
         path.into()
     } else {
         format!("/pkg/{path}")
     }
-}
-
-fn read_backing_image(file: Channel) -> Result<(Vec<u8>, u64), fs_fidl::FsStatus> {
-    read_backing_image_bounded(file, 256 * 1024 * 1024)
 }
 
 fn read_owned_image(file: Channel, maximum: u64) -> Result<Vec<u8>, fs_fidl::FsStatus> {
@@ -448,18 +453,16 @@ impl PackageImageResolver for Resolver<'_> {
         package: &str,
         path: &str,
     ) -> Result<PackageImage<'a>, PackageImageError> {
-        if let Some(provider) = self
-            .providers
-            .iter()
-            .find(|provider| provider.package == package && provider.path == path)
-        {
-            return Ok(provider.image.image());
-        }
-        let image = self
+        let Some(image) = self
             .images
             .iter()
             .find(|i| i.package == package && i.path == path)
-            .ok_or(PackageImageError::NotFound)?;
+        else {
+            log(&format!(
+                "appd: resolver executable missing package={package} path={path}\n"
+            ));
+            return Err(PackageImageError::NotFound);
+        };
         Ok(PackageImage {
             bytes: &image.bytes,
             vmo: KernelHandle { raw: image.handle },
@@ -648,25 +651,14 @@ fn executable_path(process: &crate::manifest::Process) -> Option<&str> {
     }
 }
 
-pub struct RuntimeImage {
-    bytes: Vec<u8>,
-    handle: u64,
-}
-impl RuntimeImage {
-    fn new(bytes: Vec<u8>) -> Result<Self, fs_fidl::FsStatus> {
-        let handle = Memory::from_bytes(&bytes).map_err(|_| fs_fidl::FsStatus::NoSpace)?;
-        Ok(Self { bytes, handle })
-    }
-    pub fn image(&self) -> PackageImage<'_> {
-        PackageImage {
-            bytes: &self.bytes,
-            vmo: KernelHandle { raw: self.handle },
-            vmo_offset: 0,
-        }
+fn component_payload_path(process: &crate::manifest::Process) -> Option<&str> {
+    match &process.runner_options {
+        Some(ProcessRunnerOptions::Wasm(options)) => Some(&options.path),
+        _ => None,
     }
 }
 
-pub fn provider_runtime_image(
+pub fn provider_runtime_directory(
     vfsd: Channel,
     registry: &bexos_app_registry::MemoryAppRegistry,
     manifest: &Manifest,
@@ -674,21 +666,39 @@ pub fn provider_runtime_image(
     package: &str,
     path: &str,
     expected_signer: &str,
-) -> Option<(RuntimeImage, u64)> {
+) -> Result<u64, fs_fidl::FsStatus> {
     if !manifest
         .processes
         .iter()
         .any(|process| process.runner == runner)
     {
-        return None;
+        log(&format!(
+            "appd: registered component runner unused runner={runner} package={package}\n"
+        ));
+        return Err(fs_fidl::FsStatus::InvalidArgs);
     }
-    let record = registry.record(package).ok()?;
-    if record
-        .verified_signer
-        .as_ref()
-        .is_none_or(|signer| signer.root_anchor_id != expected_signer)
-    {
-        return None;
+    let record = registry.record(package).map_err(|_| {
+        log(&format!(
+            "appd: registered component runner record missing runner={runner} package={package}\n"
+        ));
+        fs_fidl::FsStatus::NotFound
+    })?;
+    let signer = match record.install_source {
+        // BootFS is authenticated as part of the verified product image and
+        // has no independent archive signer. System-image archives do: retain
+        // that identity so an out-of-band update must match the same provider
+        // signer configured for the product.
+        InstallSource::Bootfs => "bexos_official_platform_v1",
+        InstallSource::SystemImage | InstallSource::Debugd | InstallSource::Oci => record
+            .verified_signer
+            .as_ref()
+            .map_or("", |signer| signer.root_anchor_id.as_str()),
+    };
+    if signer != expected_signer {
+        log(&format!(
+            "appd: registered component runner signer mismatch runner={runner} package={package} expected={expected_signer} actual={signer}\n"
+        ));
+        return Err(fs_fidl::FsStatus::AccessDenied);
     }
     let root = match bexos_userspace::vfs::get_package_directory(vfsd, &record.archive_id()) {
         Ok(root) => root,
@@ -696,31 +706,22 @@ pub fn provider_runtime_image(
             log(&format!(
                 "appd: registered component runner unavailable runner={runner} error={error:?}\n"
             ));
-            return None;
+            return Err(error);
         }
     };
-    let result = (|| {
+    let result: Result<(), fs_fidl::FsStatus> = (|| {
         let file = fs::open(root, path, 1 | 4);
         let file = file?;
-        let result = read_backing_image(file);
-        let _ = fs::close(file);
-        let (bytes, source) = result?;
-        let _ = Memory::close(source);
-        RuntimeImage::new(bytes)
+        fs::close(file)
     })();
     match result {
-        Ok(image) => Some((image, root.0)),
+        Ok(()) => Ok(root.0),
         Err(error) => {
             let _ = Memory::close(root.0);
             log(&format!(
                 "appd: registered component runner unavailable runner={runner} error={error:?}\n"
             ));
-            None
+            Err(error)
         }
-    }
-}
-impl Drop for RuntimeImage {
-    fn drop(&mut self) {
-        let _ = Memory::close(self.handle);
     }
 }

@@ -38,10 +38,19 @@ fn run() -> Result<(), String> {
         };
         for name in launch_fixtures.iter() {
             session.client.clear_received_trace();
-            session
-                .client
-                .launch_app(&format!("bexos.test.wasm.{name}"), name, 0, 0)
-                .map_err(|e| format!("launch {name}: {e:?}"))?;
+            if let Err(error) =
+                session
+                    .client
+                    .launch_app(&format!("bexos.test.wasm.{name}"), name, 0, 0)
+            {
+                // Drain the guest's structured launch failure before returning
+                // so the E2E report includes the actual runner/kernel cause.
+                let _ = session.wait_for_serial_markers(
+                    &[b"appd: launch failed"],
+                    std::time::Duration::from_secs(5),
+                );
+                return Err(format!("launch {name}: {error:?}"));
+            }
             session.wait_for_serial_markers(
                 &[if *name != "trap" {
                     b"wasm_runner: exit 0"
@@ -61,10 +70,16 @@ fn run() -> Result<(), String> {
             .client
             .launch_app("bexos.test.wasm.service", "service", 0, 0)
             .map_err(|e| format!("launch service: {e:?}"))?;
-        session
+        if let Err(error) = session
             .client
             .launch_app("bexos.test.wasm.client", "client", 0, 0)
-            .map_err(|e| format!("launch client: {e:?}"))?;
+        {
+            let _ = session.wait_for_serial_markers(
+                &[b"appd: consumed service bind denied package=bexos.test.wasm.client"],
+                std::time::Duration::from_secs(5),
+            );
+            return Err(format!("launch client: {error:?}"));
+        }
         session.wait_for_serial_markers(
             &[b"wasm-client: counter=2"],
             std::time::Duration::from_secs(60),
@@ -98,6 +113,14 @@ fn run() -> Result<(), String> {
                 )
                 .map_err(|e| format!("stage migration: {e:?}"))?;
             if response.exit_code != 0 {
+                let _ = session.wait_for_serial_markers(
+                    &[b"native_runner: failed:"],
+                    std::time::Duration::from_secs(5),
+                );
+                eprintln!(
+                    "{}",
+                    String::from_utf8_lossy(session.client.received_trace())
+                );
                 return Err(format!("migration staging failed: {response:?}"));
             }
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
@@ -150,6 +173,11 @@ fn run() -> Result<(), String> {
         }
         eprintln!("e2e: installing independently signed WASM runner provider replacement");
         session.client.clear_received_trace();
+        session
+            .client
+            .list_apps()
+            .map_err(|error| format!("provider install readiness: {error:?}"))?;
+        eprintln!("e2e: provider install debug channel ready");
         session
             .client
             .install_app_bundle(0x5255_4e52, &provider_replacement)

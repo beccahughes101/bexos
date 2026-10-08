@@ -21,6 +21,9 @@ impl TrapFrame {
         assert!(context.matches_current_architecture());
         unsafe { &mut *(context as *mut Context).cast::<Self>() }
     }
+    pub(super) fn fault_registers(&self) -> (u64, u64, u64, u64) {
+        (self.x[0], self.x[2], self.x[30], self.sp_el0)
+    }
 }
 const _: () = assert!(core::mem::size_of::<TrapFrame>() == core::mem::size_of::<Context>());
 const _: () = assert!(core::mem::offset_of!(TrapFrame, q) == 272);

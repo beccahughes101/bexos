@@ -33,6 +33,20 @@ impl PhysicalBackend {
             let l2 = Self::entry(*l1 & TABLE_ADDR_MASK, ((va >> 21) & 511) as usize);
             if *l2 == 0 {
                 *l2 = table_descriptor(self.frames.allocate(1).ok_or(Status::ErrNoMemory)?);
+            } else if *l2 & 3 == 1 {
+                // Ordinary RAM uses a 2 MiB identity block. Permission changes
+                // for a staged transplant page split that block on demand.
+                let block_base = *l2 & !(BLOCK_2M_SIZE - 1);
+                let table = self.frames.allocate(1).ok_or(Status::ErrNoMemory)?;
+                for index in 0..PAGE_TABLE_ENTRIES {
+                    *Self::entry(table, index) = kernel_page_descriptor(
+                        block_base + index as u64 * PAGE_SIZE as u64,
+                        MemoryAttr::Normal,
+                        Access::KernelReadWrite,
+                        false,
+                    );
+                }
+                *l2 = table_descriptor(table);
             }
             Ok(Self::entry(
                 *l2 & TABLE_ADDR_MASK,
@@ -55,6 +69,25 @@ impl PhysicalBackend {
         Ok(())
     }
 
+    fn map_kernel_identity_block(&mut self, root: u64, pa: u64) -> Result<()> {
+        unsafe {
+            let l1 = Self::entry(root, ((pa >> 30) & 511) as usize);
+            if *l1 == 0 {
+                *l1 = table_descriptor(self.frames.allocate(1).ok_or(Status::ErrNoMemory)?);
+            }
+            if *l1 & 3 != 3 {
+                return Err(Status::ErrInvalidArgs);
+            }
+            let l2 = Self::entry(*l1 & TABLE_ADDR_MASK, ((pa >> 21) & 511) as usize);
+            if *l2 != 0 {
+                return Err(Status::ErrInvalidArgs);
+            }
+            *l2 =
+                kernel_block_descriptor_2m(pa, MemoryAttr::Normal, Access::KernelReadWrite, false);
+        }
+        Ok(())
+    }
+
     fn install_kernel_identity(&mut self, root: u64) -> Result<()> {
         unsafe {
             *Self::entry(root, 0) =
@@ -70,21 +103,29 @@ impl PhysicalBackend {
         let stack_top = align_up(core::ptr::addr_of!(__boot_stacks_top) as u64);
         let mut pa = 0x4000_0000;
         while pa < RAM_END {
-            if is_kernel_stack_guard_page(pa, stack_bottom, stack_top) {
-                pa += 4096;
+            let block_end = pa + BLOCK_2M_SIZE;
+            let protected = pa < kernel_end && block_end > text_start;
+            if !protected {
+                self.map_kernel_identity_block(root, pa)?;
+                pa = block_end;
                 continue;
             }
-            let (access, executable) = if pa >= text_start && pa < text_end {
-                (Access::KernelReadOnly, true)
-            } else if pa >= rodata_start && pa < rodata_end {
-                (Access::KernelReadOnly, false)
-            } else if pa >= data_start && pa < kernel_end {
-                (Access::KernelReadWrite, false)
-            } else {
-                (Access::KernelReadWrite, false)
-            };
-            self.map_kernel_identity_page(root, pa, access, executable)?;
-            pa += 4096;
+            for page in (pa..block_end).step_by(PAGE_SIZE) {
+                if is_kernel_stack_guard_page(page, stack_bottom, stack_top) {
+                    continue;
+                }
+                let (access, executable) = if page >= text_start && page < text_end {
+                    (Access::KernelReadOnly, true)
+                } else if page >= rodata_start && page < rodata_end {
+                    (Access::KernelReadOnly, false)
+                } else if page >= data_start && page < kernel_end {
+                    (Access::KernelReadWrite, false)
+                } else {
+                    (Access::KernelReadWrite, false)
+                };
+                self.map_kernel_identity_page(root, page, access, executable)?;
+            }
+            pa = block_end;
         }
         Ok(())
     }

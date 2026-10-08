@@ -1,12 +1,67 @@
-use bexos_bexfs::block::{BEXFS_BLOCK_SIZE, MemoryBlockDevice};
+use bexos_bexfs::block::{BEXFS_BLOCK_SIZE, BlockFifoBackend, FidlBlockDevice, MemoryBlockDevice};
 use bexos_bexfs::key::{KeyError, LockedVolumeKey, WrappedVolumeKey, WrappedVolumeKeyProvider};
 use bexos_bexfs::sys_state::{ActivePackagePin, Slot, SysStateV1, pinned_apps_path};
 use bexos_bexfs::{BexFs, BexFsError, FormatOptions, NodeKind};
 use bexos_package_version::{HealthCheckStatus, SemVer};
+use block_fidl::{BlockFlags, BlockInfo, BlockOpcode, BlockRequest, BlockResponse, Status};
+use rosefs_core::block::BlockDevice;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 const BLOCKS: u64 = 8192;
 const KEY: [u8; 32] = [0x5a; 32];
 const UUID: [u8; 16] = [0x11; 16];
+
+struct RecordingBlockBackend {
+    registrations: Rc<RefCell<Vec<usize>>>,
+}
+
+impl BlockFifoBackend for RecordingBlockBackend {
+    fn info(&self) -> Result<BlockInfo, Status> {
+        Ok(BlockInfo {
+            block_size: BEXFS_BLOCK_SIZE,
+            block_count: 64,
+            max_transfer_blocks: 2,
+            flags: BlockFlags(0),
+        })
+    }
+
+    fn register_buffer(&mut self, bytes: usize) -> Result<u32, Status> {
+        self.registrations.borrow_mut().push(bytes);
+        Ok(1)
+    }
+
+    fn transfer(
+        &mut self,
+        request: BlockRequest,
+        _buffer: &mut [u8],
+        write: bool,
+    ) -> Result<BlockResponse, Status> {
+        assert!(write);
+        assert_eq!(request.opcode, BlockOpcode::Write);
+        Ok(BlockResponse {
+            req_id: request.req_id,
+            status: Status::Ok,
+        })
+    }
+
+    fn unregister_buffer(&mut self, _vmo_id: u32) -> Result<(), Status> {
+        Ok(())
+    }
+}
+
+#[test]
+fn fidl_block_writes_stage_only_backend_sized_chunks() {
+    let registrations = Rc::new(RefCell::new(Vec::new()));
+    let device = FidlBlockDevice::connect(RecordingBlockBackend {
+        registrations: Rc::clone(&registrations),
+    })
+    .unwrap();
+    device
+        .write_at(3, &vec![0x5a; 5 * BEXFS_BLOCK_SIZE as usize])
+        .unwrap();
+    assert_eq!(&*registrations.borrow(), &[8192, 8192, 4096]);
+}
 
 fn format<'a>(device: &'a mut MemoryBlockDevice) -> BexFs {
     BexFs::format(

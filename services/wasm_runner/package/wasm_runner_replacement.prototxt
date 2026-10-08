@@ -1,0 +1,3 @@
+package_name: "bexos.platform.wasm_runner"
+name: "Trusted WebAssembly runner replacement"
+package_version { major: 0 minor: 0 patch: 1 }

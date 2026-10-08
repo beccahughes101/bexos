@@ -70,6 +70,10 @@ resource struct ComponentStartInfo {
     service bool;
     migratable bool;
     package_dir vector<handle:CHANNEL>:1;
+    /// BootFS launches use a bounded immutable VMO before directory services
+    /// are available. Exactly one of package_dir or package_image is present.
+    package_image vector<handle:VMO>:1;
+    package_image_size uint64;
     dependencies vector<ResolvedDependency>:64;
     /// Channel carrying one versioned bexos.app.bootstrap.Startup message.
     /// Keeping the resource envelope on its native wire contract avoids
@@ -115,7 +119,7 @@ resource struct NativeRunnerPrepareInfo {
     provider_kind NativeRunnerProviderKind;
     provider_package string:128;
     provider_path string:256;
-    provider_package_dir handle:CHANNEL;
+    provider_package_dir vector<handle:CHANNEL>:1;
     /// BootFS launches use a private immutable VMO snapshot because the
     /// filesystem service is not available yet. Exactly one of this vector or
     /// provider_package_dir is present.
@@ -129,7 +133,10 @@ resource struct NativeRunnerPrepareInfo {
     /// when dependency directories are available; otherwise used by the
     /// bounded BootFS adapter before directory services are available.
     dependency_images vector<handle:VMO>:64;
-    dependency_image_sizes vector<uint64>:64;
+    /// Little-endian packed uint64 sizes ordered like dependency_images. The
+    /// byte representation avoids the primitive-vector limitation in the
+    /// current FIDL resource encoder.
+    dependency_image_sizes_le vector<uint8>:512;
     target_process handle:PROCESS;
     target_address_space handle:VM_SPACE;
     target_root_vmar handle:VMAR;
@@ -141,6 +148,10 @@ protocol NativeRunnerHostEvents {
     1: OnPrepared(resource struct {
         status bexos.kernel.Status;
         main_thread handle:THREAD;
+        /// Optional loader metadata transferred to the target in its Startup
+        /// envelope. Direct ELF providers need this for runtime symbol lookup.
+        runtime_linker_data vector<handle:VMO>:1;
+        runtime_linker_data_len uint64;
     });
 };
 

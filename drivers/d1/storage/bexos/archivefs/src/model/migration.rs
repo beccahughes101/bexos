@@ -10,7 +10,7 @@ const ARCHIVE_CHUNK: u64 = 1 << 39;
 impl ArchiveFs {
     pub fn empty_checkpoint() -> Self {
         Self {
-            archive_bytes: Vec::new(),
+            archive_bytes: ArchiveBytes::Owned(Vec::new()),
             content_root: [0; 32],
             nodes: Vec::new(),
         }
@@ -49,6 +49,7 @@ impl ArchiveFs {
             let start = chunk.checked_mul(CHUNK).ok_or(Error::Capacity)?;
             return Ok(self
                 .archive_bytes
+                .as_slice()
                 .get(start..self.archive_bytes.len().min(start.saturating_add(CHUNK)))
                 .map(|bytes| bytes.to_vec()));
         }
@@ -112,7 +113,7 @@ impl ArchiveFs {
         if key == 0 {
             let mut r = Decoder::new(bytes);
             let version = r.word()?;
-            self.archive_bytes.resize(r.count(32 * 1024 * 1024)?, 0);
+            self.archive_bytes = ArchiveBytes::Owned(alloc::vec![0; r.count(32 * 1024 * 1024)?]);
             self.content_root = match version {
                 1 => [0; 32],
                 2 => r.bytes(32)?.try_into().map_err(|_| Error::InvalidData)?,
@@ -130,6 +131,8 @@ impl ArchiveFs {
                 return Err(Error::InvalidData);
             }
             self.archive_bytes
+                .as_mut_slice()
+                .ok_or(Error::InvalidData)?
                 .get_mut(start..start.saturating_add(bytes.len()))
                 .ok_or(Error::InvalidData)?
                 .copy_from_slice(bytes);

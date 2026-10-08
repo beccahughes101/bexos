@@ -1218,6 +1218,7 @@ impl ControlPlane {
                 | RIGHT_MANAGE_TASK
                 | RIGHT_READ
                 | RIGHT_DUPLICATE
+                | RIGHT_SIGNAL
                 | RIGHT_TRANSFER,
             0,
             None,

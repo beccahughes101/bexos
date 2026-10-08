@@ -294,7 +294,7 @@ fn authenticated_users<T: DebugTransport>(
     assert_eq!(
         processes
             .iter()
-            .filter(|p| p.package_id == "com.example.shell_fixture")
+            .filter(|p| p.package_id == "bexos.test.shell_fixture")
             .count(),
         system_providers + 2,
         "system and users must have distinct provider processes"

@@ -167,6 +167,18 @@ impl ReadinessGate for Gate {
             serial
                 .send(b"bexos.serial.bind", &[server.0])
                 .map_err(|_| ReadinessError::NotReady)?;
+            let bound = serial.recv_with_timeout(300).map_err(|error| {
+                log(&alloc::format!(
+                    "appd: debug serial bind acknowledgement failed {error:?}\n"
+                ));
+                ReadinessError::NotReady
+            })?;
+            if !bound.handles.is_empty() || bound.bytes != b"bexos.serial.bind.ok" {
+                for handle in bound.handles {
+                    let _ = Memory::close(handle);
+                }
+                return Err(ReadinessError::NotReady);
+            }
             alloc::vec![client.0]
         } else {
             Vec::new()

@@ -185,6 +185,7 @@ mod provider_rollout_tests {
 
 struct BundleImage {
     provider: Option<BundleProvider>,
+    native_runner: Vec<u8>,
     package: String,
     path: String,
     package_dir: u64,
@@ -196,8 +197,6 @@ struct BundleImage {
 
 struct BundleProvider {
     package: String,
-    path: String,
-    image: super::resolver::RuntimeImage,
     directory: u64,
 }
 impl Drop for BundleProvider {
@@ -276,6 +275,13 @@ impl PackageImageResolver for BundleImage {
         package: &str,
         path: &str,
     ) -> Result<PackageImage<'a>, PackageImageError> {
+        if package == crate::runner::bootstrap::PACKAGE && path == crate::runner::bootstrap::PATH {
+            return Ok(PackageImage {
+                bytes: &self.native_runner,
+                vmo: KernelHandle::none(),
+                vmo_offset: 0,
+            });
+        }
         if package == self.package && path == self.path {
             return Ok(PackageImage {
                 bytes: &self.bytes,
@@ -283,11 +289,7 @@ impl PackageImageResolver for BundleImage {
                 vmo_offset: 0,
             });
         }
-        self.provider
-            .as_ref()
-            .filter(|provider| provider.package == package && provider.path == path)
-            .map(|provider| provider.image.image())
-            .ok_or(PackageImageError::InvalidPath)
+        Err(PackageImageError::InvalidPath)
     }
 
     fn resolve_library<'a>(
@@ -696,8 +698,8 @@ pub fn begin(
         .filter(|provider| {
             provider.kind == crate::platform_config::ComponentRunnerProviderKind::ComponentRunner
         })
-        .and_then(|provider| {
-            super::resolver::provider_runtime_image(
+        .map(|provider| {
+            super::resolver::provider_runtime_directory(
                 state.vfsd,
                 &state.registry,
                 &manifest,
@@ -709,13 +711,15 @@ pub fn begin(
                     .unwrap_or(&provider.executable_path),
                 &provider.expected_signer,
             )
-            .map(|(image, directory)| BundleProvider {
+            .map(|directory| BundleProvider {
                 package: provider.package_id.clone(),
-                path: provider.executable_path.clone(),
-                image,
                 directory,
             })
-        });
+            .map_err(|error| alloc::format!("runner provider unavailable {error:?}"))
+        })
+        .transpose()?;
+    let native_runner = super::resolver::fixed_native_runner_bytes()
+        .map_err(|error| alloc::format!("fixed native runner unavailable {error:?}"))?;
     let package_dir = match bexos_userspace::vfs::get_package_directory(state.vfsd, &staged_package)
     {
         Ok(directory) => directory.0,
@@ -743,6 +747,7 @@ pub fn begin(
         .collect();
     let image = BundleImage {
         provider,
+        native_runner,
         package: target.to_string(),
         path: adapter.executable_path.unwrap_or_default().to_string(),
         package_dir,
@@ -751,7 +756,14 @@ pub fn begin(
         bytes: elf,
         libraries,
     };
-    let mut deferred = runner::deferred::Deferred::new(kernel);
+    let started = now_ms();
+    let mut deferred = runner::deferred::Deferred::new_migration(
+        kernel,
+        old.process_handle,
+        generation,
+        process.lifecycle.preparation_timeout_ms,
+        process.lifecycle.migration_timeout_ms,
+    );
     let mut replacement = RunnerRegistry::new()
         .launch(
             &LaunchRequest {
@@ -791,16 +803,8 @@ pub fn begin(
         "appd: replacement created target={target} process={}\n",
         replacement.process_handle.raw
     ));
-    // Account startup against the same preparation budget as the kernel.
-    let started = now_ms();
-    bexos_userspace::migration::begin(
-        old.process_handle,
-        replacement.process_handle.raw,
-        generation,
-        process.lifecycle.preparation_timeout_ms,
-        process.lifecycle.migration_timeout_ms,
-    )
-    .map_err(|e| alloc::format!("kernel handover {e:?}"))?;
+    // The deferred runner quarantined the target immediately after process
+    // creation, before the fixed native host mapped or started it.
     log(&alloc::format!(
         "appd: kernel handover staged target={target}\n"
     ));

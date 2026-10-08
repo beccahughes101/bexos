@@ -1797,6 +1797,8 @@ async fn serve_lifecycle(mut state: state::AppdState, teed: Option<Channel>) -> 
                                                 "runner provider rollout completed provider={provider}"
                                             );
                                         }
+                                        source.changed(4);
+                                        log(&alloc::format!("appd: {last_update}\n"));
                                     }
                                     pending = None;
                                     activation_sync_pending = true;
@@ -2305,6 +2307,30 @@ async fn serve_lifecycle(mut state: state::AppdState, teed: Option<Channel>) -> 
                                     package_instance_id,
                                     app_worker::PackagePolicyEventKind::Installed,
                                 );
+                            }
+                            let installed_provider = state
+                                .registry
+                                .record(&package_id)
+                                .ok()
+                                .map(|record| record.package_id.clone())
+                                .filter(|installed| {
+                                    state
+                                        .config
+                                        .runner_policy
+                                        .component_runner_providers
+                                        .iter()
+                                        .any(|provider| provider.package_id == *installed)
+                                });
+                            if let Some(provider) = installed_provider
+                                && provider_rollout
+                                    .as_ref()
+                                    .is_none_or(|rollout| rollout.provider() != provider)
+                                && !provider_rollout_queue.contains(&provider)
+                            {
+                                log(&alloc::format!(
+                                    "appd: runner provider rollout queued provider={provider}\n"
+                                ));
+                                provider_rollout_queue.push(provider);
                             }
                         }
                         lifecycle_reply(
@@ -5421,7 +5447,7 @@ pub(crate) fn install_archive_bytes(
     teed: Option<Channel>,
     archive_bytes: &[u8],
     source: InstallSource,
-    archive_path: &str,
+    _archive_path: &str,
 ) -> (lifecycle::AppLifecycleStatus, String) {
     let trusted = [bexos_app_archive::TrustedKey {
         key_id: *b"bexos-qemu-test-ed25519-key-v001",
@@ -5431,25 +5457,12 @@ pub(crate) fn install_archive_bytes(
             0xf7, 0x07, 0x51, 0x1a,
         ],
     }];
-    let request = bexos_app_registry::InstallRequest {
-        archive_bytes,
-        trusted_keys: &trusted,
-        verified_signer: Some(bexos_app_registry::VerifiedSignerMetadata {
-            root_anchor_id: "bexos-dev-app-root".into(),
-            leaf_certificate_fingerprint: blake3::hash(trusted[0].public_key).into(),
-            signature_algorithm: 1,
-            granted_trust_tier: 1,
-        }),
-        source,
-        protected: false,
-        archive_path,
-    };
     log("appd: install archive verification begin\n");
-    let parsed = bexos_app_registry::record_from_bundle(request.clone());
-    let Ok(parsed) = parsed else {
+    let inspection = bexos_app_registry::inspect_bundle(archive_bytes, &trusted);
+    let Ok(inspection) = inspection else {
         return (lifecycle::AppLifecycleStatus::VerifyFailed, String::new());
     };
-    let Ok(manifest) = Manifest::decode(&parsed.manifest_bytes) else {
+    let Ok(manifest) = Manifest::decode(&inspection.manifest_bytes) else {
         return (lifecycle::AppLifecycleStatus::VerifyFailed, String::new());
     };
     if manifest.validate_package_shape().is_err() {
@@ -5465,21 +5478,34 @@ pub(crate) fn install_archive_bytes(
     };
     // The caller's path describes the upload/staging source. Publish the path
     // actually written below so launch and persistent reopen use the same file.
-    let stored_archive_path = alloc::format!("pkg/{}.bex", parsed.package_key());
-    let request = bexos_app_registry::InstallRequest {
+    let stored_archive_path = bexos_app_registry::split_versioned_package(&inspection.package_key)
+        .map(|(package, version)| alloc::format!("pkg/{package}/{version}/pkg.bex"))
+        .unwrap_or_else(|| alloc::format!("pkg/{}.bex", inspection.package_key));
+    let request = bexos_app_registry::InspectedInstallRequest {
+        inspection: &inspection,
+        verified_signer: Some(bexos_app_registry::VerifiedSignerMetadata {
+            root_anchor_id: "bexos-dev-app-root".into(),
+            leaf_certificate_fingerprint: blake3::hash(trusted[0].public_key).into(),
+            signature_algorithm: 1,
+            granted_trust_tier: 1,
+        }),
+        source,
+        protected: false,
         archive_path: &stored_archive_path,
-        ..request
     };
     log("appd: install archive verified; persisting payload\n");
-    if vfs::write_package_archive(vfsd, &parsed.package_key(), archive_bytes).is_err() {
+    if vfs::write_package_archive(vfsd, &inspection.package_key, archive_bytes).is_err() {
         log("appd: package archive write failed; install rejected\n");
         return (lifecycle::AppLifecycleStatus::Storage, String::new());
     }
     log("appd: install payload persisted; publishing registry record\n");
-    let record = match registry.install_bundle(request) {
+    let record = match registry.install_inspected_bundle(request) {
         Ok(record) => record,
-        Err(_) => {
-            let _ = vfs::delete_package_archive(vfsd, &parsed.package_key());
+        Err(error) => {
+            log(&alloc::format!(
+                "appd: registry record publication failed error={error:?}\n"
+            ));
+            let _ = vfs::delete_package_archive(vfsd, &inspection.package_key);
             return (lifecycle::AppLifecycleStatus::VerifyFailed, String::new());
         }
     };
@@ -5488,7 +5514,7 @@ pub(crate) fn install_archive_bytes(
             Ok(()) => {}
             Err(status) => {
                 let _ = registry.uninstall_package(&record.package_key());
-                let _ = vfs::delete_package_archive(vfsd, &parsed.package_key());
+                let _ = vfs::delete_package_archive(vfsd, &inspection.package_key);
                 return (status, String::new());
             }
         }

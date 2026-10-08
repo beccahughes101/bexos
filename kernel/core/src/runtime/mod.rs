@@ -3,7 +3,7 @@
 use crate::cpu_features::{AsidAllocator, AsidSupport};
 use crate::kernel_services::{
     RIGHT_ADMIN as ADMIN, RIGHT_DUPLICATE as DUPLICATE, RIGHT_EXECUTE as EXECUTE,
-    RIGHT_MANAGE_TASK as MANAGE_TASK, RIGHT_MAP as MAP, RIGHT_READ as READ,
+    RIGHT_MANAGE_TASK as MANAGE_TASK, RIGHT_MAP as MAP, RIGHT_READ as READ, RIGHT_SIGNAL as SIGNAL,
     RIGHT_TRANSFER as TRANSFER, RIGHT_WRITE as WRITE,
 };
 use crate::sched::{
@@ -32,8 +32,8 @@ pub type Result<T> = core::result::Result<T, Status>;
 pub const ALL_MEMORY: u32 = READ | WRITE | EXECUTE | MAP | TRANSFER | DUPLICATE;
 pub const CHANNEL_RIGHTS: u32 = READ | WRITE | TRANSFER | DUPLICATE;
 pub const IN_TRANSIT: usize = usize::MAX;
-pub const MAX_PROCESSES: usize = 48;
-pub const MAX_JOBS: usize = 64;
+pub const MAX_PROCESSES: usize = 256;
+pub const MAX_JOBS: usize = 256;
 pub const MAX_THREADS: usize = 256;
 pub const DEFAULT_INTERRUPT_FLOOD_LIMIT_PER_SECOND: u32 = 100_000;
 
@@ -1201,12 +1201,12 @@ impl<B: Backend> Runtime<B> {
             self.grant(
                 self.current,
                 Object::Process(id),
-                ADMIN | MANAGE_TASK | READ | TRANSFER | DUPLICATE,
+                ADMIN | MANAGE_TASK | READ | SIGNAL | TRANSFER | DUPLICATE,
             ),
             self.grant(
                 self.current,
                 Object::Space(id),
-                ADMIN | MAP | TRANSFER | DUPLICATE,
+                ADMIN | READ | MAP | TRANSFER | DUPLICATE,
             ),
         ))
     }

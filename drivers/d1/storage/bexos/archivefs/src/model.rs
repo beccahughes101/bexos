@@ -94,11 +94,60 @@ pub struct OpenNode {
     pub file: Option<FileHandle>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ArchiveFs {
-    archive_bytes: Vec<u8>,
+    archive_bytes: ArchiveBytes,
     content_root: [u8; 32],
     nodes: Vec<Node>,
+}
+
+#[derive(Debug)]
+enum ArchiveBytes {
+    Owned(Vec<u8>),
+    #[cfg(feature = "guest")]
+    Mapped {
+        address: u64,
+        len: usize,
+        mapped_len: u64,
+    },
+}
+
+impl ArchiveBytes {
+    fn as_slice(&self) -> &[u8] {
+        match self {
+            Self::Owned(bytes) => bytes,
+            #[cfg(feature = "guest")]
+            Self::Mapped { address, len, .. } => unsafe {
+                core::slice::from_raw_parts(*address as *const u8, *len)
+            },
+        }
+    }
+
+    fn as_mut_slice(&mut self) -> Option<&mut [u8]> {
+        match self {
+            Self::Owned(bytes) => Some(bytes),
+            #[cfg(feature = "guest")]
+            Self::Mapped { .. } => None,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.as_slice().len()
+    }
+}
+
+#[cfg(feature = "guest")]
+impl Drop for ArchiveBytes {
+    fn drop(&mut self) {
+        if let Self::Mapped {
+            address,
+            mapped_len,
+            ..
+        } = self
+        {
+            let _ = bexos_userspace::Memory::unmap(*address, *mapped_len);
+        }
+    }
 }
 
 impl ArchiveFs {
@@ -110,12 +159,50 @@ impl ArchiveFs {
         bytes: Vec<u8>,
         expected_root: Option<[u8; 32]>,
     ) -> Result<Self, ArchiveFsError> {
+        Self::mount_backing(ArchiveBytes::Owned(bytes), expected_root)
+    }
+
+    #[cfg(feature = "guest")]
+    pub fn mount_vmo(
+        vmo: u64,
+        length: u64,
+        expected_root: Option<[u8; 32]>,
+    ) -> Result<Self, ArchiveFsError> {
+        let len = usize::try_from(length).map_err(|_| ArchiveFsError::InvalidArgs)?;
+        let mapped_len = bexos_boot::page_round(length)
+            .filter(|_| length != 0)
+            .ok_or(ArchiveFsError::InvalidArgs)?;
+        let address = match bexos_userspace::Memory::map(vmo, mapped_len, 2) {
+            Ok(address) => address,
+            Err(_) => {
+                let _ = bexos_userspace::Memory::close(vmo);
+                return Err(ArchiveFsError::AccessDenied);
+            }
+        };
+        if bexos_userspace::Memory::close(vmo).is_err() {
+            let _ = bexos_userspace::Memory::unmap(address, mapped_len);
+            return Err(ArchiveFsError::Corrupt);
+        }
+        Self::mount_backing(
+            ArchiveBytes::Mapped {
+                address,
+                len,
+                mapped_len,
+            },
+            expected_root,
+        )
+    }
+
+    fn mount_backing(
+        bytes: ArchiveBytes,
+        expected_root: Option<[u8; 32]>,
+    ) -> Result<Self, ArchiveFsError> {
         let trusted = [TrustedKey {
             key_id: QEMU_TEST_KEY_ID,
             public_key: &QEMU_TEST_PUBLIC_KEY,
         }];
-        let archive =
-            OpenArchive::parse_and_verify(&bytes, &trusted).map_err(|_| ArchiveFsError::Corrupt)?;
+        let archive = OpenArchive::parse_and_verify(bytes.as_slice(), &trusted)
+            .map_err(|_| ArchiveFsError::Corrupt)?;
         let content_root = archive.content_root();
         if let Some(expected) = expected_root {
             if content_root != expected {
@@ -152,7 +239,7 @@ impl ArchiveFs {
             if needs_archive_bytes {
                 bytes
             } else {
-                Vec::new()
+                ArchiveBytes::Owned(Vec::new())
             },
             content_root,
         );
@@ -177,7 +264,7 @@ impl ArchiveFs {
         Ok(fs)
     }
 
-    fn from_archive_bytes(archive_bytes: Vec<u8>, content_root: [u8; 32]) -> Self {
+    fn from_archive_bytes(archive_bytes: ArchiveBytes, content_root: [u8; 32]) -> Self {
         Self {
             archive_bytes,
             content_root,
@@ -273,11 +360,12 @@ impl ArchiveFs {
     }
 
     pub fn same_archive(&self, other: &Self) -> bool {
-        self.content_root == other.content_root && self.archive_bytes == other.archive_bytes
+        self.content_root == other.content_root
+            && self.archive_bytes.as_slice() == other.archive_bytes.as_slice()
     }
 
     pub fn matches_verified_archive(&self, bytes: &[u8], expected_root: Option<[u8; 32]>) -> bool {
-        self.archive_bytes == bytes
+        self.archive_bytes.as_slice() == bytes
             && expected_root.is_none_or(|expected| self.content_root == expected)
     }
 
@@ -378,6 +466,7 @@ impl ArchiveFs {
                 ..
             } => Some(
                 self.archive_bytes
+                    .as_slice()
                     .get(*offset..offset.saturating_add(*len))
                     .ok_or(ArchiveFsError::Corrupt)?
                     .to_vec(),
@@ -393,6 +482,7 @@ impl ArchiveFs {
             } => Some({
                 let stored = self
                     .archive_bytes
+                    .as_slice()
                     .get(*offset..offset.saturating_add(*len))
                     .ok_or(ArchiveFsError::Corrupt)?;
                 decompress_zstd(stored, *uncompressed_len)?

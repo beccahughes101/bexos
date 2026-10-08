@@ -1,7 +1,10 @@
 //! Use the normal runner's policy and mapping path, but start only after the
 //! kernel has quarantined the candidate.
 use super::{
-    kernel::{CreatedChannel, CreatedJob, CreatedProcess, CreatedResourceGroup, CreatedVmar},
+    kernel::{
+        CreatedChannel, CreatedJob, CreatedProcess, CreatedResourceGroup, CreatedVmar,
+        NativeRunnerPrepareRequest, NativeRunnerPrepared,
+    },
     *,
 };
 
@@ -12,6 +15,9 @@ pub struct Deferred<'a, K: KernelOps> {
     vmos: alloc::vec::Vec<u64>,
     process: u64,
     started: bool,
+    migration: Option<MigrationPlan>,
+    migration_begun: bool,
+    prepared_thread: Option<KernelHandle>,
     pub kernel: &'a mut K,
     start: Option<(
         KernelHandle,
@@ -22,6 +28,15 @@ pub struct Deferred<'a, K: KernelOps> {
         Option<KernelHandle>,
     )>,
 }
+
+#[derive(Clone, Copy)]
+struct MigrationPlan {
+    source: u64,
+    generation: u64,
+    preparation_timeout_ms: u32,
+    cutover_timeout_ms: u32,
+}
+
 impl<'a, K: KernelOps> Deferred<'a, K> {
     pub fn new(kernel: &'a mut K) -> Self {
         Self {
@@ -33,9 +48,35 @@ impl<'a, K: KernelOps> Deferred<'a, K> {
             vmos: alloc::vec::Vec::new(),
             process: 0,
             started: false,
+            migration: None,
+            migration_begun: false,
+            prepared_thread: None,
         }
     }
+
+    pub fn new_migration(
+        kernel: &'a mut K,
+        source: u64,
+        generation: u64,
+        preparation_timeout_ms: u32,
+        cutover_timeout_ms: u32,
+    ) -> Self {
+        let mut deferred = Self::new(kernel);
+        deferred.migration = Some(MigrationPlan {
+            source,
+            generation,
+            preparation_timeout_ms,
+            cutover_timeout_ms,
+        });
+        deferred
+    }
+
     pub fn start(mut self) -> Result<KernelHandle, KernelError> {
+        if self.migration.is_some() {
+            let thread = self.prepared_thread.ok_or(KernelError::InvalidArgs)?;
+            self.started = true;
+            return Ok(thread);
+        }
         let (p, s, e, stack, tp, arg) = self.start.ok_or(KernelError::InvalidArgs)?;
         let thread = self
             .kernel
@@ -149,7 +190,20 @@ impl<K: KernelOps> KernelOps for Deferred<'_, K> {
         name: &str,
     ) -> Result<CreatedProcess, KernelError> {
         let process = self.kernel.create_process_in_job(job, name)?;
-        self.process = process.process.raw;
+        if self.process == 0 {
+            self.process = process.process.raw;
+            if let Some(migration) = self.migration {
+                bexos_userspace::migration::begin(
+                    migration.source,
+                    self.process,
+                    migration.generation,
+                    migration.preparation_timeout_ms,
+                    migration.cutover_timeout_ms,
+                )
+                .map_err(|_| KernelError::InvalidArgs)?;
+                self.migration_begun = true;
+            }
+        }
         self.handles
             .extend([process.process.raw, process.address_space.raw]);
         self.construction_handles.push(process.root_vmar);
@@ -234,6 +288,86 @@ impl<K: KernelOps> KernelOps for Deferred<'_, K> {
         self.handles.extend([c.local.raw, c.remote.raw]);
         Ok(c)
     }
+
+    fn duplicate_handle(
+        &mut self,
+        handle: KernelHandle,
+        rights: u32,
+    ) -> Result<KernelHandle, KernelError> {
+        let duplicate = self.kernel.duplicate_handle(handle, rights)?;
+        self.handles.push(duplicate.raw);
+        Ok(duplicate)
+    }
+
+    fn prepare_native_runner(
+        &mut self,
+        host: KernelHandle,
+        request: &NativeRunnerPrepareRequest<'_>,
+    ) -> Result<NativeRunnerPrepared, KernelError> {
+        let prepared = self.kernel.prepare_native_runner(host, request)?;
+        for handle in [
+            request.provider_package_dir,
+            request.provider_image,
+            Some(request.target_job),
+            Some(request.target_process),
+            Some(request.target_address_space),
+            Some(request.target_root_vmar),
+            Some(request.runner),
+            Some(request.events),
+        ]
+        .into_iter()
+        .flatten()
+        .chain(
+            request
+                .dependencies
+                .iter()
+                .map(|dependency| dependency.directory),
+        )
+        .chain(request.dependency_images.iter().copied())
+        {
+            self.handles.retain(|candidate| *candidate != handle.raw);
+            self.construction_handles
+                .retain(|candidate| *candidate != handle);
+            self.vmos.retain(|candidate| *candidate != handle.raw);
+        }
+        self.handles.push(prepared.main_thread.raw);
+        if let Some((linker_data, _)) = prepared.runtime_linker_data {
+            self.vmos.push(linker_data.raw);
+        }
+        self.prepared_thread = Some(prepared.main_thread);
+        Ok(prepared)
+    }
+
+    fn send_component_start(
+        &mut self,
+        channel: KernelHandle,
+        request: &ComponentStartRequest<'_>,
+    ) -> Result<(), KernelError> {
+        self.kernel.send_component_start(channel, request)?;
+        for handle in [
+            Some(request.startup),
+            Some(request.job),
+            Some(request.controller),
+            Some(request.events),
+            request.package_dir,
+            request.package_image,
+        ]
+        .into_iter()
+        .flatten()
+        .chain(
+            request
+                .dependencies
+                .iter()
+                .map(|dependency| dependency.directory),
+        ) {
+            self.handles.retain(|candidate| *candidate != handle.raw);
+            self.construction_handles
+                .retain(|candidate| *candidate != handle);
+            self.vmos.retain(|candidate| *candidate != handle.raw);
+        }
+        Ok(())
+    }
+
     fn start_thread_in_process(
         &mut self,
         p: KernelHandle,
@@ -243,6 +377,13 @@ impl<K: KernelOps> KernelOps for Deferred<'_, K> {
         tp: u64,
         arg: Option<KernelHandle>,
     ) -> Result<KernelHandle, KernelError> {
+        if self.migration.is_some() {
+            let thread = self
+                .kernel
+                .start_thread_in_process(p, s, e, stack, tp, arg)?;
+            self.handles.push(thread.raw);
+            return Ok(thread);
+        }
         if self.start.is_some() {
             return Err(KernelError::InvalidArgs);
         }
@@ -254,6 +395,9 @@ impl<K: KernelOps> KernelOps for Deferred<'_, K> {
 impl<K: KernelOps> Drop for Deferred<'_, K> {
     fn drop(&mut self) {
         if !self.started {
+            if self.migration_begun {
+                let _ = bexos_userspace::migration::abort();
+            }
             if self.process != 0 {
                 let _ = bexos_userspace::migration::discard_candidate(self.process);
             }

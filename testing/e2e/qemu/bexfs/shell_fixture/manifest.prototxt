@@ -1,4 +1,4 @@
-package_name: "com.example.shell_fixture"
+package_name: "bexos.test.shell_fixture"
 name: "Terminal protocol fixture"
 processes {
  name: "terminal"

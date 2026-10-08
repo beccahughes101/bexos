@@ -12,14 +12,14 @@ runner_policy {
     kind: COMPONENT_RUNNER
     package_id: "bexos.platform.wasm_runner"
     executable_path: "/pkg/bin/wasm_runner"
-    expected_signer: "bexos_official_platform_v1"
+    expected_signer: "bexos-dev-app-root"
   }
   component_runner_providers {
     runner_name: "nix"
     kind: COMPONENT_RUNNER
     package_id: "bexos.platform.starnix_runner"
     executable_path: "/pkg/bin/starnix_runner"
-    expected_signer: "bexos_official_platform_v1"
+    expected_signer: "bexos-dev-app-root"
   }
   realtime_scheduling_allowlist { package_id: "bexos.service.splashd" expected_signer: "bexos_official_platform_v1" }
   realtime_scheduling_allowlist { package_id: "bexos.service.scened" expected_signer: "bexos_official_platform_v1" }

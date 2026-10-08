@@ -13,6 +13,7 @@ use std::sync::Arc;
 use wasmtime::{Result, bail};
 struct DirectoryPayloads {
     package_dir: Option<u64>,
+    package_image: Option<(u64, u64)>,
     dependencies: Vec<bexos_component_runner::ResolvedDependency>,
 }
 
@@ -20,6 +21,9 @@ impl Drop for DirectoryPayloads {
     fn drop(&mut self) {
         if let Some(package_dir) = self.package_dir {
             let _ = Memory::close(package_dir);
+        }
+        if let Some((package_image, _)) = self.package_image {
+            let _ = Memory::close(package_image);
         }
         for dependency in &self.dependencies {
             let _ = Memory::close(dependency.directory);
@@ -38,7 +42,7 @@ pub fn run(channel: Channel) -> Result<u8> {
         channel,
         "wasm",
         bexos_wasm_abi::OPTIONS_TYPE_URL,
-        true,
+        false,
     )
     .map_err(|error| wasmtime::format_err!("component runner start: {error:?}"))?;
     let options = WasmRunnerOptions::decode(&start.program)
@@ -48,20 +52,26 @@ pub fn run(channel: Channel) -> Result<u8> {
     let migratable = start.migratable;
     let directories = DirectoryPayloads {
         package_dir: start.package_dir,
+        package_image: start.package_image,
         dependencies: start.dependencies,
     };
-    let package_dir = directories
-        .package_dir
-        .ok_or_else(|| wasmtime::format_err!("missing package directory"))?;
-    let bytes = validate_wasm(
-        bexos_component_runner::read_package_file(
+    let package_bytes = match (directories.package_dir, directories.package_image) {
+        (Some(package_dir), None) => bexos_component_runner::read_package_file(
             package_dir,
             &options.path,
             options.limits.max_module_bytes,
-        )
-        .map_err(|error| wasmtime::format_err!("package payload: {error:?}"))?,
-        "payload",
-    )?;
+        ),
+        (None, Some((package_image, package_image_size))) => {
+            bexos_component_runner::read_package_image(
+                package_image,
+                package_image_size,
+                options.limits.max_module_bytes,
+            )
+        }
+        _ => Err(bexos_component_runner::Error::Payloads),
+    }
+    .map_err(|error| wasmtime::format_err!("package payload: {error:?}"))?;
+    let bytes = validate_wasm(package_bytes, "payload")?;
     let mut dependency_bytes = Vec::with_capacity(options.component_imports.len());
     let mut component_dependencies = Vec::with_capacity(options.component_imports.len());
     for import in &options.component_imports {

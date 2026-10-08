@@ -81,22 +81,12 @@ pub(crate) async fn serve_inner(mut state: migration::Runtime) -> ! {
                         "archivefs: mount memory archive bytes={}\n",
                         q.length
                     ));
-                    let result = (|| {
-                        let rounded = bexos_boot::page_round(q.length)
-                            .filter(|_| q.length > 0 && q.length <= MAX_MEMORY_ARCHIVE_BYTES)
-                            .ok_or(ArchiveFsError::InvalidArgs)?;
-                        let va = Memory::map(q.archive.raw, rounded, 2)
-                            .map_err(|_| ArchiveFsError::AccessDenied)?;
-                        let result = ArchiveFs::mount(
-                            unsafe {
-                                core::slice::from_raw_parts(va as *const u8, q.length as usize)
-                            },
-                            None,
-                        );
-                        let _ = Memory::unmap(va, rounded);
-                        result
-                    })();
-                    let _ = Memory::close(q.archive.raw);
+                    let result = if q.length == 0 || q.length > MAX_MEMORY_ARCHIVE_BYTES {
+                        let _ = Memory::close(q.archive.raw);
+                        Err(ArchiveFsError::InvalidArgs)
+                    } else {
+                        ArchiveFs::mount_vmo(q.archive.raw, q.length, None)
+                    };
                     let (st, root) = match result {
                         Ok(fs) => {
                             let id = cached_archive(archives, fs);
@@ -409,36 +399,7 @@ fn mount_package(
     let close_file = fs::close(file).map_err(|_| ArchiveFsError::Corrupt);
     let (vmo, size) = backing?;
     close_file?;
-    let len = usize::try_from(size).map_err(|_| ArchiveFsError::InvalidArgs)?;
-    let rounded = bexos_boot::page_round(size).ok_or(ArchiveFsError::InvalidArgs)?;
-    let va = match Memory::map(vmo, rounded, 2) {
-        Ok(va) => va,
-        Err(_) => {
-            let _ = Memory::close(vmo);
-            return Err(ArchiveFsError::AccessDenied);
-        }
-    };
-    let mut owned = Vec::with_capacity(len);
-    if len != 0 && Memory::commit_range(owned.as_mut_ptr() as u64, len as u64).is_err() {
-        let _ = Memory::unmap(va, rounded);
-        let _ = Memory::close(vmo);
-        return Err(ArchiveFsError::AccessDenied);
-    }
-    unsafe {
-        core::ptr::copy_nonoverlapping(va as *const u8, owned.as_mut_ptr(), len);
-        owned.set_len(len);
-    }
-    let unmap = Memory::unmap(va, rounded).map_err(|_| ArchiveFsError::Corrupt);
-    let close_vmo = Memory::close(vmo).map_err(|_| ArchiveFsError::Corrupt);
-    unmap?;
-    close_vmo?;
-    if let Some(index) = archives
-        .iter()
-        .position(|mounted| mounted.fs.matches_verified_archive(&owned, expected_root))
-    {
-        return Ok(index);
-    }
-    ArchiveFs::mount_owned(owned, expected_root).map(|fs| cached_archive(archives, fs))
+    ArchiveFs::mount_vmo(vmo, size, expected_root).map(|fs| cached_archive(archives, fs))
 }
 
 fn expected_root(root: &[u8]) -> Option<[u8; 32]> {

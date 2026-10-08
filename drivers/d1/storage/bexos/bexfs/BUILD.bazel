@@ -85,6 +85,7 @@ rust_test(
         "//lib/package_version",
         ":bexfs",
         "@d1_crates//:rosefs-core",
+        "//idl:block_fidl_rust",
         "//idl:fs_fidl_rust",
     ],
 )

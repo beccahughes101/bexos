@@ -30,8 +30,7 @@ pub enum Error {
 struct ProviderImage {
     package: String,
     path: String,
-    bytes: Vec<u8>,
-    vmo: u64,
+    image: MappedImage,
     libraries: Vec<DependencyImage>,
 }
 
@@ -42,8 +41,62 @@ struct DependencyImage {
     symbol_prefix: String,
     abi_version: u32,
     direct_dependencies: Vec<PackageLibraryDependency>,
-    bytes: Vec<u8>,
-    vmo: u64,
+    image: MappedImage,
+}
+
+struct MappedImage {
+    handle: u64,
+    address: u64,
+    len: usize,
+    mapped_len: u64,
+}
+
+impl MappedImage {
+    fn new(handle: u64, size: u64, maximum: u64) -> Result<Self, Error> {
+        if handle == 0 || size == 0 || size > maximum {
+            let _ = Memory::close(handle);
+            return Err(Error::Read);
+        }
+        let mapped_len = match bexos_boot::page_round(size) {
+            Some(mapped_len) => mapped_len,
+            None => {
+                let _ = Memory::close(handle);
+                return Err(Error::Read);
+            }
+        };
+        let address = match Memory::map(handle, mapped_len, 2) {
+            Ok(address) => address,
+            Err(_) => {
+                let _ = Memory::close(handle);
+                return Err(Error::Read);
+            }
+        };
+        let len = match usize::try_from(size) {
+            Ok(len) => len,
+            Err(_) => {
+                let _ = Memory::unmap(address, mapped_len);
+                let _ = Memory::close(handle);
+                return Err(Error::Read);
+            }
+        };
+        Ok(Self {
+            handle,
+            address,
+            len,
+            mapped_len,
+        })
+    }
+
+    fn bytes(&self) -> &[u8] {
+        unsafe { core::slice::from_raw_parts(self.address as *const u8, self.len) }
+    }
+}
+
+impl Drop for MappedImage {
+    fn drop(&mut self) {
+        let _ = Memory::unmap(self.address, self.mapped_len);
+        let _ = Memory::close(self.handle);
+    }
 }
 
 /// A bounded, read-only package view used during early boot. Normal launches
@@ -80,26 +133,23 @@ impl BootfsPackageDirectoryAdapter {
         })
     }
 
-    fn read(mut self, path: &str) -> Result<(Vec<u8>, u64), Error> {
-        match &self.source {
+    fn read(mut self, path: &str) -> Result<MappedImage, Error> {
+        match core::mem::replace(&mut self.source, PackageSource::Consumed) {
             PackageSource::Directory(directory) => {
-                let relative = package_relative_path(path)?;
-                let file =
-                    fs::open(Channel(*directory), relative, 1 | 4).map_err(|_| Error::Read)?;
-                let bytes = fs::read(file, MAX_PROVIDER_BYTES).map_err(|_| Error::Read);
-                let _ = fs::close(file);
-                let bytes = bytes?;
-                if bytes.is_empty() || bytes.len() as u64 >= MAX_PROVIDER_BYTES {
-                    return Err(Error::Read);
-                }
-                let vmo = Memory::from_bytes(&bytes).map_err(|_| Error::Read)?;
-                Ok((bytes, vmo))
+                let result = (|| {
+                    let relative = package_relative_path(path)?;
+                    let file =
+                        fs::open(Channel(directory), relative, 1 | 4).map_err(|_| Error::Read)?;
+                    let backing = fs::backing(file).map_err(|_| Error::Read);
+                    let _ = fs::close(file);
+                    let (handle, size) = backing?;
+                    MappedImage::new(handle, size, MAX_PROVIDER_BYTES)
+                })();
+                let _ = Memory::close(directory);
+                result
             }
             PackageSource::ImmutableVmo { handle, size } => {
-                let handle = *handle;
-                let bytes = read_vmo(handle, *size, MAX_PROVIDER_BYTES)?;
-                self.source = PackageSource::Consumed;
-                Ok((bytes, handle))
+                MappedImage::new(handle, size, MAX_PROVIDER_BYTES)
             }
             PackageSource::Consumed => Err(Error::Envelope),
         }
@@ -131,8 +181,10 @@ impl PackageImageResolver for ProviderImage {
             return Err(PackageImageError::AccessDenied);
         }
         Ok(PackageImage {
-            bytes: &self.bytes,
-            vmo: KernelHandle { raw: self.vmo },
+            bytes: self.image.bytes(),
+            vmo: KernelHandle {
+                raw: self.image.handle,
+            },
             vmo_offset: 0,
         })
     }
@@ -152,8 +204,10 @@ impl PackageImageResolver for ProviderImage {
             export_name: &image.export_name,
             soname: &image.soname,
             image: PackageImage {
-                bytes: &image.bytes,
-                vmo: KernelHandle { raw: image.vmo },
+                bytes: image.image.bytes(),
+                vmo: KernelHandle {
+                    raw: image.image.handle,
+                },
                 vmo_offset: 0,
             },
             symbol_prefix: &image.symbol_prefix,
@@ -161,15 +215,6 @@ impl PackageImageResolver for ProviderImage {
             kind: PackageLibraryKind::Native,
             direct_dependencies: &image.direct_dependencies,
         })
-    }
-}
-
-impl Drop for ProviderImage {
-    fn drop(&mut self) {
-        let _ = Memory::close(self.vmo);
-        for library in &self.libraries {
-            let _ = Memory::close(library.vmo);
-        }
     }
 }
 
@@ -193,21 +238,17 @@ pub fn run(host: Channel) -> Result<(), Error> {
         close_all(&message.handles);
         return Err(Error::InvalidProvider);
     }
-    let provider = match info.provider_image.len() {
-        0 if info.provider_package_dir.raw != 0 => {
-            BootfsPackageDirectoryAdapter::from_directory(info.provider_package_dir.raw)?
-        }
-        1 if info.provider_package_dir.raw == 0 => {
-            BootfsPackageDirectoryAdapter::from_immutable_vmo(
-                info.provider_image[0].raw,
-                info.provider_image_size,
-            )?
-        }
+    let provider = match (info.provider_image.len(), info.provider_package_dir.len()) {
+        (0, 1) => BootfsPackageDirectoryAdapter::from_directory(info.provider_package_dir[0].raw)?,
+        (1, 0) => BootfsPackageDirectoryAdapter::from_immutable_vmo(
+            info.provider_image[0].raw,
+            info.provider_image_size,
+        )?,
         _ => return Err(Error::Envelope),
     };
-    let (bytes, vmo) = provider.read(info.provider_path)?;
+    let provider_image = provider.read(info.provider_path)?;
     let directory_dependencies =
-        info.dependency_images.is_empty() && info.dependency_image_sizes.is_empty();
+        info.dependency_images.is_empty() && info.dependency_image_sizes_le.is_empty();
     if directory_dependencies && info.dependency_directories.len() != info.dependencies.len() {
         return Err(Error::Envelope);
     }
@@ -216,7 +257,12 @@ pub fn run(host: Channel) -> Result<(), Error> {
     }
     if !directory_dependencies
         && (info.dependency_images.len() != info.dependencies.len()
-            || info.dependency_image_sizes.len() != info.dependencies.len())
+            || info.dependency_image_sizes_le.len()
+                != info
+                    .dependencies
+                    .len()
+                    .checked_mul(8)
+                    .ok_or(Error::Envelope)?)
     {
         return Err(Error::Envelope);
     }
@@ -231,13 +277,17 @@ pub fn run(host: Channel) -> Result<(), Error> {
             BootfsPackageDirectoryAdapter::from_directory(directory.raw)?
         } else {
             let handle = info.dependency_images[index].raw;
-            let size = *info
-                .dependency_image_sizes
-                .get(index)
-                .ok_or(Error::Envelope)?;
+            let size_offset = index.checked_mul(8).ok_or(Error::Envelope)?;
+            let size = u64::from_le_bytes(
+                info.dependency_image_sizes_le
+                    .get(size_offset..size_offset + 8)
+                    .ok_or(Error::Envelope)?
+                    .try_into()
+                    .map_err(|_| Error::Envelope)?,
+            );
             BootfsPackageDirectoryAdapter::from_immutable_vmo(handle, size)?
         };
-        let (bytes, handle) = adapter.read(dependency.export_path)?;
+        let image = adapter.read(dependency.export_path)?;
         let mut direct_dependencies = Vec::new();
         for direct_index in 0..dependency.direct_dependencies.len() {
             let direct = dependency
@@ -257,19 +307,17 @@ pub fn run(host: Channel) -> Result<(), Error> {
             symbol_prefix: dependency.symbol_prefix.into(),
             abi_version: dependency.abi_version,
             direct_dependencies,
-            bytes,
-            vmo: handle,
+            image,
         });
     }
     let image = ProviderImage {
         package: info.provider_package.into(),
         path: info.provider_path.into(),
-        bytes,
-        vmo,
+        image: provider_image,
         libraries,
     };
     if info.provider_kind == NativeRunnerProviderKind::ComponentRunner
-        && (!image.libraries.is_empty() || validate_static_provider(&image.bytes).is_err())
+        && (!image.libraries.is_empty() || validate_static_provider(image.image.bytes()).is_err())
     {
         return Err(Error::InvalidProvider);
     }
@@ -350,6 +398,9 @@ pub fn run(host: Channel) -> Result<(), Error> {
         prepare.events.raw,
         Status::Ok,
         result.main_thread_handle.raw,
+        result
+            .runtime_linker_data
+            .map(|(handle, len)| (handle.raw, len)),
     )?;
 
     if info.provider_kind == NativeRunnerProviderKind::DirectElf {
@@ -367,25 +418,11 @@ pub fn run(host: Channel) -> Result<(), Error> {
         );
         let _ = Memory::close(inspection_process);
         relay?;
+    } else {
+        bexos_userspace::wait_terminated(result.process_handle.raw, -1)
+            .map_err(|_| Error::Channel)?;
     }
     Ok(())
-}
-
-fn read_vmo(handle: u64, size: u64, maximum: u64) -> Result<Vec<u8>, Error> {
-    if size == 0 || size > maximum {
-        return Err(Error::Read);
-    }
-    let rounded = bexos_boot::page_round(size).ok_or(Error::Read)?;
-    let address = Memory::map(handle, rounded, 2).map_err(|_| Error::Read)?;
-    let bytes = unsafe {
-        core::slice::from_raw_parts(
-            address as *const u8,
-            usize::try_from(size).map_err(|_| Error::Read)?,
-        )
-    }
-    .to_vec();
-    Memory::unmap(address, rounded).map_err(|_| Error::Read)?;
-    Ok(bytes)
 }
 
 /// Registered execution providers are independently packaged static binaries.
@@ -458,13 +495,42 @@ fn relay_direct_runner(
     target
         .send(&startup.bytes, &startup.handles)
         .map_err(|_| Error::Channel)?;
-    let ready = target.recv_blocking().map_err(|_| Error::Channel)?;
+    let ready = if expected_path == "/pkg/bin/teed" {
+        // Appd confirms that the secure-monitor authority was installed after
+        // Startup delivery and teed intentionally withholds readiness until it
+        // receives that confirmation.
+        loop {
+            let mut progressed = false;
+            match start.startup.try_recv() {
+                Ok(message) => {
+                    target
+                        .send(&message.bytes, &message.handles)
+                        .map_err(|_| Error::Channel)?;
+                    progressed = true;
+                }
+                Err(Status::ErrTimedOut) => {}
+                Err(_) => return Err(Error::Channel),
+            }
+            match target.try_recv() {
+                Ok(message) => break message,
+                Err(Status::ErrTimedOut) => {}
+                Err(_) => return Err(Error::Channel),
+            }
+            if !progressed {
+                bexos_userspace::wait_channels(&[start.startup, target], -1)
+                    .map_err(|_| Error::Channel)?;
+            }
+        }
+    } else {
+        target.recv_blocking().map_err(|_| Error::Channel)?
+    };
     start
         .startup
         .send(&ready.bytes, &ready.handles)
         .map_err(|_| Error::Channel)?;
     bexos_component_runner::ready().map_err(|_| Error::Channel)?;
     loop {
+        let mut progressed = false;
         if let Some(exit_code) = delegated_process_exit(process)? {
             bexos_component_runner::stop(Status::Ok, i64::from(exit_code))
                 .map_err(|_| Error::Channel)?;
@@ -475,6 +541,7 @@ fn relay_direct_runner(
                 target
                     .send(bexos_userspace::startup::GRACEFUL_STOP_MESSAGE_V1, &[])
                     .map_err(|_| Error::Channel)?;
+                progressed = true;
             }
             Some(bexos_component_runner::ControllerAction::Kill) => {
                 kernel
@@ -487,6 +554,7 @@ fn relay_direct_runner(
                 target
                     .send(&signal.to_le_bytes(), &[])
                     .map_err(|_| Error::Channel)?;
+                progressed = true;
             }
             Some(bexos_component_runner::ControllerAction::Connect(connection)) => {
                 let mut metadata = format!(
@@ -514,8 +582,35 @@ fn relay_direct_runner(
                 target
                     .send(metadata.as_bytes(), &[connection.endpoint])
                     .map_err(|_| Error::Channel)?;
+                progressed = true;
             }
-            None => bexos_userspace::yield_now(),
+            None => {}
+        }
+        match start.startup.try_recv() {
+            Ok(message) => {
+                target
+                    .send(&message.bytes, &message.handles)
+                    .map_err(|_| Error::Channel)?;
+                progressed = true;
+            }
+            Err(Status::ErrTimedOut) => {}
+            Err(_) => return Err(Error::Channel),
+        }
+        match target.try_recv() {
+            Ok(message) => {
+                start
+                    .startup
+                    .send(&message.bytes, &message.handles)
+                    .map_err(|_| Error::Channel)?;
+                progressed = true;
+            }
+            Err(Status::ErrTimedOut) => {}
+            Err(_) => return Err(Error::Channel),
+        }
+        if !progressed {
+            let controller = bexos_component_runner::controller_channel().ok_or(Error::Channel)?;
+            bexos_userspace::wait_channels(&[controller, start.startup, target], -1)
+                .map_err(|_| Error::Channel)?;
         }
     }
 }
@@ -584,13 +679,24 @@ fn delegated_process_exit(process: u64) -> Result<Option<i32>, Error> {
     Ok(response.exited.then_some(response.exit_code))
 }
 
-fn send_prepared(events: u64, status: Status, thread: u64) -> Result<(), Error> {
+fn send_prepared(
+    events: u64,
+    status: Status,
+    thread: u64,
+    runtime_linker_data: Option<(u64, u64)>,
+) -> Result<(), Error> {
     let mut bytes = [0u8; 64];
     bytes[..8].copy_from_slice(&1u64.to_le_bytes());
     let mut handles = [HandleRef { raw: 0 }; 2];
+    let linker_data = runtime_linker_data
+        .iter()
+        .map(|(handle, _)| HandleRef { raw: *handle })
+        .collect::<Vec<_>>();
     let encoded = NativeRunnerHostEventsOnPreparedRequest {
         status,
         main_thread: HandleRef { raw: thread },
+        runtime_linker_data: &linker_data,
+        runtime_linker_data_len: runtime_linker_data.map_or(0, |(_, len)| len),
     }
     .encode(&mut bytes[8..], &mut handles)
     .map_err(|_| Error::Envelope)?;

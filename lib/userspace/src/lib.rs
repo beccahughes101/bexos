@@ -34,7 +34,9 @@ pub mod syscall;
 pub mod vfs;
 pub use executor::block_on;
 pub use interrupt::Interrupt;
-pub use ipc::{Channel, KernelTransport, Message, Rpc, Socket, SocketInfo};
+pub use ipc::{
+    Channel, KernelTransport, Message, Rpc, Socket, SocketInfo, wait_channels, wait_terminated,
+};
 pub use memory::Memory;
 pub use startup::{
     HardwareResourceKind, NamespaceEntry, ServiceGrant, Startup, StartupHardwareResource,

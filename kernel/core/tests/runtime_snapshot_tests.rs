@@ -15,6 +15,21 @@ const USER_HEAP_VMAR_BASE: u64 = 0x0003_0000_0000;
 const USER_HEAP_CHUNK_SIZE: u64 = 2 * 1024 * 1024;
 
 #[test]
+fn component_isolation_capacity_exceeds_the_legacy_process_ceiling() {
+    let mut rt = Runtime::new(TestBackend(0x4500_0000));
+    rt.create_process("appd", "bexos.platform.appd", 0).unwrap();
+    for index in 0..64 {
+        let name = format!("isolated-{index}");
+        let job = rt
+            .create_component_job(&name, "bexos.platform.native_runner", 0, 1, false, 1)
+            .unwrap();
+        rt.create_process_in_job(job, "bexos.platform.native_runner")
+            .unwrap();
+    }
+    assert_eq!(rt.processes.len(), 65);
+}
+
+#[test]
 fn runtime_interrupts_are_shared_one_shot_and_snapshot_safe() {
     let mut rt = Runtime::new(TestBackend(0x4500_0000));
     rt.create_process("pci", "bexos.driver.pci_root", 2)
@@ -796,7 +811,10 @@ fn thread_exit_wakes_joiners_and_preserves_blocked_siblings() {
 
 #[test]
 fn process_termination_wakes_owners_and_remains_observable_after_snapshot() {
-    use bexos_kernel_core::kernel_services::SIGNAL_TERMINATED;
+    use bexos_kernel_core::kernel_services::{
+        RIGHT_DUPLICATE, RIGHT_MANAGE_TASK, RIGHT_READ, RIGHT_SIGNAL, RIGHT_TRANSFER,
+        SIGNAL_TERMINATED,
+    };
     for forced in [false, true] {
         let mut rt = Runtime::new(TestBackend(0x4500_0000));
         let (manager, manager_space) = rt.create_process("manager", "manager", 0).unwrap();
@@ -811,9 +829,15 @@ fn process_termination_wakes_owners_and_remains_observable_after_snapshot() {
             .unwrap();
         rt.start(child, child_space, 0x8000_0000, 0x8001_2000, 0)
             .unwrap();
-        assert_eq!(rt.object_signals(child).unwrap(), 0);
+        let delegated_child = rt
+            .duplicate(
+                child,
+                RIGHT_DUPLICATE | RIGHT_MANAGE_TASK | RIGHT_READ | RIGHT_SIGNAL | RIGHT_TRANSFER,
+            )
+            .unwrap();
+        assert_eq!(rt.object_signals(delegated_child).unwrap(), 0);
         assert_eq!(
-            rt.wait_many(&[(child, SIGNAL_TERMINATED)], -1),
+            rt.wait_many(&[(delegated_child, SIGNAL_TERMINATED)], -1),
             Err(Status::ErrTimedOut)
         );
         assert!(rt.current_thread_blocked());
@@ -828,14 +852,14 @@ fn process_termination_wakes_owners_and_remains_observable_after_snapshot() {
         }
         assert!(!rt.current_thread_blocked());
         assert_eq!(
-            rt.wait_many(&[(child, SIGNAL_TERMINATED)], 0),
+            rt.wait_many(&[(delegated_child, SIGNAL_TERMINATED)], 0),
             Ok((0, SIGNAL_TERMINATED))
         );
         let bytes = encode(&rt);
         let mut restored =
             Runtime::read_snapshot(rt.backend.clone(), &mut Reader::new(&bytes)).unwrap();
         assert_eq!(
-            restored.wait_many(&[(child, SIGNAL_TERMINATED)], 0),
+            restored.wait_many(&[(delegated_child, SIGNAL_TERMINATED)], 0),
             Ok((0, SIGNAL_TERMINATED))
         );
     }
@@ -1235,6 +1259,37 @@ fn handover_preserves_queued_handles_dma_and_transfers_appd_authority() {
     let bytes = encode(&rt);
     let restored = Runtime::read_snapshot(rt.backend.clone(), &mut Reader::new(&bytes)).unwrap();
     assert!(restored.has_authority(AUTH_APP_MANAGER));
+}
+
+#[test]
+fn component_process_construction_handles_support_native_runner_delegation() {
+    use bexos_kernel_core::kernel_services::{
+        RIGHT_DUPLICATE, RIGHT_EXECUTE, RIGHT_MAP, RIGHT_READ, RIGHT_TRANSFER, RIGHT_WRITE,
+    };
+
+    let mut rt = Runtime::new(TestBackend(0x4500_0000));
+    rt.create_process("appd", "bexos.platform.appd", 0)
+        .expect("appd process");
+    let job = rt
+        .create_component_job("component", "com.example.component", 0, 1, false, 1)
+        .expect("component job");
+    let (_, space) = rt
+        .create_process_in_job(job, "main")
+        .expect("component process");
+    let root_vmar = rt
+        .root_vmar_construction_handle(space)
+        .expect("root VMAR construction handle");
+
+    rt.duplicate(
+        space,
+        RIGHT_TRANSFER | RIGHT_READ | RIGHT_MAP | RIGHT_DUPLICATE,
+    )
+    .expect("delegated address space");
+    rt.duplicate(
+        root_vmar,
+        RIGHT_TRANSFER | RIGHT_READ | RIGHT_WRITE | RIGHT_EXECUTE | RIGHT_MAP | RIGHT_DUPLICATE,
+    )
+    .expect("delegated root VMAR");
 }
 
 #[test]

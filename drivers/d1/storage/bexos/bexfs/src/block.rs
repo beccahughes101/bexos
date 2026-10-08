@@ -95,8 +95,20 @@ impl<B: BlockFifoBackend> BlockDevice for FidlBlockDevice<B> {
         self.execute(BlockOpcode::Read, lba, buf)
     }
     fn write_at(&self, lba: u64, buf: &[u8]) -> Result<(), BlockIoError> {
-        let mut staging = buf.to_vec();
-        self.execute(BlockOpcode::Write, lba, &mut staging)
+        self.check_request(lba, buf.len())?;
+        let chunk_bytes = self.info.max_transfer_blocks as usize * self.info.block_size as usize;
+        for (index, chunk) in buf.chunks(chunk_bytes).enumerate() {
+            // The FIDL backend API uses a mutable transfer buffer for reads and
+            // writes. Bound the required write staging allocation to the
+            // advertised transfer limit instead of cloning a whole namespace.
+            let mut staging = chunk.to_vec();
+            self.execute(
+                BlockOpcode::Write,
+                lba + index as u64 * u64::from(self.info.max_transfer_blocks),
+                &mut staging,
+            )?;
+        }
+        Ok(())
     }
     fn flush(&self) -> Result<(), BlockIoError> {
         let mut backend = self.backend.borrow_mut();

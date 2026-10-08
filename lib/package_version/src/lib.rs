@@ -220,7 +220,7 @@ where
     let mut matches = Vec::new();
     for item in items {
         let (package, version) = package_and_version(item);
-        if !package.starts_with(selector.package.as_str()) {
+        if package != selector.package {
             continue;
         }
         if requirement.is_some_and(|req| !version.matches_prefix(req)) {

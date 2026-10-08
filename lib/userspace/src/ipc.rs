@@ -134,6 +134,65 @@ pub fn check(status: Status) -> Result<(), Status> {
         Err(status)
     }
 }
+
+/// Sleeps until one of the supplied channels is readable or peer-closed.
+/// A zero deadline polls, a negative deadline waits indefinitely, and a
+/// positive deadline is an absolute monotonic time in nanoseconds.
+pub fn wait_channels(channels: &[Channel], deadline_nanos: i64) -> Result<bool, Status> {
+    if channels.is_empty() || channels.len() > 64 {
+        return Err(Status::ErrInvalidArgs);
+    }
+    let items = channels
+        .iter()
+        .map(|channel| kernel_fidl::InlineVectorStruct1 {
+            h: HandleRef { raw: channel.0 },
+            signals: kernel_fidl::Signals(
+                kernel_fidl::Signals::READABLE.0 | kernel_fidl::Signals::PEER_CLOSED.0,
+            ),
+        })
+        .collect::<Vec<_>>();
+    let response: kernel_fidl::TaskControlWaitManyResponse = kernel_call(
+        3,
+        "WaitMany",
+        kernel_fidl::TASK_CONTROL_PUBLIC_METHODS,
+        &kernel_fidl::TaskControlWaitManyRequest {
+            items: kernel_fidl::WireVector::from_slice(&items),
+            deadline_nanos,
+        },
+    )?;
+    match response.status {
+        Status::Ok => Ok(true),
+        Status::ErrTimedOut => Ok(false),
+        status => Err(status),
+    }
+}
+
+/// Sleeps until a task handle reports termination.
+/// A zero deadline polls, a negative deadline waits indefinitely, and a
+/// positive deadline is an absolute monotonic time in nanoseconds.
+pub fn wait_terminated(handle: u64, deadline_nanos: i64) -> Result<bool, Status> {
+    if handle == 0 {
+        return Err(Status::ErrInvalidArgs);
+    }
+    let items = [kernel_fidl::InlineVectorStruct1 {
+        h: HandleRef { raw: handle },
+        signals: kernel_fidl::Signals::TERMINATED,
+    }];
+    let response: kernel_fidl::TaskControlWaitManyResponse = kernel_call(
+        3,
+        "WaitMany",
+        kernel_fidl::TASK_CONTROL_PUBLIC_METHODS,
+        &kernel_fidl::TaskControlWaitManyRequest {
+            items: kernel_fidl::WireVector::from_slice(&items),
+            deadline_nanos,
+        },
+    )?;
+    match response.status {
+        Status::Ok => Ok(true),
+        Status::ErrTimedOut => Ok(false),
+        status => Err(status),
+    }
+}
 impl Channel {
     pub fn pair() -> Result<(Self, Self), Status> {
         let r: kernel_fidl::ChannelControlCreateChannelResponse = kernel_call(

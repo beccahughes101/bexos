@@ -2199,6 +2199,9 @@ impl DebugTransport for QemuDebugTransport {
     fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
         self.socket.write_all(bytes)
     }
+    fn set_read_timeout(&mut self, timeout: Duration) -> std::io::Result<()> {
+        self.socket.set_read_timeout(timeout)
+    }
     fn read_chunk(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
         self.socket.read_chunk(bytes)
     }

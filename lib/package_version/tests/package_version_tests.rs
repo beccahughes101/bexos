@@ -74,6 +74,23 @@ fn select_unique_partial_match_finds_single_candidate() {
     );
 }
 
+#[test]
+fn package_selection_does_not_match_name_prefixes() {
+    let versions = vec![
+        ("bexos.test.locale", semver(0, 1, 0)),
+        ("bexos.test.locale_native", semver(0, 1, 0)),
+    ];
+    let selector = PackageSelector {
+        package: "bexos.test.locale".into(),
+        version_requirement: Some("0.1.0".into()),
+    };
+
+    assert_eq!(
+        select_unique_match(&versions, &selector, |item| (item.0, &item.1)).unwrap(),
+        &versions[0]
+    );
+}
+
 fn semver(major: u32, minor: u32, patch: u32) -> SemVer {
     SemVer {
         major,

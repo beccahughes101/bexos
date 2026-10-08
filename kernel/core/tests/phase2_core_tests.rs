@@ -1990,6 +1990,15 @@ fn privileged_terminate_process_exits_threads_and_releases_handles() {
         .start_thread_in_process(process, vm_space, 0x2000_0000, 0x3000_0000, None)
         .expect("thread");
 
+    let running = plane.wait_many(
+        &[WaitManyItem {
+            handle: process,
+            signals: SIGNAL_TERMINATED,
+        }],
+        0,
+    );
+    assert_eq!(running.status, KernelServiceStatus::TimedOut);
+
     assert_eq!(
         plane.terminate_process(process, -9),
         KernelServiceStatus::Ok
@@ -2010,6 +2019,14 @@ fn privileged_terminate_process_exits_threads_and_releases_handles() {
         .map(|record| record.signals)
         .unwrap_or(0);
     assert_ne!(signals & SIGNAL_TERMINATED, 0);
+    let terminated = plane.wait_many(
+        &[WaitManyItem {
+            handle: process,
+            signals: SIGNAL_TERMINATED,
+        }],
+        0,
+    );
+    assert_eq!(terminated.status, KernelServiceStatus::Ok);
 }
 
 #[test]
